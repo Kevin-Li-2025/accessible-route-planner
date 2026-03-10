@@ -1,0 +1,41 @@
+services:
+  # ── PostgreSQL + PostGIS ──────────────────────────────────────
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: accesscity-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: accesscity
+      POSTGRES_USER: accesscity
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-AccessCity_Dev_2026!}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U accesscity -d accesscity"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── ASP.NET Core API ──────────────────────────────────────────
+  api:
+    build:
+      context: ./AccessCity.API
+      dockerfile: Dockerfile
+    container_name: accesscity-api
+    restart: unless-stopped
+    ports:
+      - "5005:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ConnectionStrings__DefaultConnection: >-
+        Host=db;Port=5432;Database=accesscity;
+        Username=accesscity;Password=${DB_PASSWORD:-AccessCity_Dev_2026!}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
