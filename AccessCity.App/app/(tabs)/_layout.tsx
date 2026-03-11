@@ -31,15 +31,45 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="dashboard"
+        name="report"
         options={{
-          title: 'Dashboard',
+          title: 'Report',
           tabBarIcon: ({ color }) => (
-            <IconSymbol size={28} name="rectangle.grid.2x2.fill" color={color} />
+            <IconSymbol size={28} name="exclamationmark.bubble.fill" color={color} />
           ),
         }}
       />
+      <Tabs.Screen
+        name="hazard"
+        options={{
+          title: 'Hazard',
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={28} name="exclamationmark.triangle.fill" color={color}/>
+          )  
+        }}
+      />
+      <Tabs.Screen
+        name="profile"
+        options={{
+          title: 'Profile',
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={28} name="person.fill" color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="report/details"
+        options={{
+          href: null,
+        }}
+      />
 
+      <Tabs.Screen
+        name="report/success"
+        options={{
+          href: null,
+        }}
+      />
     </Tabs>
   );
 }
