@@ -10,13 +10,15 @@ import {
   SafeAreaView,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import { AntDesign, FontAwesome, Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
+import { Stack } from "expo-router";
 
 export default function AuthScreen() {
   const [isSignup, setIsSignup] = useState(false);
 
   return (
     <SafeAreaView style={styles.safeArea}>
+      <Stack.Screen options={{ headerShown: false }} />
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
@@ -68,18 +70,36 @@ export default function AuthScreen() {
 
           <View style={styles.socialRow}>
             <TouchableOpacity style={styles.socialButton}>
-              <AntDesign name="google" size={18} color="#EA4335" />
-              <Text style={styles.socialText}>Google</Text>
+              <Image
+                source={require("../assets/images/google.png")}
+                style={styles.socialIcon}
+                resizeMode="contain"
+              />
+              <Text style={styles.socialText} numberOfLines={1}>
+                Google
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.socialButton}>
-              <FontAwesome name="facebook" size={18} color="#1877F2" />
-              <Text style={styles.socialText}>Facebook</Text>
+              <Image
+                source={require("../assets/images/facebook.png")}
+                style={styles.socialIcon}
+                resizeMode="contain"
+              />
+              <Text style={styles.socialText} numberOfLines={1}>
+                Facebook
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.socialButton}>
-              <AntDesign name="apple" size={18} color="#000" />
-              <Text style={styles.socialText}>Apple</Text>
+              <Image
+                source={require("../assets/images/apple.png")}
+                style={styles.socialIcon}
+                resizeMode="contain"
+              />
+              <Text style={styles.socialText} numberOfLines={1}>
+                Apple
+              </Text>
             </TouchableOpacity>
           </View>
 
@@ -167,8 +187,10 @@ export default function AuthScreen() {
                 <Text style={styles.floatingLabelBlue}>Email</Text>
                 <TextInput
                   placeholder="Please enter your email"
-                  placeholderTextColor="#C7C7C7"
+                  placeholderTextColor="#D0D0D0"
                   style={styles.input}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
                 />
               </View>
 
@@ -177,7 +199,7 @@ export default function AuthScreen() {
                 <View style={styles.passwordRow}>
                   <TextInput
                     placeholder="**********"
-                    placeholderTextColor="#C7C7C7"
+                    placeholderTextColor="#D0D0D0"
                     secureTextEntry
                     style={styles.passwordInput}
                   />
@@ -218,33 +240,33 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#F7F7F7",
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 35,
+    paddingHorizontal: 24,
+    paddingTop: 6,
+    paddingBottom: 44,
   },
   topShape: {
     position: "absolute",
     top: 0,
     left: 0,
-    width: 180,
-    height: 180,
+    width: 175,
+    height: 175,
     backgroundColor: "#F1E2D7",
     borderBottomRightRadius: 180,
   },
   logo: {
-    width: 130,
-    height: 130,
+    width: 116,
+    height: 116,
     alignSelf: "center",
-    marginTop: 28,
-    marginBottom: 8,
+    marginTop: 34,
+    marginBottom: 10,
     backgroundColor: "transparent",
   },
   title: {
-    fontSize: 22,
+    fontSize: 18,
     fontWeight: "800",
     textAlign: "center",
     color: "#4B3D3D",
-    marginBottom: 8,
+    marginBottom: 6,
   },
   safetyText: {
     color: "#F59B23",
@@ -255,10 +277,10 @@ const styles = StyleSheet.create({
   subtitle: {
     textAlign: "center",
     color: "#5D5D5D",
-    fontSize: 15,
-    lineHeight: 22,
-    marginBottom: 24,
-    paddingHorizontal: 8,
+    fontSize: 12,
+    lineHeight: 18,
+    marginBottom: 30,
+    paddingHorizontal: 18,
   },
   switchContainer: {
     flexDirection: "row",
@@ -269,16 +291,17 @@ const styles = StyleSheet.create({
   },
   tabButton: {
     flex: 1,
-    paddingVertical: 13,
+    minHeight: 40,
     alignItems: "center",
-    borderRadius: 10,
+    justifyContent: "center",
+    borderRadius: 8,
   },
   activeTab: {
     backgroundColor: "#FFFFFF",
   },
   tabText: {
     color: "#7B7B8B",
-    fontSize: 16,
+    fontSize: 12,
     fontWeight: "500",
   },
   activeTabText: {
@@ -288,7 +311,8 @@ const styles = StyleSheet.create({
   dividerRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 18,
+    marginBottom: 16,
+    marginTop: 6,
   },
   divider: {
     flex: 1,
@@ -296,33 +320,40 @@ const styles = StyleSheet.create({
     backgroundColor: "#DADADA",
   },
   dividerText: {
-    marginHorizontal: 12,
-    color: "#7B7B8B",
-    fontSize: 16,
+    marginHorizontal: 16,
+    color: "#6B7280",
+    fontSize: 11,
     fontWeight: "600",
   },
   socialRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    gap: 10,
-    marginBottom: 22,
+    gap: 8,
+    marginBottom: 26,
   },
   socialButton: {
     flex: 1,
+    minHeight: 44,
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: "#E2E2E2",
-    borderRadius: 12,
-    paddingVertical: 12,
+    borderColor: "#D8D8D8",
+    borderRadius: 8,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 50,
+    gap: 6,
+    paddingHorizontal: 6,
+  },
+  socialIcon: {
+    width: 18,
+    height: 18,
   },
   socialText: {
-    marginTop: 6,
-    fontSize: 14,
-    fontWeight: "600",
+    flexShrink: 1,
+    fontSize: 11,
+    fontWeight: "700",
     color: "#111111",
+    textAlign: "center",
   },
   nameRow: {
     flexDirection: "row",
@@ -333,61 +364,63 @@ const styles = StyleSheet.create({
   },
   fieldWrap: {
     position: "relative",
-    marginBottom: 18,
+    marginBottom: 16,
   },
   fieldWrapBlue: {
     position: "relative",
-    marginBottom: 18,
+    marginBottom: 16,
   },
   floatingLabel: {
     position: "absolute",
-    top: -9,
-    left: 14,
+    top: -10,
+    left: 16,
     zIndex: 2,
     backgroundColor: "#F7F7F7",
-    paddingHorizontal: 6,
+    paddingHorizontal: 8,
     color: "#9A9A9A",
-    fontSize: 14,
+    fontSize: 11,
     fontWeight: "600",
   },
   floatingLabelBlue: {
     position: "absolute",
-    top: -9,
-    left: 14,
+    top: -10,
+    left: 16,
     zIndex: 2,
     backgroundColor: "#F7F7F7",
-    paddingHorizontal: 6,
+    paddingHorizontal: 8,
     color: "#114B9B",
-    fontSize: 14,
+    fontSize: 11,
     fontWeight: "700",
   },
   input: {
     backgroundColor: "#FFFFFF",
-    borderWidth: 1.5,
-    borderColor: "#D9D9D9",
-    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E3E3E3",
+    borderRadius: 10,
     paddingHorizontal: 16,
-    paddingVertical: 16,
-    minHeight: 54,
+    paddingVertical: 14,
+    minHeight: 50,
     color: "#1F2937",
+    fontSize: 11,
   },
   inputBlue: {
     backgroundColor: "#FFFFFF",
     borderWidth: 1.5,
     borderColor: "#2E6AB0",
-    borderRadius: 12,
+    borderRadius: 10,
     paddingHorizontal: 16,
-    paddingVertical: 16,
-    minHeight: 54,
+    paddingVertical: 14,
+    minHeight: 50,
     color: "#1F2937",
+    fontSize: 11,
   },
   passwordRow: {
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1.5,
-    borderColor: "#D9D9D9",
-    borderRadius: 12,
+    backgroundColor: "#FAFAFA",
+    borderWidth: 1,
+    borderColor: "#E3E3E3",
+    borderRadius: 10,
     paddingHorizontal: 16,
-    minHeight: 54,
+    minHeight: 50,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -395,13 +428,16 @@ const styles = StyleSheet.create({
   passwordInput: {
     flex: 1,
     color: "#1F2937",
-    paddingVertical: 16,
+    paddingVertical: 14,
+    fontSize: 11,
   },
   forgotPassword: {
     textAlign: "right",
     color: "#114B9B",
     fontWeight: "700",
-    marginBottom: 22,
+    marginTop: -2,
+    marginBottom: 24,
+    fontSize: 12,
   },
   buttonOuter: {
     borderRadius: 14,
@@ -413,13 +449,13 @@ const styles = StyleSheet.create({
   },
   mainButton: {
     borderRadius: 14,
-    minHeight: 56,
+    minHeight: 52,
     justifyContent: "center",
     alignItems: "center",
   },
   mainButtonText: {
     color: "#FFFFFF",
-    fontSize: 18,
+    fontSize: 14,
     fontWeight: "700",
   },
 });
