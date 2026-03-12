@@ -1,11 +1,21 @@
 {
   "version": 2,
-  "dgSpecHash": "LSOGJ7/E+1s=",
+  "dgSpecHash": "/POzEFLAVs4=",
   "success": true,
   "projectFilePath": "/workspaces/CodeConquerors/AccessCity.API/AccessCity.API.csproj",
   "expectedPackageFiles": [
     "/home/vscode/.nuget/packages/microsoft.aspnetcore.openapi/9.0.13/microsoft.aspnetcore.openapi.9.0.13.nupkg.sha512",
-    "/home/vscode/.nuget/packages/microsoft.openapi/1.6.17/microsoft.openapi.1.6.17.nupkg.sha512"
+    "/home/vscode/.nuget/packages/microsoft.openapi/1.6.17/microsoft.openapi.1.6.17.nupkg.sha512",
+    "/home/vscode/.nuget/packages/nettopologysuite/2.5.0/nettopologysuite.2.5.0.nupkg.sha512",
+    "/home/vscode/.nuget/packages/nettopologysuite.features/2.1.0/nettopologysuite.features.2.1.0.nupkg.sha512",
+    "/home/vscode/.nuget/packages/nettopologysuite.io.geojson4stj/4.0.0/nettopologysuite.io.geojson4stj.4.0.0.nupkg.sha512",
+    "/home/vscode/.nuget/packages/system.memory/4.5.4/system.memory.4.5.4.nupkg.sha512",
+    "/home/vscode/.nuget/packages/system.runtime.compilerservices.unsafe/6.0.0/system.runtime.compilerservices.unsafe.6.0.0.nupkg.sha512",
+    "/home/vscode/.nuget/packages/system.text.encodings.web/6.0.0/system.text.encodings.web.6.0.0.nupkg.sha512",
+    "/home/vscode/.nuget/packages/system.text.json/6.0.3/system.text.json.6.0.3.nupkg.sha512",
+    "/home/vscode/.nuget/packages/microsoft.netcore.app.ref/9.0.14/microsoft.netcore.app.ref.9.0.14.nupkg.sha512",
+    "/home/vscode/.nuget/packages/microsoft.aspnetcore.app.ref/9.0.14/microsoft.aspnetcore.app.ref.9.0.14.nupkg.sha512",
+    "/home/vscode/.nuget/packages/microsoft.netcore.app.host.linux-x64/9.0.14/microsoft.netcore.app.host.linux-x64.9.0.14.nupkg.sha512"
   ],
   "logs": []
 }
