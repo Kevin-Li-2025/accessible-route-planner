@@ -1,220 +1,246 @@
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Image } from "react-native";
+import React from "react";
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ScrollView,
+  SafeAreaView,
+  KeyboardAvoidingView,
+  Platform,
+  StatusBar,
+} from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
+import { AntDesign, FontAwesome, Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 
 export default function LoginScreen() {
   return (
-    <View style={styles.container}>
-      <View style={styles.topShape} />
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar barStyle="dark-content" />
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={{ flex: 1 }}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.container}>
+            <TouchableOpacity 
+              style={styles.backButton}
+              onPress={() => router.back()}
+            >
+              <Ionicons name="chevron-back" size={24} color="#0F172A" />
+            </TouchableOpacity>
 
-      <Image
-        source={require("../assets/images/logo.png")}
-        style={styles.logo}
-        resizeMode="contain"
-      />
+            <View style={styles.header}>
+              <Text style={styles.title}>Welcome Back</Text>
+              <Text style={styles.subtitle}>Enter your details to log in</Text>
+            </View>
 
-      <Text style={styles.title}>
-        Navigate Your City <Text style={styles.orange}>Safely</Text>
-      </Text>
+            <View style={styles.socialRow}>
+              <TouchableOpacity style={styles.socialButton}>
+                <AntDesign name="google" size={24} color="#EA4335" />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.socialButton}>
+                <FontAwesome name="facebook" size={24} color="#1877F2" />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.socialButton}>
+                <AntDesign name="apple" size={24} color="#000" />
+              </TouchableOpacity>
+            </View>
 
-      <Text style={styles.subtitle}>
-        Find safer walking routes and stay aware{"\n"}of hazards around you.
-      </Text>
+            <View style={styles.dividerRow}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>or login with email</Text>
+              <View style={styles.dividerLine} />
+            </View>
 
-      <View style={styles.switchContainer}>
-        <TouchableOpacity style={styles.activeTab}>
-          <Text style={styles.activeTabText}>Log In</Text>
-        </TouchableOpacity>
+            <View style={styles.form}>
+              <View style={styles.inputContainer}>
+                <Ionicons name="mail-outline" size={20} color="#64748B" style={styles.inputIcon} />
+                <TextInput
+                  placeholder="Email Address"
+                  placeholderTextColor="#94A3B8"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  style={styles.input}
+                />
+              </View>
 
-        <TouchableOpacity style={styles.inactiveTab} onPress={() => router.push("/signup")}>
-          <Text style={styles.inactiveTabText}>Sign up</Text>
-        </TouchableOpacity>
-      </View>
+              <View style={styles.inputContainer}>
+                <Ionicons name="lock-closed-outline" size={20} color="#64748B" style={styles.inputIcon} />
+                <TextInput
+                  placeholder="Password"
+                  placeholderTextColor="#94A3B8"
+                  secureTextEntry
+                  style={styles.input}
+                />
+              </View>
 
-      <View style={styles.dividerRow}>
-        <View style={styles.divider} />
-        <Text style={styles.dividerText}>Login with</Text>
-        <View style={styles.divider} />
-      </View>
+              <TouchableOpacity style={styles.forgotPasswordContainer}>
+                <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
+              </TouchableOpacity>
 
-      <View style={styles.socialRow}>
-        <TouchableOpacity style={styles.socialButton}>
-          <Text>Google</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.socialButton}>
-          <Text>Facebook</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.socialButton}>
-          <Text>Apple</Text>
-        </TouchableOpacity>
-      </View>
+              <TouchableOpacity activeOpacity={0.85} style={styles.mainButtonContainer}>
+                <LinearGradient
+                  colors={["#2563EB", "#1D4ED8"]}
+                  style={styles.mainButton}
+                >
+                  <Text style={styles.mainButtonText}>Log In</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            </View>
 
-      <View style={styles.dividerRow}>
-        <View style={styles.divider} />
-        <Text style={styles.dividerText}>Or</Text>
-        <View style={styles.divider} />
-      </View>
-
-      <Text style={styles.label}>Email</Text>
-      <TextInput
-        placeholder="Please enter your email"
-        style={styles.input}
-        accessibilityLabel="Email input"
-      />
-
-      <Text style={styles.label}>Password</Text>
-      <TextInput
-        placeholder="**********"
-        secureTextEntry
-        style={styles.input}
-        accessibilityLabel="Password input"
-      />
-
-      <TouchableOpacity>
-        <Text style={styles.forgotPassword}>Forgot Password?</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity style={styles.mainButton}>
-        <Text style={styles.mainButtonText}>Log In</Text>
-      </TouchableOpacity>
-    </View>
+            <View style={styles.footer}>
+              <Text style={styles.footerText}>Don&apos;t have an account? </Text>
+              <TouchableOpacity onPress={() => router.push("/signup")}>
+                <Text style={styles.footerLink}>Sign Up</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#F7F7F7",
-    paddingHorizontal: 24,
-    paddingTop: 50,
-  },
-  topShape: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    width: 180,
-    height: 180,
-    backgroundColor: "#F1E2D7",
-    borderBottomRightRadius: 180,
-  },
-  logo: {
-    width: 120,
-    height: 120,
-    alignSelf: "center",
-    marginTop: 30,
-    marginBottom: 10,
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: "800",
-    textAlign: "center",
-    color: "#4D3F3F",
-    marginBottom: 8,
-  },
-  orange: {
-    color: "#F28C28",
-  },
-  subtitle: {
-    textAlign: "center",
-    color: "#5F5F5F",
-    fontSize: 15,
-    marginBottom: 24,
-  },
-  switchContainer: {
-    flexDirection: "row",
-    backgroundColor: "#ECECF1",
-    borderRadius: 12,
-    padding: 4,
-    marginBottom: 24,
-  },
-  activeTab: {
+  safeArea: {
     flex: 1,
     backgroundColor: "#FFFFFF",
-    paddingVertical: 12,
-    borderRadius: 10,
-    alignItems: "center",
   },
-  inactiveTab: {
+  scrollContent: {
+    flexGrow: 1,
+  },
+  container: {
     flex: 1,
-    paddingVertical: 12,
-    borderRadius: 10,
+    paddingHorizontal: 24,
+    paddingTop: 20,
+    paddingBottom: 40,
+  },
+  backButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: "#F1F5F9",
     alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 32,
   },
-  activeTabText: {
-    fontWeight: "700",
-    color: "#1D2852",
+  header: {
+    marginBottom: 40,
   },
-  inactiveTabText: {
-    color: "#6D7280",
+  title: {
+    fontSize: 32,
+    fontWeight: "800",
+    color: "#0F172A",
+    letterSpacing: -1,
+    marginBottom: 8,
+  },
+  subtitle: {
+    fontSize: 16,
+    color: "#64748B",
+    fontWeight: "500",
+  },
+  socialRow: {
+    flexDirection: "row",
+    gap: 16,
+    marginBottom: 32,
+  },
+  socialButton: {
+    flex: 1,
+    height: 56,
+    borderRadius: 16,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    alignItems: "center",
+    justifyContent: "center",
   },
   dividerRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 18,
-    marginTop: 6,
+    marginBottom: 32,
   },
-  divider: {
+  dividerLine: {
     flex: 1,
     height: 1,
-    backgroundColor: "#D8D8D8",
+    backgroundColor: "#F1F5F9",
   },
   dividerText: {
-    marginHorizontal: 12,
-    color: "#6D7280",
+    marginHorizontal: 16,
+    fontSize: 14,
+    color: "#94A3B8",
     fontWeight: "600",
   },
-  socialRow: {
+  form: {
+    gap: 20,
+  },
+  inputContainer: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 22,
-  },
-  socialButton: {
-    flex: 1,
-    backgroundColor: "#FFFFFF",
-    paddingVertical: 12,
-    borderRadius: 10,
     alignItems: "center",
-    marginHorizontal: 4,
+    backgroundColor: "#F8FAFC",
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#E2E2E2",
-    minHeight: 44,
+    borderColor: "#E2E8F0",
+    paddingHorizontal: 16,
   },
-  label: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: "#6D7280",
-    marginBottom: 8,
-    marginLeft: 4,
+  inputIcon: {
+    marginRight: 14,
   },
   input: {
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: "#D9D9D9",
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    marginBottom: 18,
-    minHeight: 50,
-  },
-  forgotPassword: {
-    textAlign: "right",
-    color: "#1D4E9E",
+    flex: 1,
+    height: 56,
+    fontSize: 16,
+    color: "#0F172A",
     fontWeight: "600",
-    marginBottom: 24,
+  },
+  forgotPasswordContainer: {
+    alignSelf: "flex-end",
+    marginTop: -8,
+  },
+  forgotPasswordText: {
+    color: "#2563EB",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  mainButtonContainer: {
+    marginTop: 12,
+    borderRadius: 20,
+    shadowColor: "#2563EB",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 20,
+    elevation: 6,
   },
   mainButton: {
-    backgroundColor: "#215A9A",
-    paddingVertical: 16,
-    borderRadius: 14,
+    height: 60,
+    borderRadius: 20,
     alignItems: "center",
-    minHeight: 50,
-    shadowColor: "#000",
-    shadowOpacity: 0.15,
-    shadowRadius: 5,
-    elevation: 4,
+    justifyContent: "center",
   },
   mainButtonText: {
     color: "#FFFFFF",
-    fontSize: 20,
+    fontSize: 18,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+  },
+  footer: {
+    flexDirection: "row",
+    justifyContent: "center",
+    marginTop: 40,
+  },
+  footerText: {
+    fontSize: 15,
+    color: "#64748B",
+    fontWeight: "500",
+  },
+  footerLink: {
+    fontSize: 15,
+    color: "#2563EB",
     fontWeight: "700",
   },
 });
