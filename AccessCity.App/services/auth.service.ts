@@ -8,13 +8,13 @@ const USER_KEY = 'ac_user_data';
 
 export const authService = {
   async login(request: LoginRequest): Promise<AuthResponse> {
-    const response = await api.post<AuthResponse>('/auth/login', request);
+    const response = await api.post<AuthResponse>('/auth/login', request, { skipAuth: true });
     await this.saveSession(response);
     return response;
   },
 
   async register(request: RegisterRequest): Promise<AuthResponse> {
-    const response = await api.post<AuthResponse>('/auth/register', request);
+    const response = await api.post<AuthResponse>('/auth/register', request, { skipAuth: true });
     await this.saveSession(response);
     return response;
   },
@@ -42,6 +42,17 @@ export const authService = {
   },
 
   async logout() {
+    const refreshToken = await SecureStore.getItemAsync(REFRESH_TOKEN_KEY);
+    if (refreshToken) {
+      try {
+        await api.request(`/auth/revoke-token?token=${refreshToken}`, { 
+          method: 'POST',
+          skipAuth: true 
+        });
+      } catch (e) {
+        console.warn('Backend logout failed', e);
+      }
+    }
     await SecureStore.deleteItemAsync(TOKEN_KEY);
     await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
     await SecureStore.deleteItemAsync(USER_KEY);

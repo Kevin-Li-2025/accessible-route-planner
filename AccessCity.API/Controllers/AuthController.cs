@@ -124,6 +124,29 @@ namespace AccessCity.API.Controllers
             );
         }
 
+        [HttpPost("revoke-token")]
+        public async Task<IActionResult> RevokeToken([FromQuery] string token)
+        {
+            var user = await _userManager.Users
+                .Include(u => u.RefreshTokens)
+                .SingleOrDefaultAsync(u => u.RefreshTokens.Any(t => t.Token == token));
+
+            if (user == null) return NotFound("Token not found.");
+
+            var refreshToken = user.RefreshTokens.Single(x => x.Token == token);
+
+            if (!refreshToken.IsActive) return BadRequest("Token is already inactive.");
+
+            // Revoke token
+            refreshToken.Revoked = DateTime.UtcNow;
+            refreshToken.RevokedByIp = GetIpAddress();
+            refreshToken.ReasonRevoked = "Revoked by user";
+
+            await _userManager.UpdateAsync(user);
+
+            return Ok(new { message = "Token revoked" });
+        }
+
         private string GetIpAddress()
         {
             if (Request.Headers.ContainsKey("X-Forwarded-For"))
