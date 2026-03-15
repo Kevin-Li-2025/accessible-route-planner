@@ -14,6 +14,11 @@ using Microsoft.Extensions.Caching.Hybrid;
 var builder = WebApplication.CreateBuilder(args);
 
 // ── Infrastructure & Caching ──
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
+});
+
 builder.Services.AddMemoryCache();
 #pragma warning disable EXTEXP0018 // HybridCache is preview
 builder.Services.AddHybridCache(options =>
@@ -24,7 +29,10 @@ builder.Services.AddHybridCache(options =>
     };
 });
 #pragma warning restore EXTEXP0018
+
 builder.Services.AddSingleton<ISpatialCacheService, SpatialCacheService>();
+builder.Services.AddSingleton<IBloomFilterService, BloomFilterService>();
+builder.Services.AddScoped<IMapTileService, MapTileService>();
 
 // ── Serialisation: GeoJSON support via NetTopologySuite ──
 builder.Services.AddControllers()
