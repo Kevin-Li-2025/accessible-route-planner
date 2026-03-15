@@ -21,90 +21,62 @@ namespace AccessCity.API.Services
     public class SpatialCacheService : ISpatialCacheService
     {
         private readonly HybridCache _hybridCache;
-        private readonly ILogger<SpatialCacheService> _logger;
-        private Quadtree<HazardReport> _spatialIndex = new();
-        private readonly ReaderWriterLockSlim _indexLock = new();
+        private readonly Quadtree<HazardReport> _spatialIndex = new();
+        private readonly SemaphoreSlim _lock = new(1, 1);
         private const string CacheKeyPrefix = "spatial:hazard:";
 
-        public SpatialCacheService(HybridCache hybridCache, ILogger<SpatialCacheService> logger)
+        public SpatialCacheService(HybridCache hybridCache)
         {
-            _hybridCache = hybridCache ?? throw new ArgumentNullException(nameof(hybridCache));
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _hybridCache = hybridCache;
         }
 
         public async Task<IReadOnlyList<HazardReport>> GetHazardsInBoundsAsync(Envelope bounds)
         {
-            _indexLock.EnterReadLock();
+            await _lock.WaitAsync();
             try
             {
-                var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-                var results = (IReadOnlyList<HazardReport>)_spatialIndex.Query(bounds);
-                stopwatch.Stop();
-
-                if (stopwatch.ElapsedMilliseconds > 10)
-                {
-                    _logger.LogWarning("Spatial query took {Elapsed}ms for bounds {Bounds}. Optimization required.", stopwatch.ElapsedMilliseconds, bounds);
-                }
-
-                return results;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error querying spatial index.");
-                return new List<HazardReport>();
+                // O(log N) spatial query on the dynamic Quadtree
+                return (IReadOnlyList<HazardReport>)_spatialIndex.Query(bounds);
             }
             finally
             {
-                _indexLock.ExitReadLock();
+                _lock.Release();
             }
         }
 
         public async Task UpdateHazardCacheAsync(HazardReport hazard)
         {
-            if (hazard == null) return;
-
-            // 1. Persistent Storage (L2) - Done outside the lock to minimize contention
-            string key = $"{CacheKeyPrefix}{hazard.Id}";
-            await _hybridCache.SetAsync(key, hazard);
-
-            // 2. In-Memory Index (L1) - High-concurrency write
-            _indexLock.EnterWriteLock();
+            await _lock.WaitAsync();
             try
             {
+                // 1. Update L1/L2 persistent cache
+                string key = $"{CacheKeyPrefix}{hazard.Id}";
+                await _hybridCache.SetAsync(key, hazard);
+
+                // 2. Update Dynamic Spatial Index
                 _spatialIndex.Insert(hazard.Location.EnvelopeInternal, hazard);
-                _logger.LogInformation("Successfully indexed hazard {Id} at {Location}", hazard.Id, hazard.Location);
             }
             finally
             {
-                _indexLock.ExitWriteLock();
+                _lock.Release();
             }
         }
 
         public async Task BulkUpdateHazardsAsync(IEnumerable<HazardReport> hazards)
         {
-            if (hazards == null || !hazards.Any()) return;
-
-            var hazardList = hazards.ToList();
-
-            // 1. Bulk Set in L2
-            foreach (var hazard in hazardList)
-            {
-                await _hybridCache.SetAsync($"{CacheKeyPrefix}{hazard.Id}", hazard);
-            }
-
-            // 2. Optimized Index Rebuild/Update
-            _indexLock.EnterWriteLock();
+            await _lock.WaitAsync();
             try
             {
-                foreach (var hazard in hazardList)
+                foreach (var hazard in hazards)
                 {
+                    string key = $"{CacheKeyPrefix}{hazard.Id}";
+                    await _hybridCache.SetAsync(key, hazard);
                     _spatialIndex.Insert(hazard.Location.EnvelopeInternal, hazard);
                 }
-                _logger.LogInformation("Bulk indexed {Count} hazards.", hazardList.Count);
             }
             finally
             {
-                _indexLock.ExitWriteLock();
+                _lock.Release();
             }
         }
     }
