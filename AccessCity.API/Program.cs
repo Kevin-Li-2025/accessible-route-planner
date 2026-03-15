@@ -9,8 +9,22 @@ using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Caching.Hybrid;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// ── Infrastructure & Caching ──
+builder.Services.AddMemoryCache();
+#pragma warning disable EXTEXP0018 // HybridCache is preview
+builder.Services.AddHybridCache(options =>
+{
+    options.DefaultEntryOptions = new HybridCacheEntryOptions
+    {
+        Expiration = TimeSpan.FromHours(1)
+    };
+});
+#pragma warning restore EXTEXP0018
+builder.Services.AddSingleton<ISpatialCacheService, SpatialCacheService>();
 
 // ── Serialisation: GeoJSON support via NetTopologySuite ──
 builder.Services.AddControllers()
