@@ -147,6 +147,56 @@ namespace AccessCity.API.Controllers
             return Ok(new { message = "Token revoked" });
         }
 
+        [HttpPost("forgot-password")]
+        public async Task<IActionResult> ForgotPassword(ForgotPasswordRequest request)
+        {
+            var user = await _userManager.FindByEmailAsync(request.Email);
+            
+            // Enumeration Protection: Always return generic success
+            if (user == null) 
+            {
+                return Ok(new { message = "If your email is registered, you will receive a reset token." });
+            }
+
+            var token = await _userManager.GeneratePasswordResetTokenAsync(user);
+
+            // LOGGING instead of real email for PoC
+            Console.WriteLine("----------------------------------");
+            Console.WriteLine($"RESET TOKEN for {request.Email}: {token}");
+            Console.WriteLine("----------------------------------");
+
+            return Ok(new { message = "If your email is registered, you will receive a reset token." });
+        }
+
+        [HttpPost("reset-password")]
+        public async Task<IActionResult> ResetPassword(ResetPasswordRequest request)
+        {
+            var user = await _userManager.Users
+                .Include(u => u.RefreshTokens)
+                .SingleOrDefaultAsync(x => x.Email == request.Email);
+
+            if (user == null) return BadRequest("Invalid request.");
+
+            var result = await _userManager.ResetPasswordAsync(user, request.Token, request.NewPassword);
+
+            if (!result.Succeeded)
+            {
+                return BadRequest(result.Errors);
+            }
+
+            // High Security: Invalidate ALL existing refresh tokens on password change
+            foreach (var t in user.RefreshTokens.Where(x => x.IsActive))
+            {
+                t.Revoked = DateTime.UtcNow;
+                t.RevokedByIp = GetIpAddress();
+                t.ReasonRevoked = "Password reset";
+            }
+
+            await _userManager.UpdateAsync(user);
+
+            return Ok(new { message = "Password has been reset successfully." });
+        }
+
         private string GetIpAddress()
         {
             if (Request.Headers.ContainsKey("X-Forwarded-For"))

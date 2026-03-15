@@ -159,14 +159,19 @@ namespace AccessCity.API.Services
             double a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2) +
                        Math.Cos(ToRad(lat1)) * Math.Cos(ToRad(lat2)) *
                        Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
-            return R * 2.0 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
+            return R * 2.0 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(Math.Max(0, 1.0 - a)));
         }
 
         private static double ToRad(double deg) => deg * Math.PI / 180.0;
 
         /// <summary>Sigmoid squashing: maps [0,∞) → [0,1).</summary>
         private static double Sigmoid(double x, double k = 1.0)
-            => 1.0 / (1.0 + Math.Exp(-k * (x - 1.0)));
+        {
+            if (double.IsNaN(x)) return 0.5;
+            if (double.IsPositiveInfinity(x)) return 1.0;
+            if (double.IsNegativeInfinity(x)) return 0.0;
+            return 1.0 / (1.0 + Math.Exp(-k * (x - 1.0)));
+        }
 
         private static double Clamp01(double v)
             => Math.Max(0.0, Math.Min(1.0, v));

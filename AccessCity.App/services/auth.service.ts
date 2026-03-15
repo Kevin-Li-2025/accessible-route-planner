@@ -56,5 +56,13 @@ export const authService = {
     await SecureStore.deleteItemAsync(TOKEN_KEY);
     await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
     await SecureStore.deleteItemAsync(USER_KEY);
+  },
+
+  async forgotPassword(email: string): Promise<{ message: string }> {
+    return api.post<{ message: string }>('/auth/forgot-password', { email }, { skipAuth: true });
+  },
+
+  async resetPassword(request: ResetPasswordRequest): Promise<{ message: string }> {
+    return api.post<{ message: string }>('/auth/reset-password', request, { skipAuth: true });
   }
 };
