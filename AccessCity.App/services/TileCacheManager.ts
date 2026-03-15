@@ -2,7 +2,7 @@ import * as FileSystem from 'expo-file-system';
 import * as SQLite from 'expo-sqlite';
 
 /**
- * Tile Cache Manager for Expo.
+ * Industrial-level Tile Cache Manager for Expo.
  * Follows the "Metadata in DB, Binaries on Disk" pattern to prevent DB bloat.
  */
 class TileCacheManager {

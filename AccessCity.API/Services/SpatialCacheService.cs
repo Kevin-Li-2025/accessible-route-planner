@@ -7,9 +7,8 @@ using AccessCity.API.Models;
 namespace AccessCity.API.Services
 {
     /// <summary>
-    /// <summary>
-    /// Spatial Caching Service.
-    /// Combines an in-memory Quadtree index for O(log N) spatial queries
+    /// Industrial-level Spatial Caching Service.
+    /// Combines an in-memory R-Tree index for O(log N) spatial queries
     /// with .NET 9 HybridCache for robust L1/L2 persistence.
     /// </summary>
     public interface ISpatialCacheService
