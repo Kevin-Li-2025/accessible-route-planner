@@ -1,5 +1,6 @@
 using NetTopologySuite.Geometries;
 using NetTopologySuite.Index.Strtree;
+using NetTopologySuite.Index.Quadtree;
 using Microsoft.Extensions.Caching.Hybrid;
 using AccessCity.API.Models;
 
@@ -20,7 +21,7 @@ namespace AccessCity.API.Services
     public class SpatialCacheService : ISpatialCacheService
     {
         private readonly HybridCache _hybridCache;
-        private readonly STRtree<HazardReport> _rTree = new();
+        private readonly Quadtree<HazardReport> _spatialIndex = new();
         private readonly SemaphoreSlim _lock = new(1, 1);
         private const string CacheKeyPrefix = "spatial:hazard:";
 
@@ -31,8 +32,16 @@ namespace AccessCity.API.Services
 
         public async Task<IReadOnlyList<HazardReport>> GetHazardsInBoundsAsync(Envelope bounds)
         {
-            // O(log N) spatial query on the in-memory R-Tree
-            return (IReadOnlyList<HazardReport>)_rTree.Query(bounds);
+            await _lock.WaitAsync();
+            try
+            {
+                // O(log N) spatial query on the dynamic Quadtree
+                return (IReadOnlyList<HazardReport>)_spatialIndex.Query(bounds);
+            }
+            finally
+            {
+                _lock.Release();
+            }
         }
 
         public async Task UpdateHazardCacheAsync(HazardReport hazard)
@@ -44,11 +53,8 @@ namespace AccessCity.API.Services
                 string key = $"{CacheKeyPrefix}{hazard.Id}";
                 await _hybridCache.SetAsync(key, hazard);
 
-                // 2. Update In-Memory R-Tree
-                // Note: STRtree is static; for dynamic updates a new tree is often built 
-                // or a Quadtree/RBush variant used. For this perfect implementation, 
-                // we'll rebuild if the threshold is met, otherwise use the live R-Tree.
-                _rTree.Insert(hazard.Location.EnvelopeInternal, hazard);
+                // 2. Update Dynamic Spatial Index
+                _spatialIndex.Insert(hazard.Location.EnvelopeInternal, hazard);
             }
             finally
             {
@@ -65,7 +71,7 @@ namespace AccessCity.API.Services
                 {
                     string key = $"{CacheKeyPrefix}{hazard.Id}";
                     await _hybridCache.SetAsync(key, hazard);
-                    _rTree.Insert(hazard.Location.EnvelopeInternal, hazard);
+                    _spatialIndex.Insert(hazard.Location.EnvelopeInternal, hazard);
                 }
             }
             finally
