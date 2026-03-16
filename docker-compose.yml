@@ -11,3 +11,19 @@ services:
       Jwt__Key: ${JWT_SECRET:-AccessCity_Secret_Key_For_Dev_2026_Placeholder}
       Jwt__Issuer: AccessCity.API
       Jwt__Audience: AccessCity.App
+    depends_on:
+      - db
+
+  db:
+    image: postgis/postgis:15-3.3
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: accesscity
+      POSTGRES_PASSWORD: accesscity123
+      POSTGRES_DB: accesscitydb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
