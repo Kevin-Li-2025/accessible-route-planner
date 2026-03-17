@@ -20,14 +20,11 @@ namespace AccessCity.API.Services.External
         public OverpassApiClient(HttpClient httpClient)
         {
             _httpClient = httpClient;
-            // Overpass API asks for a User-Agent header politely identifying the application
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "AccessCity-UniversityProject/1.0");
         }
 
         public async Task<List<OverpassElement>?> GetInfrastructureDataAsync(double minLat, double minLng, double maxLat, double maxLng)
         {
-            // Building a Bounding-Box query for Overpass QL
-            // Looking specifically for footways, sidewalks, stairs, and roads indicating wheelchair access
             var overpassQuery = $@"
                 [out:json][timeout:25];
                 (
@@ -73,8 +70,6 @@ namespace AccessCity.API.Services.External
         {
             try
             {
-                // Note: The Police data API is notoriously slow/sometimes down.
-                // In production, this should be heavily cached (e.g., IMemoryCache for 24 hours).
                 return await _httpClient.GetFromJsonAsync<List<StreetCrimeRecord>>(
                     $"crimes-street/all-crime?lat={latitude}&lng={longitude}");
             }
@@ -131,8 +126,6 @@ namespace AccessCity.API.Services.External
             if (!response.IsSuccessStatusCode) return new List<Place>();
 
             var result = await response.Content.ReadFromJsonAsync<PlacesSearchResponse>();
-            
-            // Further filter locally for stores that are "OpenNow" if we need immediate safe havens.
             return result?.Places;
         }
     }

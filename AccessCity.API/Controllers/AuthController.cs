@@ -54,8 +54,8 @@ namespace AccessCity.API.Controllers
             return new AuthResponse(
                 _tokenService.CreateToken(user),
                 refreshToken.Token,
-                user.Email,
-                user.FullName
+                user.Email ?? string.Empty,
+                user.FullName ?? string.Empty
             );
         }
 
@@ -74,7 +74,6 @@ namespace AccessCity.API.Controllers
 
             var refreshToken = _tokenService.GenerateRefreshToken(GetIpAddress());
             
-            // Revoke old tokens
             foreach (var t in user.RefreshTokens.Where(x => x.IsActive))
             {
                 t.Revoked = DateTime.UtcNow;
@@ -88,8 +87,8 @@ namespace AccessCity.API.Controllers
             return new AuthResponse(
                 _tokenService.CreateToken(user),
                 refreshToken.Token,
-                user.Email,
-                user.FullName!
+                user.Email ?? string.Empty,
+                user.FullName ?? string.Empty
             );
         }
 
@@ -106,7 +105,6 @@ namespace AccessCity.API.Controllers
 
             if (!refreshToken.IsActive) return Unauthorized("Invalid token.");
 
-            // Rotate token
             var newRefreshToken = _tokenService.GenerateRefreshToken(GetIpAddress());
             refreshToken.Revoked = DateTime.UtcNow;
             refreshToken.RevokedByIp = GetIpAddress();
@@ -119,8 +117,8 @@ namespace AccessCity.API.Controllers
             return new AuthResponse(
                 _tokenService.CreateToken(user),
                 newRefreshToken.Token,
-                user.Email!,
-                user.FullName!
+                user.Email ?? string.Empty,
+                user.FullName ?? string.Empty
             );
         }
 
@@ -137,7 +135,6 @@ namespace AccessCity.API.Controllers
 
             if (!refreshToken.IsActive) return BadRequest("Token is already inactive.");
 
-            // Revoke token
             refreshToken.Revoked = DateTime.UtcNow;
             refreshToken.RevokedByIp = GetIpAddress();
             refreshToken.ReasonRevoked = "Revoked by user";
@@ -152,7 +149,6 @@ namespace AccessCity.API.Controllers
         {
             var user = await _userManager.FindByEmailAsync(request.Email);
             
-            // Enumeration Protection: Always return generic success
             if (user == null) 
             {
                 return Ok(new { message = "If your email is registered, you will receive a reset token." });
@@ -160,7 +156,6 @@ namespace AccessCity.API.Controllers
 
             var token = await _userManager.GeneratePasswordResetTokenAsync(user);
 
-            // LOGGING instead of real email for PoC
             Console.WriteLine("----------------------------------");
             Console.WriteLine($"RESET TOKEN for {request.Email}: {token}");
             Console.WriteLine("----------------------------------");
@@ -184,7 +179,6 @@ namespace AccessCity.API.Controllers
                 return BadRequest(result.Errors);
             }
 
-            // High Security: Invalidate ALL existing refresh tokens on password change
             foreach (var t in user.RefreshTokens.Where(x => x.IsActive))
             {
                 t.Revoked = DateTime.UtcNow;

@@ -21,20 +21,19 @@ namespace AccessCity.API.Services
     {
         private readonly RiskScoringService _riskService;
 
-        // Walking speed in m/s (average comfortable pace)
         private const double WalkingSpeed = 1.3;
 
-        // ── Preference → edge-pruning predicate map ──
         private static readonly Dictionary<string, Func<GraphEdge, bool>> EdgeFilters = new(StringComparer.OrdinalIgnoreCase)
         {
             ["avoid-stairs"]        = e => !e.HasStairs,
             ["wheelchair"]          = e => !e.HasStairs && e.SurfaceType != "cobblestone" && e.SurfaceType != "gravel",
             ["avoid-cobblestone"]   = e => e.SurfaceType != "cobblestone",
             ["avoid-construction"]  = e => !e.IsUnderConstruction,
-            ["prefer-crossings"]    = e => true, // soft: handled as cost modifier
+            ["avoid-steep-hills"]   = e => !e.IsSteep,
+            ["avoid-reported-hazards"] = e => e.BaseSafetyCost < 0.3,
+            ["prefer-crossings"]    = e => true,
         };
 
-        // ── Preference → per-edge cost multiplier (soft constraints) ──
         private static readonly Dictionary<string, Func<GraphEdge, double>> CostModifiers = new(StringComparer.OrdinalIgnoreCase)
         {
             ["low-light-penalty"]  = e => 1.0 + (1.0 - e.LightingQuality) * 0.5,
@@ -53,10 +52,26 @@ namespace AccessCity.API.Services
             RouteRequest request,
             IEnumerable<HazardReport> allHazards)
         {
-            // ── 1. Build graph ──
-            var graph = BuildGraph(request.Start, request.End, allHazards);
+            double directDist = RiskScoringService.HaversineDistance(
+                request.Start.Y, request.Start.X,
+                request.End.Y, request.End.X);
 
-            // ── 2. Resolve start & end nodes ──
+            // Optimization for very long distances to avoid memory overflow in synthetic grid
+            double latStep = 0.0007;
+            double lonStep = 0.0010;
+
+            if (directDist > 10000) // > 10km
+            {
+                latStep = 0.005; // ~500m
+                lonStep = 0.007;
+            }
+            if (directDist > 50000) // > 50km
+            {
+                latStep = 0.02; // ~2.2km
+                lonStep = 0.03;
+            }
+
+            var graph = BuildGraph(request.Start, request.End, allHazards, latStep, lonStep);
             long startId = FindNearest(graph, request.Start);
             long endId   = FindNearest(graph, request.End);
 
@@ -73,7 +88,6 @@ namespace AccessCity.API.Services
                 };
             }
 
-            // ── 3. A* search ──
             var path = AStarSearch(graph, startId, endId, request, allHazards);
 
             if (path == null || path.Count < 2)
@@ -88,13 +102,8 @@ namespace AccessCity.API.Services
                 };
             }
 
-            // ── 4. Assemble response ──
             return BuildResponse(path, graph, request, allHazards);
         }
-
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        //  A* Implementation
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
         private List<long>? AStarSearch(
             Dictionary<long, GraphNode> graph,
@@ -105,16 +114,12 @@ namespace AccessCity.API.Services
         {
             var hazardList = hazards.ToList();
             var endNode = graph[endId];
-
-            // g = actual cost from start,  f = g + heuristic
             var gScore = new Dictionary<long, double> { [startId] = 0 };
             var fScore = new Dictionary<long, double>
             {
                 [startId] = Heuristic(graph[startId].Location, endNode.Location, request.SafetyWeight)
             };
             var cameFrom = new Dictionary<long, long>();
-
-            // Min-priority queue: (fScore, nodeId)
             var open = new PriorityQueue<long, double>();
             open.Enqueue(startId, fScore[startId]);
             var closed = new HashSet<long>();
@@ -135,7 +140,6 @@ namespace AccessCity.API.Services
                     if (closed.Contains(neighbourId)) continue;
                     if (!graph.ContainsKey(neighbourId)) continue;
 
-                    // ── Hard-constraint pruning ──
                     bool passesFilters = true;
                     foreach (var pref in request.Preferences)
                     {
@@ -147,7 +151,6 @@ namespace AccessCity.API.Services
                     }
                     if (!passesFilters) continue;
 
-                    // ── Edge cost ──
                     double edgeCost = ComputeEdgeCost(edge, currentNode, graph[neighbourId],
                                                        request, hazardList);
 
@@ -165,7 +168,7 @@ namespace AccessCity.API.Services
                 }
             }
 
-            return null; // no path found
+            return null;
         }
 
         /// <summary>
@@ -175,7 +178,6 @@ namespace AccessCity.API.Services
         private static double Heuristic(Coordinate a, Coordinate b, double safetyWeight)
         {
             double dist = RiskScoringService.HaversineDistance(a.Y, a.X, b.Y, b.X);
-            // When safety weight is high, lower the heuristic so we explore more nodes
             return dist * (1.0 - safetyWeight * 0.3);
         }
 
@@ -191,17 +193,13 @@ namespace AccessCity.API.Services
         {
             double w = Math.Clamp(request.SafetyWeight, 0.0, 1.0);
 
-            // ── Distance component ──
             double distCost = edge.DistanceMetres;
-
-            // ── Safety component: edge base cost + live hazard risk ──
             double midLat = (fromNode.Location.Y + toNode.Location.Y) / 2.0;
             double midLon = (fromNode.Location.X + toNode.Location.X) / 2.0;
 
             double liveRisk = _riskService.QuickRisk(midLat, midLon, hazards, radiusMetres: 200);
             double safetyCost = (edge.BaseSafetyCost + liveRisk) / 2.0 * edge.DistanceMetres;
 
-            // ── Soft preference modifiers ──
             double modifier = 1.0;
             foreach (var pref in request.Preferences)
             {
@@ -209,10 +207,9 @@ namespace AccessCity.API.Services
                     modifier *= fn(edge);
             }
 
-            // ── Blend ──
             double blended = ((1.0 - w) * distCost + w * safetyCost) * modifier;
 
-            return Math.Max(blended, 0.001); // avoid zero-cost edges
+            return Math.Max(blended, 0.001);
         }
 
         private static List<long> ReconstructPath(Dictionary<long, long> cameFrom, long current)
@@ -226,10 +223,6 @@ namespace AccessCity.API.Services
             path.Reverse();
             return path;
         }
-
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        //  Response builder
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
         private RouteResponse BuildResponse(
             List<long> path,
@@ -261,7 +254,6 @@ namespace AccessCity.API.Services
                 double segSafety = 1.0 - segRisk;
                 safetySum += segSafety * segDist;
 
-                // ── Turn-by-turn instruction generation ──
                 string instruction = GenerateInstruction(fromNode, toNode, edge, i, path.Count - 1);
 
                 steps.Add(new RouteStep
@@ -273,7 +265,6 @@ namespace AccessCity.API.Services
                     Instruction = instruction
                 });
 
-                // ── Contextual warnings ──
                 if (edge.HasStairs)
                     warnings.Add($"Step {i + 1}: This segment contains stairs.");
                 if (edge.LightingQuality < 0.3)
@@ -348,10 +339,6 @@ namespace AccessCity.API.Services
         private static double ToRad(double deg) => deg * Math.PI / 180.0;
         private static double ToDeg(double rad) => rad * 180.0 / Math.PI;
 
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        //  Graph construction (PoC — synthetic grid for Birmingham)
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
         /// <summary>
         /// Build a walkable routing graph.
         /// 
@@ -363,28 +350,27 @@ namespace AccessCity.API.Services
         /// </summary>
         private Dictionary<long, GraphNode> BuildGraph(
             Coordinate start, Coordinate end,
-            IEnumerable<HazardReport> hazards)
+            IEnumerable<HazardReport> hazards,
+            double latStep = 0.0007,
+            double lonStep = 0.0010)
         {
             var hazardList = hazards.ToList();
-
-            // Expand the bbox beyond start/end to allow routing around obstacles
-            double minLat = Math.Min(start.Y, end.Y) - 0.008; // ~900m padding
-            double maxLat = Math.Max(start.Y, end.Y) + 0.008;
-            double minLon = Math.Min(start.X, end.X) - 0.010;
-            double maxLon = Math.Max(start.X, end.X) + 0.010;
-
-            // Grid resolution: ~80m spacing → ≈0.0007° lat, ≈0.001° lon at 52°N
-            const double latStep = 0.0007;
-            const double lonStep = 0.0010;
+            double minLat = Math.Min(start.Y, end.Y) - latStep * 5; 
+            double maxLat = Math.Max(start.Y, end.Y) + latStep * 5;
+            double minLon = Math.Min(start.X, end.X) - lonStep * 5;
+            double maxLon = Math.Max(start.X, end.X) + lonStep * 5;
+            
+            // Limit total nodes to prevent OOM
+            int rows = Math.Min((int)Math.Ceiling((maxLat - minLat) / latStep), 150);
+            int cols = Math.Min((int)Math.Ceiling((maxLon - minLon) / lonStep), 150);
+            
+            // Adjust back max to fit rows/cols if capped
+            maxLat = minLat + rows * latStep;
+            maxLon = minLon + cols * lonStep;
 
             var graph = new Dictionary<long, GraphNode>();
             var coordToId = new Dictionary<(int row, int col), long>();
             long nextId = 1;
-
-            int rows = (int)Math.Ceiling((maxLat - minLat) / latStep);
-            int cols = (int)Math.Ceiling((maxLon - minLon) / lonStep);
-
-            // ── Create nodes ──
             for (int r = 0; r <= rows; r++)
             {
                 for (int c = 0; c <= cols; c++)
@@ -401,12 +387,10 @@ namespace AccessCity.API.Services
                     coordToId[(r, c)] = id;
                 }
             }
-
-            // ── Create edges (8-connected grid) ──
             int[] dr = { -1, -1, -1,  0, 0,  1, 1, 1 };
             int[] dc = { -1,  0,  1, -1, 1, -1, 0, 1 };
 
-            var rng = new Random(42); // deterministic for reproducibility
+            var rng = new Random(42);
 
             for (int r = 0; r <= rows; r++)
             {
@@ -427,15 +411,9 @@ namespace AccessCity.API.Services
                         double dist = RiskScoringService.HaversineDistance(
                             fromNode.Location.Y, fromNode.Location.X,
                             toNode.Location.Y,   toNode.Location.X);
-
-                        // ── Generate realistic edge properties ──
                         double midLat = (fromNode.Location.Y + toNode.Location.Y) / 2.0;
                         double midLon = (fromNode.Location.X + toNode.Location.X) / 2.0;
-
-                        // Base safety cost from nearby hazards
                         double riskAtMid = _riskService.QuickRisk(midLat, midLon, hazardList, 150);
-
-                        // Deterministic pseudo-random properties seeded by position
                         int seed = HashCode.Combine(
                             Math.Round(midLat, 5),
                             Math.Round(midLon, 5));
@@ -453,6 +431,7 @@ namespace AccessCity.API.Services
                         bool hasStairs       = localRng.NextDouble() < 0.03;
                         bool hasCrossing     = localRng.NextDouble() < 0.25;
                         bool underConstruct  = localRng.NextDouble() < 0.02;
+                        bool isSteep         = localRng.NextDouble() < 0.05;
                         double lighting      = 0.4 + localRng.NextDouble() * 0.6;
 
                         fromNode.Edges[toId] = new GraphEdge
@@ -464,13 +443,12 @@ namespace AccessCity.API.Services
                             HasStairs           = hasStairs,
                             HasCrossing         = hasCrossing,
                             IsUnderConstruction = underConstruct,
-                            LightingQuality     = lighting
+                            LightingQuality     = lighting,
+                            IsSteep             = isSteep
                         };
                     }
                 }
             }
-
-            // ── Inject start & end as virtual nodes ──
             InjectVirtualNode(graph, 0, start, coordToId, rows, cols, latStep, lonStep, minLat, minLon, hazardList);
             InjectVirtualNode(graph, -1, end,  coordToId, rows, cols, latStep, lonStep, minLat, minLon, hazardList);
 
@@ -493,14 +471,10 @@ namespace AccessCity.API.Services
         {
             var vNode = new GraphNode { Id = virtualId, Location = coord };
             graph[virtualId] = vNode;
-
-            // Find nearest grid cell
             int r = (int)Math.Round((coord.Y - minLat) / latStep);
             int c = (int)Math.Round((coord.X - minLon) / lonStep);
             r = Math.Clamp(r, 0, rows);
             c = Math.Clamp(c, 0, cols);
-
-            // Connect to the 4 surrounding cells
             for (int dr = -1; dr <= 1; dr++)
             {
                 for (int dc = -1; dc <= 1; dc++)
@@ -526,8 +500,6 @@ namespace AccessCity.API.Services
                         SurfaceType    = "asphalt",
                         LightingQuality = 0.8
                     };
-
-                    // Bidirectional links
                     vNode.Edges[gridId]      = edge;
                     gridNode.Edges[virtualId] = new GraphEdge
                     {

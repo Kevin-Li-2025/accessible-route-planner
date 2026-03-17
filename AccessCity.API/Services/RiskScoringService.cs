@@ -1,5 +1,8 @@
 using NetTopologySuite.Geometries;
 using AccessCity.API.Models;
+using AccessCity.API.Models.External;
+using AccessCity.API.Services.External;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace AccessCity.API.Services
 {
@@ -9,10 +12,16 @@ namespace AccessCity.API.Services
     ///   • Inverse-square hazard proximity weighting
     ///   • Hazard density within a configurable radius
     ///   • Infrastructure quality heuristics (lighting, surface)
+    ///   • UK Police open data (street crime) — cached 24h, no DB required
     /// </summary>
     public class RiskScoringService
     {
-        // ── Hazard-type severity weights (higher = more dangerous) ──
+        private readonly IUkPoliceDataClient? _ukPolice;
+        private readonly IMemoryCache? _cache;
+
+        private const string CrimeCacheKeyPrefix = "ukcrime:";
+        private static readonly TimeSpan CrimeCacheExpiry = TimeSpan.FromHours(24);
+
         private static readonly Dictionary<string, double> HazardSeverity = new(StringComparer.OrdinalIgnoreCase)
         {
             ["pothole"]              = 0.6,
@@ -33,18 +42,24 @@ namespace AccessCity.API.Services
 
         private const double DefaultSeverity = 0.5;
 
-        // ── Component weights for the final risk composite ──
-        private const double W_Proximity      = 0.45;
-        private const double W_Density         = 0.30;
-        private const double W_Infrastructure  = 0.25;
+        private const double W_Proximity       = 0.40;
+        private const double W_Density         = 0.25;
+        private const double W_Infrastructure  = 0.20;
+        private const double W_Crime           = 0.15;
 
-        // ── Spatial decay constant (metres) for the proximity kernel ──
         private const double DecayLambda = 150.0;
+
+        public RiskScoringService(IUkPoliceDataClient? ukPolice = null, IMemoryCache? cache = null)
+        {
+            _ukPolice = ukPolice;
+            _cache = cache;
+        }
 
         /// <summary>
         /// Compute a full risk breakdown for a single geographic point.
+        /// Integrates UK Police street crime data when client and cache are available (cached 24h; no database).
         /// </summary>
-        public RiskScoreResponse EvaluateRisk(
+        public async Task<RiskScoreResponse> EvaluateRiskAsync(
             double latitude,
             double longitude,
             double radiusMetres,
@@ -68,7 +83,6 @@ namespace AccessCity.API.Services
 
                 double severity = HazardSeverity.GetValueOrDefault(hazard.Type, DefaultSeverity);
 
-                // Exponential spatial decay: risk drops off quickly with distance
                 double weight = severity * Math.Exp(-distMetres / DecayLambda);
                 proximitySum += weight;
 
@@ -81,37 +95,68 @@ namespace AccessCity.API.Services
                 });
             }
 
-            // ── Proximity risk (sigmoid saturation) ──
             double hazardProximity = Sigmoid(proximitySum, k: 3.0);
 
-            // ── Density risk (normalised count, capped at 1) ──
             double areaKmSq        = Math.PI * Math.Pow(radiusMetres / 1000.0, 2);
             double densityPerKmSq  = nearbyHazards.Count / Math.Max(areaKmSq, 0.001);
-            double hazardDensity   = Math.Min(densityPerKmSq / 50.0, 1.0); // 50/km² → max
+            double hazardDensity   = Math.Min(densityPerKmSq / 50.0, 1.0);
 
-            // ── Infrastructure risk (placeholder heuristic) ──
-            //    In production this would query PostGIS layers for lighting,
-            //    sidewalk width, surface quality, etc.
             double infrastructureRisk = EstimateInfrastructureRisk(latitude, longitude);
 
-            // ── Composite ──
+            int crimeCount = 0;
+            double crimeRisk = 0.0;
+            if (_ukPolice != null && _cache != null)
+            {
+                crimeCount = await GetCachedCrimeCountAsync(latitude, longitude);
+                crimeRisk = Sigmoid(crimeCount / 12.0, k: 2.0);
+            }
+
             double overall = Clamp01(
-                W_Proximity     * hazardProximity +
-                W_Density       * hazardDensity   +
-                W_Infrastructure * infrastructureRisk);
+                W_Proximity      * hazardProximity +
+                W_Density        * hazardDensity   +
+                W_Infrastructure * infrastructureRisk +
+                W_Crime          * crimeRisk);
 
             return new RiskScoreResponse
             {
-                OverallRisk        = Math.Round(overall,           4),
+                OverallRisk         = Math.Round(overall,           4),
                 HazardProximityRisk = Math.Round(hazardProximity,  4),
-                HazardDensityRisk  = Math.Round(hazardDensity,     4),
+                HazardDensityRisk   = Math.Round(hazardDensity,    4),
                 InfrastructureRisk = Math.Round(infrastructureRisk,4),
-                NearbyHazardCount  = nearbyHazards.Count,
-                NearbyHazards      = nearbyHazards
+                CrimeRisk           = Math.Round(crimeRisk,        4),
+                CrimeCount          = crimeCount,
+                NearbyHazardCount   = nearbyHazards.Count,
+                NearbyHazards       = nearbyHazards
                     .OrderByDescending(h => h.RiskWeight)
                     .Take(20)
                     .ToList()
             };
+        }
+
+        /// <summary>
+        /// Sync overload for callers that only need hazard-based risk (e.g. tests). No UK API.
+        /// </summary>
+        public RiskScoreResponse EvaluateRisk(
+            double latitude,
+            double longitude,
+            double radiusMetres,
+            IEnumerable<HazardReport> allHazards)
+        {
+            return EvaluateRiskAsync(latitude, longitude, radiusMetres, allHazards)
+                .GetAwaiter().GetResult();
+        }
+
+        private async Task<int> GetCachedCrimeCountAsync(double lat, double lng)
+        {
+            if (_cache == null || _ukPolice == null) return 0;
+
+            var key = $"{CrimeCacheKeyPrefix}{Math.Round(lat, 3):F3}:{Math.Round(lng, 3):F3}";
+            if (_cache.TryGetValue(key, out int cached)) return cached;
+
+            var list = await _ukPolice.GetRecentStreetCrimesAsync(lat, lng);
+            int count = list?.Count ?? 0;
+            _cache.Set(key, count, CrimeCacheExpiry);
+            return count;
         }
 
         /// <summary>
@@ -146,14 +191,12 @@ namespace AccessCity.API.Services
             return Clamp01(Sigmoid(riskSum, k: 3.0));
         }
 
-        // ── Helpers ───────────────────────────────────────────────────
-
         /// <summary>
         /// Haversine distance in metres between two WGS-84 points.
         /// </summary>
         public static double HaversineDistance(double lat1, double lon1, double lat2, double lon2)
         {
-            const double R = 6_371_000; // Earth radius in metres
+            const double R = 6_371_000;
             double dLat = ToRad(lat2 - lat1);
             double dLon = ToRad(lon2 - lon1);
             double a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2) +
@@ -187,13 +230,11 @@ namespace AccessCity.API.Services
         /// </summary>
         private static double EstimateInfrastructureRisk(double lat, double lng)
         {
-            // Seed a deterministic but spatially-varying value so different
-            // locations produce consistent yet different results.
             int hash = HashCode.Combine(
                 Math.Round(lat, 4),
                 Math.Round(lng, 4));
             var rng = new Random(hash);
-            return 0.15 + rng.NextDouble() * 0.35; // range [0.15, 0.50]
+            return 0.15 + rng.NextDouble() * 0.35;
         }
     }
 }

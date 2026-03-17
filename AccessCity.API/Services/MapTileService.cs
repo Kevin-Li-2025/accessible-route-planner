@@ -24,15 +24,10 @@ namespace AccessCity.API.Services
 
         public async Task<byte[]> GetVectorTileAsync(int z, int x, int y)
         {
-            // 1. Calculate tile boundary (Web Mercator)
             var envelope = TileToEnvelope(z, x, y);
-
-            // 2. Query spatial index for features in this tile
             var hazards = await _spatialCache.GetHazardsInBoundsAsync(envelope);
-
             if (hazards.Count == 0) return Array.Empty<byte>();
 
-            // 3. Convert to NTS Features
             var features = new List<Feature>();
             foreach (var h in hazards)
             {
@@ -45,7 +40,6 @@ namespace AccessCity.API.Services
                 features.Add(new Feature(h.Location, attributes));
             }
 
-            // 4. Generate MVT
             try
             {
                 var vectorTile = new VectorTile();
@@ -57,13 +51,11 @@ namespace AccessCity.API.Services
                 }
                 
                 vectorTile.Layers.Add(layer);
-
-                // Serialize using Mapbox Protocol (Static Writer)
                 using var ms = new MemoryStream();
-                // MapboxTileWriter.Write is static. Usage: Write(vectorTile, stream, zoom)
-                // Using the specific zoom for clipping/simplification logic
+#pragma warning disable CS0618
                 MapboxTileWriter.Write(vectorTile, ms, (uint)z);
-                
+#pragma warning restore CS0618
+
                 return ms.ToArray();
             }
             catch (Exception ex)

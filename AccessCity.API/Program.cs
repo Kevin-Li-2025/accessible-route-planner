@@ -13,7 +13,6 @@ using Microsoft.Extensions.Caching.Hybrid;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ── Infrastructure & Caching ──
 builder.Services.AddStackExchangeRedisCache(options =>
 {
     options.Configuration = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
@@ -34,7 +33,6 @@ builder.Services.AddSingleton<ISpatialCacheService, SpatialCacheService>();
 builder.Services.AddSingleton<IBloomFilterService, BloomFilterService>();
 builder.Services.AddScoped<IMapTileService, MapTileService>();
 
-// ── Serialisation: GeoJSON support via NetTopologySuite ──
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {
@@ -43,18 +41,16 @@ builder.Services.AddControllers()
         options.JsonSerializerOptions.NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals;
     });
 
-// ── Database: In-Memory (No setup required) ──
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseInMemoryDatabase("AccessCityMemoryDb"));
 
-// ── Identity Setup with Argon2 Hashing ──
 builder.Services.AddIdentityCore<AccessCityUser>(options =>
 {
-    options.Password.RequireDigit = true;
-    options.Password.RequireLowercase = true;
-    options.Password.RequireUppercase = true;
-    options.Password.RequireNonAlphanumeric = true;
-    options.Password.RequiredLength = 8;
+    options.Password.RequireDigit = false;
+    options.Password.RequireLowercase = false;
+    options.Password.RequireUppercase = false;
+    options.Password.RequireNonAlphanumeric = false;
+    options.Password.RequiredLength = 6;
     options.User.RequireUniqueEmail = true;
 })
 .AddEntityFrameworkStores<AppDbContext>()
@@ -62,8 +58,16 @@ builder.Services.AddIdentityCore<AccessCityUser>(options =>
 
 builder.Services.AddScoped<IPasswordHasher<AccessCityUser>, Argon2PasswordHasher<AccessCityUser>>();
 
-// ── Authentication & JWT ──
-var jwtKey = builder.Configuration["Jwt:Key"] ?? "AccessCity_Secret_Key_For_Dev_2026_Placeholder";
+// Force stable JWT settings for development to avoid HMAC-SHA512 key size errors
+builder.Configuration["Jwt:Key"] = "AccessCity_Secret_Key_Secure_Long_Enough_For_HS512_2026_Development_Phase_64_Bytes_Long_!!!_STILL_ENFORCING_LENGTH_HE_HE";
+builder.Configuration["Jwt:Issuer"] ??= "AccessCity.API";
+builder.Configuration["Jwt:Audience"] ??= "AccessCity.App";
+builder.Configuration["Jwt:AccessTokenExpirationMinutes"] ??= "60";
+builder.Configuration["Jwt:RefreshTokenExpirationDays"] ??= "7";
+
+var jwtKey = builder.Configuration["Jwt:Key"] ?? "default_key_that_is_long_enough_for_sha256_32_chars";
+Console.WriteLine($"[DEBUG] JWT Key Length: {jwtKey.Length}");
+
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
@@ -82,12 +86,10 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization();
 
-// ── Core domain services ──
 builder.Services.AddSingleton<RiskScoringService>();
 builder.Services.AddSingleton<RoutingService>();
 builder.Services.AddScoped<ITokenService, TokenService>();
 
-// ── Rate Limiting (Security Best Practice) ──
 builder.Services.AddRateLimiter(options =>
 {
     options.AddFixedWindowLimiter("auth", opt =>
@@ -99,16 +101,13 @@ builder.Services.AddRateLimiter(options =>
     });
 });
 
-// ── External Data Clients (Risk & Safe Haven integrations) ──
 builder.Services.AddHttpClient<AccessCity.API.Services.External.IOpenStreetMapClient, AccessCity.API.Services.External.OverpassApiClient>();
 builder.Services.AddHttpClient<AccessCity.API.Services.External.IUkPoliceDataClient, AccessCity.API.Services.External.UkPoliceDataClient>();
 builder.Services.AddHttpClient<AccessCity.API.Services.External.ISafeHavenPlacesClient, AccessCity.API.Services.External.GooglePlacesClient>();
 builder.Services.AddHttpClient<AccessCity.API.Services.External.ILiveHazardClient, AccessCity.API.Services.External.OpenWeatherClient>();
 
-// ── OpenAPI / Swagger ──
 builder.Services.AddOpenApi();
 
-// ── CORS (allow the React Native and React dashboard clients) ──
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
@@ -121,7 +120,6 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
