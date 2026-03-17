@@ -1,84 +1,73 @@
-import React, { useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import React, { useEffect, useState, useRef } from 'react';
+import MapView from 'react-native-maps';
+import { StyleSheet, View, Text, TouchableOpacity, Alert } from 'react-native';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useGlobalSearchParams } from 'expo-router';
 
-import MapView from '.';
-import FilterModal from './FilterModal';
-import HazardDetailsModal from './HazardDetailsModal';
-import HazardPreviewCard from './HazardPreviewCard';
-import ReportHazardModal from './ReportHazardModal';
-import RouteInfoCard from './RouteInfoCard';
 import SearchBar from './SearchBar';
-import { api } from '../../services/api';
-import { Coordinate, Hazard, ReportHazardType, RouteFilters } from './MapTypes';
+import RouteInfoCard from './RouteInfoCard';
+import HazardPreviewCard from './HazardPreviewCard';
+import HazardDetailsModal from './HazardDetailsModal';
+import FilterModal from './FilterModal';
+import ReportHazardModal from './ReportHazardModal';
+import MapCanvas from './MapCanvas';
 
-type BackendHazard = {
-  id: string | number;
-  type?: string;
-  description?: string;
-  location?: {
-    coordinates?: [number, number];
-  };
-  status?: number | string;
-  reportedAt?: string;
-};
+import {
+  Coordinate,
+  Hazard,
+  ReportHazardType,
+  RouteFilters,
+} from './MapTypes';
 
-type GeocodingResult = {
-  lat: string;
-  lon: string;
-};
+const API_BASE_URL = 'http://10.2.57.73:5005/api';
 
-type RouteGeometry = {
-  type?: string;
-  coordinates?: [number, number][];
-};
+async function fetchHazardsApi() {
+  const response = await fetch(`${API_BASE_URL}/hazards`);
 
-type RouteResponse = {
-  path?: RouteGeometry | null;
-  Path?: RouteGeometry | null;
-  distance?: number;
-  Distance?: number;
-  estimatedTime?: number;
-  EstimatedTime?: number;
-  safetyScore?: number;
-  SafetyScore?: number;
-};
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to fetch hazards: ${response.status} ${errorText}`);
+  }
 
-function formatHazardTypeLabel(type?: string) {
-  if (!type) return 'Hazard reported';
-
-  return type
-    .replace(/[_-]+/g, ' ')
-    .replace(/\b\w/g, (char) => char.toUpperCase());
+  return response.json();
 }
 
-function formatHazardStatus(status?: number | string) {
-  if (status === 0) return 'Reported';
-  if (status === 1) return 'UnderReview';
-  if (status === 2) return 'Resolved';
-  if (typeof status === 'string' && status.trim()) return status;
-  return 'Reported';
+async function submitHazardReportApi(payload: {
+  type: string;
+  description: string;
+  latitude: number;
+  longitude: number;
+}) {
+  const response = await fetch(`${API_BASE_URL}/hazards`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to submit hazard report: ${response.status} ${errorText}`);
+  }
+
+  return response.json();
 }
 
 export default function MapScreen() {
+  const mapRef = useRef<MapView | null>(null);
+  const locationSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
+
   const [currentLocation, setCurrentLocation] = useState<Coordinate | null>(null);
   const [destinationText, setDestinationText] = useState('');
   const [destination, setDestination] = useState<Coordinate | null>(null);
-  const [routeGeoJSON, setRouteGeoJSON] = useState<RouteGeometry | null>(null);
-  const [routeStats, setRouteStats] = useState<{
-    travelTime: string;
-    distance: string;
-    safetyScore: string;
-  } | null>(null);
+  const [routeCoordinates, setRouteCoordinates] = useState<Coordinate[]>([]);
+  const [travelTime, setTravelTime] = useState('');
+  const [distance, setDistance] = useState('');
+  const [safetyScore, setSafetyScore] = useState('');
+
+  const [hazards, setHazards] = useState<Hazard[]>([]);
 
   const [reportModalVisible, setReportModalVisible] = useState(false);
   const [selectedReportType, setSelectedReportType] =
@@ -87,6 +76,7 @@ export default function MapScreen() {
   const [reportDescription, setReportDescription] = useState('');
 
   const [filterModalVisible, setFilterModalVisible] = useState(false);
+
   const [routeFilters, setRouteFilters] = useState<RouteFilters>({
     avoidSteepHills: false,
     wheelchairAccessible: false,
@@ -96,206 +86,401 @@ export default function MapScreen() {
     maxSafetyScore: 100,
   });
 
-  const [hazards, setHazards] = useState<Hazard[]>([]);
   const [selectedHazard, setSelectedHazard] = useState<Hazard | null>(null);
-  const [lastSearchedText, setLastSearchedText] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
   const [hazardPreviewVisible, setHazardPreviewVisible] = useState(false);
   const [hazardDetailsVisible, setHazardDetailsVisible] = useState(false);
+
+  const [navigationMode, setNavigationMode] = useState(false);
+  const [heading, setHeading] = useState(0);
 
   const { openReportModal: openReportModalParam } =
     useGlobalSearchParams<{ openReportModal?: string }>();
 
-  useEffect(() => {
-    void getCurrentLocation();
-    void fetchHazards();
-  }, []);
+  function mapBackendHazardToFrontend(item: any): Hazard {
+    const rawType = String(item.type ?? item.hazardType ?? '').toLowerCase();
+    const rawStatus = String(item.status ?? '').toLowerCase();
 
-  useEffect(() => {
-    if (!openReportModalParam) return;
+    return {
+      id: item.id ?? Date.now().toString(),
+      title: item.title ?? item.name ?? 'Hazard',
+      type: rawType === 'lighting' ? 'lighting' : 'wheelchair',
+      latitude: Number(item.latitude ?? item.lat ?? 0),
+      longitude: Number(item.longitude ?? item.lng ?? 0),
+      description: item.description ?? 'No description available.',
+      status: rawStatus === 'acknowledged' ? 'Acknowledged' : 'Pending',
+      locationText: item.locationText ?? item.location ?? 'Unknown location',
+      reportedTime: item.reportedTime ?? item.reportedAt ?? 'Recently reported'
+    };
+  }
 
-    setReportModalVisible(true);
-    setReportStep(1);
-    setSelectedReportType(null);
-    setReportDescription('');
-  }, [openReportModalParam]);
-
-  async function fetchHazards() {
+  async function loadHazards() {
     try {
-      const data = await api.get<BackendHazard[]>('/hazards');
-
-      if (!Array.isArray(data)) {
-        setHazards([]);
-        return;
-      }
-
-      const mappedHazards = data
-        .map((hazard) => {
-          const coordinates = hazard.location?.coordinates;
-
-          if (!coordinates || coordinates.length < 2) {
-            return null;
-          }
-
-          const description = hazard.description?.trim() || 'Hazard reported';
-
-          return {
-            id: hazard.id,
-            title: description.split('.')[0]?.trim() || formatHazardTypeLabel(hazard.type),
-            type: hazard.type || 'lighting',
-            latitude: coordinates[1],
-            longitude: coordinates[0],
-            description,
-            status: formatHazardStatus(hazard.status),
-            locationText: 'Hazard reported',
-            reportedTime: hazard.reportedAt
-              ? new Date(hazard.reportedAt).toLocaleDateString()
-              : 'Recently',
-          };
-        })
-        .filter((hazard): hazard is Hazard => hazard !== null);
-
+      const data = await fetchHazardsApi();
+      const rawHazards = Array.isArray(data) ? data : [];
+      const mappedHazards = rawHazards.map(mapBackendHazardToFrontend);
       setHazards(mappedHazards);
     } catch (error) {
-      console.error('Failed to fetch hazards:', error);
+      console.error('Error fetching hazards:', error);
+      Alert.alert('Hazard error', 'Could not load hazards from backend.');
     }
   }
 
-  async function getCurrentLocation() {
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
+  function getBearing(start: Coordinate, end: Coordinate) {
+    const startLat = (start.latitude * Math.PI) / 180;
+    const startLng = (start.longitude * Math.PI) / 180;
+    const endLat = (end.latitude * Math.PI) / 180;
+    const endLng = (end.longitude * Math.PI) / 180;
 
-      if (status !== 'granted') {
-        return;
+    const dLng = endLng - startLng;
+
+    const y = Math.sin(dLng) * Math.cos(endLat);
+    const x =
+      Math.cos(startLat) * Math.sin(endLat) -
+      Math.sin(startLat) * Math.cos(endLat) * Math.cos(dLng);
+
+    const bearing = (Math.atan2(y, x) * 180) / Math.PI;
+    return (bearing + 360) % 360;
+  }
+
+  function getNavigationHeading(current: Coordinate) {
+    if (routeCoordinates.length < 2) {
+      return heading >= 0 ? heading : 0;
+    }
+
+    let closestIndex = 0;
+    let closestDistance = Number.MAX_VALUE;
+
+    routeCoordinates.forEach((point, index) => {
+      const latDiff = point.latitude - current.latitude;
+      const lngDiff = point.longitude - current.longitude;
+      const distanceValue = latDiff * latDiff + lngDiff * lngDiff;
+
+      if (distanceValue < closestDistance) {
+        closestDistance = distanceValue;
+        closestIndex = index;
       }
+    });
 
-      const location = await Location.getCurrentPositionAsync({});
-      setCurrentLocation({
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
-      });
-    } catch (error) {
-      console.error('Error getting location:', error);
+    const nextIndex =
+      closestIndex < routeCoordinates.length - 1 ? closestIndex + 1 : closestIndex;
+
+    if (nextIndex === closestIndex) {
+      return heading >= 0 ? heading : 0;
     }
+
+    return getBearing(routeCoordinates[closestIndex], routeCoordinates[nextIndex]);
   }
 
-  async function handleSearch(query = destinationText): Promise<Coordinate | null> {
-    const trimmedQuery = query.trim();
+  function getEstimatedArrivalTime() {
+    if (!travelTime || !travelTime.includes('min')) return '--';
 
-    if (!trimmedQuery) {
-      return null;
+    const minutes = parseInt(travelTime.replace(/\D/g, ''), 10);
+
+    if (Number.isNaN(minutes)) return '--';
+
+    const now = new Date();
+    now.setMinutes(now.getMinutes() + minutes);
+
+    const hours = now.getHours();
+    const mins = now.getMinutes().toString().padStart(2, '0');
+
+    return `${hours}:${mins}`;
+  }
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function startLocationTracking() {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+
+        if (status !== 'granted') {
+          Alert.alert('Permission denied', 'Location permission is required.');
+          return;
+        }
+
+        const location = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.High,
+        });
+
+        const firstCoordinate = {
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
+        };
+
+        if (!isMounted) return;
+
+        setCurrentLocation(firstCoordinate);
+
+        if (
+          typeof location.coords.heading === 'number' &&
+          location.coords.heading >= 0
+        ) {
+          setHeading(location.coords.heading);
+        }
+
+        mapRef.current?.animateToRegion(
+          {
+            latitude: firstCoordinate.latitude,
+            longitude: firstCoordinate.longitude,
+            latitudeDelta: navigationMode ? 0.01 : 0.02,
+            longitudeDelta: navigationMode ? 0.01 : 0.02,
+          },
+          800
+        );
+
+        const subscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.BestForNavigation,
+            timeInterval: 1000,
+            distanceInterval: 1,
+          },
+          (updatedLocation) => {
+            const newCoordinate = {
+              latitude: updatedLocation.coords.latitude,
+              longitude: updatedLocation.coords.longitude,
+            };
+
+            setCurrentLocation(newCoordinate);
+
+            if (
+              typeof updatedLocation.coords.heading === 'number' &&
+              updatedLocation.coords.heading >= 0
+            ) {
+              setHeading(updatedLocation.coords.heading);
+            }
+
+            if (navigationMode) {
+              const nextHeading = getNavigationHeading(newCoordinate);
+
+              mapRef.current?.animateCamera(
+                {
+                  center: newCoordinate,
+                  pitch: 60,
+                  heading: nextHeading,
+                  zoom: 18,
+                  altitude: 400,
+                },
+                { duration: 700 }
+              );
+            }
+          }
+        );
+
+        locationSubscriptionRef.current = subscription;
+      } catch (error) {
+        console.error('Error getting location:', error);
+        Alert.alert('Error', 'Could not get current location.');
+      }
     }
 
+    startLocationTracking();
+    loadHazards();
+
+    return () => {
+      isMounted = false;
+      locationSubscriptionRef.current?.remove();
+      locationSubscriptionRef.current = null;
+    };
+  }, [navigationMode, routeCoordinates]);
+
+  useEffect(() => {
+    if (openReportModalParam) {
+      setReportModalVisible(true);
+      setReportStep(1);
+      setSelectedReportType(null);
+      setReportDescription('');
+    }
+  }, [openReportModalParam]);
+
+  async function searchLocation(query: string) {
     try {
-      const results = await api.get<GeocodingResult[]>(
-        `/geocoding/search?query=${encodeURIComponent(trimmedQuery)}`
+      const response = await fetch(
+        `${API_BASE_URL}/geocoding/search?query=${encodeURIComponent(query)}`
       );
 
-      if (!results.length) {
-        Alert.alert('Not found', 'Could not find that location.');
-        return null;
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Geocoding API error:', response.status, errorText);
+        throw new Error(`Failed to search location: ${response.status}`);
       }
 
-      const firstResult = results[0];
-      const nextDestination = {
-        latitude: Number.parseFloat(firstResult.lat),
-        longitude: Number.parseFloat(firstResult.lon),
-      };
-
-      if (
-        Number.isNaN(nextDestination.latitude)
-        || Number.isNaN(nextDestination.longitude)
-      ) {
-        throw new Error('Invalid coordinates returned from geocoder.');
-      }
-
-      setDestination(nextDestination);
-      setLastSearchedText(trimmedQuery);
-      return nextDestination;
+      const results = await response.json();
+      console.log('Geocoding results:', results);
+      return results;
     } catch (error) {
-      console.error('Search failed:', error);
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      Alert.alert('Search error', `Could not find that location: ${message}`);
-      return null;
+      console.error('Geocoding error:', error);
+      Alert.alert('Search error', 'Could not search for this location.');
+      return [];
     }
   }
 
-  async function handleStartRoute(overrideDestination?: Coordinate) {
-    const trimmedDestination = destinationText.trim();
-    const currentDestination = overrideDestination ?? destination;
-    const shouldSearchAgain = Boolean(
-      trimmedDestination
-      && (!currentDestination || trimmedDestination !== lastSearchedText)
-    );
-
-    if (!trimmedDestination && !currentDestination) {
-      Alert.alert(
-        'Set destination',
-        'Type a place (for example University of Birmingham) and tap Start Navigation.'
-      );
+  async function handleSetDestination() {
+    if (!destinationText.trim()) {
+      Alert.alert('Missing destination', 'Please enter a destination.');
       return;
     }
 
-    setIsLoading(true);
+    const results = await searchLocation(destinationText);
+
+    if (!results || results.length === 0) {
+      Alert.alert('No results', 'No matching location was found.');
+      return;
+    }
+
+    const firstResult = results[0];
+
+    const lat = parseFloat(firstResult.lat);
+    const lon = parseFloat(firstResult.lon);
+
+    if (Number.isNaN(lat) || Number.isNaN(lon)) {
+      Alert.alert('Search error', 'Invalid coordinates returned from geocoding.');
+      return;
+    }
+
+    setDestination({
+      latitude: lat,
+      longitude: lon,
+    });
+
+    setNavigationMode(false);
+    setRouteCoordinates([]);
+    setTravelTime('Route ready');
+    setDistance('--');
+    setSafetyScore('--');
+
+    mapRef.current?.animateToRegion(
+      {
+        latitude: lat,
+        longitude: lon,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      },
+      700
+    );
+  }
+
+  async function fetchRouteFromBackend() {
+    if (!currentLocation || !destination) {
+      Alert.alert('Missing data', 'Current location or destination is missing.');
+      return false;
+    }
 
     try {
-      let finalDestination = currentDestination;
+      const response = await fetch(
+        `${API_BASE_URL}/routing/safe-path`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            start: {
+              x: currentLocation.longitude,
+              y: currentLocation.latitude,
+            },
+            end: {
+              x: destination.longitude,
+              y: destination.latitude,
+            },
+            safetyWeight: 0.5,
+          }),
+        }
+      );
 
-      if (shouldSearchAgain) {
-        finalDestination = await handleSearch(trimmedDestination);
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Route API error:', response.status, errorText);
+        throw new Error(`Failed to fetch route: ${response.status}`);
       }
 
-      if (!finalDestination) {
-        return;
-      }
+      const data = await response.json();
+      console.log('Route API data:', data);
 
-      const start = currentLocation ?? { latitude: 52.4814, longitude: -1.9003 };
-      const preferences: string[] = [];
+      const rawCoordinates =
+        data?.path?.coordinates ||
+        data?.route?.coordinates ||
+        data?.geometry?.coordinates ||
+        data?.coordinates ||
+        [];
 
-      if (routeFilters.wheelchairAccessible) preferences.push('wheelchair');
-      if (routeFilters.preferWellLitStreets) preferences.push('low-light-penalty');
-      if (routeFilters.avoidReportedHazards) preferences.push('avoid-reported-hazards');
-      if (routeFilters.avoidSteepHills) preferences.push('avoid-steep-hills');
+      const coords = rawCoordinates.map((item: [number, number]) => ({
+        latitude: item[1],
+        longitude: item[0],
+      }));
 
-      const data = await api.post<RouteResponse>('/routing/safe-path', {
-        start: { x: start.longitude, y: start.latitude },
-        end: { x: finalDestination.longitude, y: finalDestination.latitude },
-        preferences,
-        safetyWeight: routeFilters.avoidReportedHazards ? 0.9 : 0.6,
-      });
+      setRouteCoordinates(coords);
+      setTravelTime(
+        data?.estimatedTime ? `${Math.round(data.estimatedTime / 60)} min` : 'Route ready'
+      );
+      setDistance(data?.distance ? `${data.distance.toFixed(1)} m` : '--');
+      setSafetyScore(
+        typeof data?.safetyScore === 'number'
+          ? `${(data.safetyScore * 100).toFixed(0)}%`
+          : '--'
+      );
 
-      const routePath = data.path ?? data.Path ?? null;
-      const normalizedRoute = routePath?.coordinates
-        ? { type: 'LineString', coordinates: routePath.coordinates }
-        : routePath;
-
-      setRouteGeoJSON(normalizedRoute);
-
-      const routeDistance = data.distance ?? data.Distance ?? 0;
-      const routeTime = data.estimatedTime ?? data.EstimatedTime ?? 0;
-      const rawSafetyScore = data.safetyScore ?? data.SafetyScore ?? 0;
-      const normalizedSafetyScore = rawSafetyScore <= 1
-        ? rawSafetyScore * 100
-        : rawSafetyScore;
-
-      setRouteStats({
-        travelTime: `${Math.round(routeTime / 60)} min`,
-        distance: `${(routeDistance / 1000).toFixed(1)} km`,
-        safetyScore: `${Math.round(normalizedSafetyScore)}%`,
-      });
+      return true;
     } catch (error) {
-      console.error('Routing failed:', error);
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      Alert.alert('Routing Error', `Could not compute route: ${message}`);
-    } finally {
-      setIsLoading(false);
+      console.error('Error fetching route:', error);
+      Alert.alert('Route error', 'Could not load the route from backend.');
+      return false;
+    }
+  }
+
+  async function handleStartRoute() {
+    if (!destination) {
+      Alert.alert('No destination', 'Please set a destination first.');
+      return;
+    }
+
+    if (!currentLocation) {
+      Alert.alert('Location unavailable', 'Current location is not ready yet.');
+      return;
+    }
+
+    let success = true;
+
+    if (!routeCoordinates || routeCoordinates.length === 0) {
+      success = await fetchRouteFromBackend();
+    }
+
+    if (!success) return;
+
+    setNavigationMode(true);
+
+    const nextHeading = getNavigationHeading(currentLocation);
+
+    mapRef.current?.animateCamera(
+      {
+        center: currentLocation,
+        pitch: 60,
+        heading: nextHeading,
+        zoom: 18,
+        altitude: 400,
+      },
+      { duration: 800 }
+    );
+  }
+
+  function handleExitNavigation() {
+    setNavigationMode(false);
+
+    if (currentLocation) {
+      mapRef.current?.animateCamera(
+        {
+          center: currentLocation,
+          pitch: 0,
+          heading: 0,
+          zoom: 15,
+          altitude: 1200,
+        },
+        { duration: 800 }
+      );
     }
   }
 
   function toggleFilter<K extends keyof RouteFilters>(key: K) {
     setRouteFilters((prev) => {
       if (typeof prev[key] !== 'boolean') return prev;
-
       return {
         ...prev,
         [key]: !prev[key],
@@ -344,6 +529,7 @@ export default function MapScreen() {
 
   function handleApplyFilters() {
     setFilterModalVisible(false);
+    Alert.alert('Filters applied', 'Your route preferences have been updated.');
   }
 
   function closeReportModal() {
@@ -370,8 +556,31 @@ export default function MapScreen() {
     setReportStep(1);
   }
 
-  function handleSubmitReport() {
-    setReportStep(3);
+  async function handleSubmitReport() {
+    if (!selectedReportType) {
+      Alert.alert('Missing type', 'Please select a hazard type.');
+      return;
+    }
+
+    if (!currentLocation) {
+      Alert.alert('Location unavailable', 'Current location is not ready yet.');
+      return;
+    }
+
+    try {
+      await submitHazardReportApi({
+        type: selectedReportType,
+        description: reportDescription.trim(),
+        latitude: currentLocation.latitude,
+        longitude: currentLocation.longitude,
+      });
+
+      await loadHazards();
+      setReportStep(3);
+    } catch (error) {
+      console.error('Error submitting hazard report:', error);
+      Alert.alert('Submit error', 'Could not submit hazard report.');
+    }
   }
 
   function handleDoneFromSuccess() {
@@ -379,6 +588,7 @@ export default function MapScreen() {
   }
 
   function handleHazardPress(hazard: Hazard) {
+    if (navigationMode) return;
     setSelectedHazard(hazard);
     setHazardPreviewVisible(true);
     setHazardDetailsVisible(false);
@@ -397,85 +607,177 @@ export default function MapScreen() {
     setHazardPreviewVisible(false);
   }
 
-  const hasRouteStats = Boolean(
-    routeStats?.travelTime || routeStats?.distance || routeStats?.safetyScore
-  );
+  const initialRegion = currentLocation
+    ? {
+        latitude: currentLocation.latitude,
+        longitude: currentLocation.longitude,
+        latitudeDelta: navigationMode ? 0.01 : 0.02,
+        longitudeDelta: navigationMode ? 0.01 : 0.02,
+      }
+    : {
+        latitude: 52.4862,
+        longitude: -1.8904,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      };
 
   return (
     <View style={styles.container}>
-      <MapView
-        centerCoordinate={
-          destination
-            ? [destination.longitude, destination.latitude]
-            : currentLocation
-              ? [currentLocation.longitude, currentLocation.latitude]
-              : [-1.8904, 52.4862]
-        }
-        markers={hazards}
-        routeGeoJSON={routeGeoJSON}
-        onMarkerPress={handleHazardPress}
+      <MapCanvas
+        mapRef={mapRef}
+        initialRegion={initialRegion}
+        currentLocation={currentLocation}
+        destination={destination}
+        hazards={hazards}
+        routeCoordinates={routeCoordinates}
+        navigationMode={navigationMode}
+        onHazardPress={handleHazardPress}
       />
 
-      <SearchBar
-        value={destinationText}
-        onChangeText={setDestinationText}
-        onSubmitEditing={() => {
-          void handleStartRoute();
-        }}
-      />
+      {!navigationMode && (
+        <>
+          <SearchBar
+            value={destinationText}
+            onChangeText={setDestinationText}
+            onSubmitEditing={handleSetDestination}
+          />
 
-      <TouchableOpacity
-        style={styles.filterButton}
-        onPress={() => setFilterModalVisible(true)}
-      >
-        <Ionicons name="options-outline" size={20} color="#FFFFFF" />
-      </TouchableOpacity>
-
-      {hasRouteStats ? (
-        <RouteInfoCard
-          travelTime={routeStats?.travelTime ?? ''}
-          distance={routeStats?.distance ?? ''}
-          safetyScore={routeStats?.safetyScore ?? ''}
-        />
-      ) : (
-        <TouchableOpacity
-          style={[styles.routeButton, isLoading && styles.routeButtonDisabled]}
-          onPress={() => {
-            void handleStartRoute();
-          }}
-          disabled={isLoading}
-        >
-          {isLoading ? (
-            <ActivityIndicator color="#FFFFFF" />
-          ) : (
-            <Text style={styles.routeButtonText}>Start Navigation</Text>
-          )}
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.filterButton}
+            onPress={() => setFilterModalVisible(true)}
+          >
+            <Ionicons name="options-outline" size={20} color="#FFFFFF" />
+          </TouchableOpacity>
+        </>
       )}
 
-      <HazardPreviewCard
-        visible={hazardPreviewVisible && !hazardDetailsVisible}
-        hazard={selectedHazard}
-        onClose={closeHazardPreview}
-        onOpenDetails={openHazardDetails}
-      />
+      <TouchableOpacity
+        style={[
+          styles.locateButton,
+          navigationMode && styles.locateButtonNavigationMode,
+        ]}
+        onPress={() => {
+          if (!currentLocation) {
+            Alert.alert('Location unavailable', 'Current location is not ready yet.');
+            return;
+          }
 
-      <FilterModal
-        visible={filterModalVisible}
-        routeFilters={routeFilters}
-        onClose={() => setFilterModalVisible(false)}
-        onToggleFilter={toggleFilter}
-        onAdjustMinSafety={adjustMinSafety}
-        onAdjustMaxSafety={adjustMaxSafety}
-        onApply={handleApplyFilters}
-        onReset={handleResetFilters}
-      />
+          if (navigationMode) {
+            const nextHeading = getNavigationHeading(currentLocation);
 
-      <HazardDetailsModal
-        visible={hazardDetailsVisible}
-        hazard={selectedHazard}
-        onClose={closeHazardDetails}
-      />
+            mapRef.current?.animateCamera(
+              {
+                center: currentLocation,
+                pitch: 60,
+                heading: nextHeading,
+                zoom: 18,
+                altitude: 400,
+              },
+              { duration: 600 }
+            );
+            return;
+          }
+
+          mapRef.current?.animateToRegion(
+            {
+              latitude: currentLocation.latitude,
+              longitude: currentLocation.longitude,
+              latitudeDelta: 0.02,
+              longitudeDelta: 0.02,
+            },
+            500
+          );
+        }}
+      >
+        <Ionicons
+          name="locate"
+          size={22}
+          color={navigationMode ? '#FFFFFF' : '#0F3D91'}
+        />
+      </TouchableOpacity>
+
+      {navigationMode && (
+        <View style={styles.navigationBanner}>
+          <View style={styles.navigationInstructionIcon}>
+            <Ionicons name="arrow-up-outline" size={34} color="#FFFFFF" />
+          </View>
+
+          <View style={styles.navigationTextContainer}>
+            <Text style={styles.navigationSmallText}>towards</Text>
+            <Text style={styles.navigationLargeText} numberOfLines={2}>
+              {destinationText || 'Selected destination'}
+            </Text>
+          </View>
+
+          <View style={styles.navigationRightBadge}>
+            <Ionicons name="sparkles" size={24} color="#2563EB" />
+          </View>
+        </View>
+      )}
+
+      {destination && !navigationMode && (
+        <View style={styles.routeInfoWrapper}>
+          <RouteInfoCard
+            travelTime={travelTime}
+            distance={distance}
+            safetyScore={safetyScore}
+            onPressRoute={handleStartRoute}
+          />
+        </View>
+      )}
+
+      {navigationMode && (
+        <View style={styles.navigationBottomPanel}>
+          <View style={styles.navigationBottomLeft}>
+            <Text style={styles.navigationBottomTime}>
+              {travelTime || '—'}
+            </Text>
+
+            <Text style={styles.navigationBottomMeta}>
+              {distance || '--'} {' • '} {getEstimatedArrivalTime()}
+            </Text>
+
+            <Text style={styles.navigationBottomSafety}>
+              Safety: {safetyScore || '--'}
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={styles.navigationExitButton}
+            onPress={handleExitNavigation}
+          >
+            <Text style={styles.navigationExitButtonText}>Exit</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {!navigationMode && (
+        <>
+          <HazardPreviewCard
+            visible={hazardPreviewVisible && !hazardDetailsVisible}
+            hazard={selectedHazard}
+            onClose={closeHazardPreview}
+            onOpenDetails={openHazardDetails}
+          />
+
+          <FilterModal
+            visible={filterModalVisible}
+            routeFilters={routeFilters}
+            onClose={() => setFilterModalVisible(false)}
+            onToggleFilter={toggleFilter}
+            onAdjustMinSafety={adjustMinSafety}
+            onAdjustMaxSafety={adjustMaxSafety}
+            onApply={handleApplyFilters}
+            onReset={handleResetFilters}
+          />
+
+          <HazardDetailsModal
+            visible={hazardDetailsVisible}
+            hazard={selectedHazard}
+            onClose={closeHazardDetails}
+          />
+        </>
+      )}
 
       <ReportHazardModal
         visible={reportModalVisible}
@@ -498,6 +800,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+
   filterButton: {
     position: 'absolute',
     top: 60,
@@ -509,23 +812,144 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     elevation: 4,
+    zIndex: 20,
   },
-  routeButton: {
+
+  routeInfoWrapper: {
     position: 'absolute',
-    bottom: 40,
-    left: 20,
-    right: 20,
-    backgroundColor: '#1D4ED8',
-    borderRadius: 16,
+    left: 16,
+    right: 16,
+    bottom: 118,
+    zIndex: 20,
+    elevation: 20,
+  },
+
+  locateButton: {
+    position: 'absolute',
+    top: 128,
+    right: 16,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 4,
+    zIndex: 20,
+  },
+
+  locateButtonNavigationMode: {
+    top: 150,
+    backgroundColor: '#09122C',
+  },
+
+  navigationBanner: {
+    position: 'absolute',
+    top: 58,
+    left: 16,
+    right: 16,
+    minHeight: 116,
+    backgroundColor: '#0B7A75',
+    borderRadius: 28,
+    paddingHorizontal: 18,
     paddingVertical: 18,
+    flexDirection: 'row',
     alignItems: 'center',
     elevation: 8,
+    zIndex: 30,
   },
-  routeButtonDisabled: {
-    opacity: 0.7,
+
+  navigationInstructionIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
   },
-  routeButtonText: {
-    color: '#fff',
+
+  navigationTextContainer: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+
+  navigationSmallText: {
+    color: '#D8FFFA',
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 4,
+    textTransform: 'lowercase',
+  },
+
+  navigationLargeText: {
+    color: '#FFFFFF',
+    fontSize: 28,
+    fontWeight: '800',
+    lineHeight: 34,
+  },
+
+  navigationRightBadge: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 12,
+  },
+
+  navigationBottomPanel: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 100,
+    backgroundColor: '#111111',
+    borderRadius: 28,
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    elevation: 10,
+    zIndex: 35,
+  },
+
+  navigationBottomLeft: {
+    flex: 1,
+    paddingRight: 16,
+  },
+
+  navigationBottomTime: {
+    color: '#FFFFFF',
+    fontSize: 34,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+
+  navigationBottomMeta: {
+    color: '#D1D5DB',
+    fontSize: 18,
+    fontWeight: '500',
+    marginBottom: 4,
+  },
+
+  navigationBottomSafety: {
+    color: '#9CA3AF',
+    fontSize: 15,
+    fontWeight: '500',
+  },
+
+  navigationExitButton: {
+    minWidth: 110,
+    backgroundColor: '#EF4444',
+    borderRadius: 24,
+    paddingVertical: 18,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  navigationExitButtonText: {
+    color: '#FFFFFF',
     fontSize: 18,
     fontWeight: '800',
   },
