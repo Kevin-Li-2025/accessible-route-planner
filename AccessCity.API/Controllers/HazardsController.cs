@@ -8,9 +8,9 @@ namespace AccessCity.API.Controllers
     public class HazardsController : ControllerBase
     {
         [HttpGet]
-        public ActionResult<IEnumerable<HazardReport>> GetHazards([FromQuery] double minLat, [FromQuery] double minLng, [FromQuery] double maxLat, [FromQuery] double maxLng)
+        public ActionResult<IEnumerable<HazardReport>> GetHazards([FromQuery] double? minLat, [FromQuery] double? minLng, [FromQuery] double? maxLat, [FromQuery] double? maxLng)
         {
-            return Ok(new List<HazardReport>());
+            return Ok(AccessCity.API.Data.StaticHazardData.GetActiveHazards());
         }
 
         [HttpPost]

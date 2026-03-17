@@ -2,7 +2,7 @@ import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
 const BASE_IP = Platform.OS === 'android' ? '10.0.2.2' : 'localhost';
-export const API_URL = `http://${BASE_IP}:8080/api`;
+export const API_URL = process.env.EXPO_PUBLIC_API_URL || `http://${BASE_IP}:8080/api`;
 
 const TOKEN_KEY = 'ac_access_token';
 const REFRESH_TOKEN_KEY = 'ac_refresh_token';
@@ -41,8 +41,35 @@ export const api = {
     }
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.message || `API Error: ${response.status}`);
+      let message = `Error: ${response.status}`;
+      const text = await response.text().catch(() => '');
+      
+      if (text) {
+        try {
+          const errorData = JSON.parse(text);
+          
+          // Handle ASP.NET Identity Errors (Array of {code, description})
+          if (Array.isArray(errorData)) {
+            message = errorData.map(e => e.description).join('\n');
+          } 
+          // Handle ASP.NET Validation Errors (Dictionary of errors)
+          else if (errorData.errors) {
+            const errorList = Object.values(errorData.errors).flat();
+            message = errorList.join('\n');
+          }
+          else if (errorData.message || errorData.title) {
+            message = errorData.message || errorData.title;
+          }
+          else if (typeof errorData === 'string') {
+            message = errorData;
+          }
+        } catch (e) {
+          // Not JSON, use the raw text
+          message = text;
+        }
+      }
+      
+      throw new Error(message);
     }
 
     return response.json();

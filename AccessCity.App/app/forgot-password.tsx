@@ -65,7 +65,7 @@ export default function ForgotPasswordScreen() {
           </Text>
           <TouchableOpacity 
             style={styles.mainButton} 
-            onPress={() => router.push("/reset-password")}
+            onPress={() => router.push("/reset-password" as any)}
           >
             <Text style={styles.mainButtonText}>Enter Token</Text>
           </TouchableOpacity>

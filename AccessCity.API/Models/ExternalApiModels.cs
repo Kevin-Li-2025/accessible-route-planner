@@ -3,9 +3,6 @@ using NetTopologySuite.Geometries;
 
 namespace AccessCity.API.Models.External
 {
-    // ── 1. OpenStreetMap (Overpass API) Models ──
-    // Used for fetching exact street-level accessibility metadata (surface, stairs, tactile paving, lighting)
-
     public class OverpassResponse
     {
         [JsonPropertyName("elements")]
@@ -20,9 +17,6 @@ namespace AccessCity.API.Models.External
         public double Lat { get; set; }
         public double Lon { get; set; }
     }
-
-    // ── 2. UK Police Open Data API Models ──
-    // Used for historical crime data to power the predictive risk scoring engine
 
     public class StreetCrimeRecord
     {
@@ -47,9 +41,6 @@ namespace AccessCity.API.Models.External
         [JsonPropertyName("longitude")]
         public string Longitude { get; set; } = string.Empty;
     }
-
-    // ── 3. Google Places API (New) Models ──
-    // Used for "Safe Haven" routing (Feature F-3), identifying 24/7 stores, police stations, hospitals
 
     public class PlacesSearchRequest
     {
@@ -92,9 +83,6 @@ namespace AccessCity.API.Models.External
     public class DisplayText { public string Text { get; set; } = string.Empty; }
     
     public class RegularHours { public bool OpenNow { get; set; } }
-
-    // ── 4. OpenWeatherMap API Models ──
-    // Used to dynamically penalise routes that might be flooded or slippery due to weather
 
     public class WeatherResponse
     {
