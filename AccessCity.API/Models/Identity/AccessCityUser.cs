@@ -5,8 +5,6 @@ namespace AccessCity.API.Models.Identity
     public class AccessCityUser : IdentityUser
     {
         public string? FullName { get; set; }
-        
-        // Users can store their accessibility preferences for the routing engine
         public List<string> PreferredRoutes { get; set; } = new();
         
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

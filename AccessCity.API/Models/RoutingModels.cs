@@ -2,8 +2,6 @@ using NetTopologySuite.Geometries;
 
 namespace AccessCity.API.Models
 {
-    // ── Request / Response DTOs ────────────────────────────────────
-
     /// <summary>Client request for a safety-aware route.</summary>
     public class RouteRequest
     {
@@ -45,8 +43,6 @@ namespace AccessCity.API.Models
         public string     Instruction { get; set; } = string.Empty;
     }
 
-    // ── Risk Scoring DTOs ──────────────────────────────────────────
-
     /// <summary>Request for a predictive risk score at a location.</summary>
     public class RiskScoreRequest
     {
@@ -72,8 +68,14 @@ namespace AccessCity.API.Models
         /// <summary>Risk estimated from infrastructure quality indicators.</summary>
         public double InfrastructureRisk    { get; set; }
 
+        /// <summary>Risk from UK Police open data (recent street crime at location).</summary>
+        public double CrimeRisk               { get; set; }
+
         /// <summary>Number of active hazards within the search radius.</summary>
         public int    NearbyHazardCount     { get; set; }
+
+        /// <summary>Number of street crimes (UK Police API) used for CrimeRisk.</summary>
+        public int    CrimeCount            { get; set; }
 
         public List<NearbyHazard> NearbyHazards { get; set; } = new();
     }
@@ -86,8 +88,6 @@ namespace AccessCity.API.Models
         public double DistanceMetres { get; set; }
         public double RiskWeight     { get; set; }
     }
-
-    // ── Internal graph model (used by the routing engine) ──────────
 
     /// <summary>A node in the routing graph representing an intersection or waypoint.</summary>
     public class GraphNode
@@ -122,5 +122,8 @@ namespace AccessCity.API.Models
 
         /// <summary>Estimated street-lighting quality (0 = none, 1 = well-lit).</summary>
         public double LightingQuality    { get; set; } = 0.8;
+
+        /// <summary>True if the segment has a steep gradient.</summary>
+        public bool IsSteep { get; set; }
     }
 }

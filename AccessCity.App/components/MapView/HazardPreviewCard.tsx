@@ -18,13 +18,17 @@ export default function HazardPreviewCard({
 }: HazardPreviewCardProps) {
   if (!visible || !hazard) return null;
 
+  const hazardTypeLabel = hazard.type
+    ? hazard.type.replace(/[_-]+/g, ' ').toUpperCase()
+    : 'HAZARD';
+
   return (
     <View style={styles.hazardPreviewCard}>
       <Pressable style={styles.hazardPreviewClose} onPress={onClose}>
         <Ionicons name="close" size={18} color="#6B7280" />
       </Pressable>
 
-      <Text style={styles.hazardPreviewLabel}>Hazard ID</Text>
+      <Text style={styles.hazardPreviewLabel}>{hazardTypeLabel}</Text>
       <Text style={styles.hazardPreviewTitle}>{hazard.title}</Text>
 
       <TouchableOpacity

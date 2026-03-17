@@ -23,6 +23,7 @@ namespace AccessCity.API.Services.Security
         {
             _config = config;
             var secret = _config["Jwt:Key"] ?? throw new InvalidOperationException("JWT Key not configured.");
+            Console.WriteLine($"[DEBUG] TokenService initializing with key length: {secret.Length}");
             _key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret));
         }
 
@@ -36,7 +37,7 @@ namespace AccessCity.API.Services.Security
                 new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
             };
 
-            var creds = new SigningCredentials(_key, SecurityAlgorithms.HmacSha512Signature);
+            var creds = new SigningCredentials(_key, SecurityAlgorithms.HmacSha256Signature);
 
             var tokenDescriptor = new SecurityTokenDescriptor
             {

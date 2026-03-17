@@ -16,9 +16,9 @@ export function useFormAnimation() {
     );
   };
 
-  const animatedStyle = useAnimatedStyle(() => ({
+  const shakeStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: shakeOffset.value }],
   }));
 
-  return { shake, animatedStyle };
+  return { shake, shakeStyle };
 }
