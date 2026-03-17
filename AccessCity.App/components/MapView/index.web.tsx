@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { StyleSheet, View } from 'react-native';
 import MapLibreGL from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { Coordinate, Hazard } from '../../models/spatial';
+import { Hazard } from '../../models/spatial';
 
 const TILE_URL = 'http://192.168.1.127:5005/api/tiles/{z}/{x}/{y}.pbf';
 
@@ -25,7 +25,23 @@ export default function WebMapView({
 }: MapViewProps) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreGL.Map | null>(null);
-  const markerObjects = useRef<{ [key: string]: MapLibreGL.Marker }>({});
+  const markerObjects = useRef<Record<string, MapLibreGL.Marker>>({});
+  const initialCenterRef = useRef(centerCoordinate);
+  const onMapPressRef = useRef(onMapPress);
+  const onMarkerPressRef = useRef(onMarkerPress);
+  const showHazardsRef = useRef(showHazards);
+
+  useEffect(() => {
+    onMapPressRef.current = onMapPress;
+  }, [onMapPress]);
+
+  useEffect(() => {
+    onMarkerPressRef.current = onMarkerPress;
+  }, [onMarkerPress]);
+
+  useEffect(() => {
+    showHazardsRef.current = showHazards;
+  }, [showHazards]);
 
   useEffect(() => {
     if (map.current || !mapContainer.current) return;
@@ -49,7 +65,7 @@ export default function WebMapView({
             source: 'osm'
           }
         ],
-        center: centerCoordinate as [number, number],
+        center: initialCenterRef.current as [number, number],
         zoom: 13
       }
     });
@@ -58,7 +74,7 @@ export default function WebMapView({
       if (!map.current) return;
 
       // Add Vector Hazards with high visual quality
-      if (showHazards) {
+      if (showHazardsRef.current) {
         map.current.addSource('hazards', {
           type: 'vector',
           tiles: [TILE_URL]
@@ -108,7 +124,7 @@ export default function WebMapView({
     });
 
     map.current.on('click', (e) => {
-      onMapPress?.({ lng: e.lngLat.lng, lat: e.lngLat.lat });
+      onMapPressRef.current?.({ lng: e.lngLat.lng, lat: e.lngLat.lat });
     });
 
     return () => {
@@ -118,10 +134,10 @@ export default function WebMapView({
 
   // Update Route
   useEffect(() => {
-    if (map.current?.isStyleLoaded() && routeGeoJSON) {
-      const source = map.current.getSource('route') as MapLibreGL.GeoJSONSource;
-      source?.setData(routeGeoJSON);
-    }
+    if (!map.current?.isStyleLoaded()) return;
+
+    const source = map.current.getSource('route') as MapLibreGL.GeoJSONSource;
+    source?.setData(routeGeoJSON ?? { type: 'FeatureCollection', features: [] });
   }, [routeGeoJSON]);
 
   // Update Markers
@@ -142,13 +158,13 @@ export default function WebMapView({
       el.style.backgroundColor = hazard.type === 'wheelchair' ? '#2563EB' : '#D97706';
       el.style.border = '3px solid white';
       el.style.cursor = 'pointer';
-      el.onclick = () => onMarkerPress?.(hazard);
+      el.onclick = () => onMarkerPressRef.current?.(hazard);
 
       const marker = new MapLibreGL.Marker(el)
         .setLngLat([hazard.longitude, hazard.latitude])
         .addTo(map.current!);
-      
-      markerObjects.current[hazard.id] = marker;
+
+      markerObjects.current[String(hazard.id)] = marker;
     });
   }, [markers]);
 

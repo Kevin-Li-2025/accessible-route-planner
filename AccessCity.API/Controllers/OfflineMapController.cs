@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using AccessCity.API.Services;
 using NetTopologySuite.Geometries;
@@ -8,6 +9,7 @@ namespace AccessCity.API.Controllers
     /// Controller for managing offline map packs and tile pre-fetching.
     /// Handles the "bundling" logic for a specified geographic area.
     /// </summary>
+    [Authorize]
     [ApiController]
     [Route("api/[controller]")]
     public class OfflineMapController : ControllerBase

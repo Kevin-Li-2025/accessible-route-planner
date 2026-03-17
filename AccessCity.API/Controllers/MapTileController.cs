@@ -1,8 +1,10 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using AccessCity.API.Services;
 
 namespace AccessCity.API.Controllers
 {
+    [Authorize]
     [ApiController]
     [Route("api/tiles")]
     public class MapTileController : ControllerBase

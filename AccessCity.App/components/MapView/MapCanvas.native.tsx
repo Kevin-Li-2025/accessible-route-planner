@@ -14,7 +14,7 @@ type MapCanvasProps = {
   currentLocation: Coordinate | null;
   destination: Coordinate | null;
   hazards: Hazard[];
-  routeCoordinates: Coordinate[];
+  routeGeoJSON: any;
   onHazardPress: (hazard: Hazard) => void;
 };
 
@@ -23,9 +23,13 @@ export default function MapCanvas({
   currentLocation,
   destination,
   hazards,
-  routeCoordinates,
+  routeGeoJSON,
   onHazardPress,
 }: MapCanvasProps) {
+  const routeCoordinates = routeGeoJSON?.coordinates?.map((c: [number, number]) => ({
+    longitude: c[0],
+    latitude: c[1]
+  })) || [];
   function renderHazardMarker(hazard: Hazard) {
     if (hazard.type === 'wheelchair') {
       return (

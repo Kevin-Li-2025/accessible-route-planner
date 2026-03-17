@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using AccessCity.API.Models;
 using AccessCity.API.Services;
@@ -11,6 +12,7 @@ namespace AccessCity.API.Controllers
     ///   POST /api/routing/safe-path   — Compute an accessible, safety-optimised route
     ///   GET  /api/routing/risk-score  — Predictive risk scoring at a geographic point
     /// </summary>
+    [Authorize]
     [ApiController]
     [Route("api/[controller]")]
     public class RoutingController : ControllerBase

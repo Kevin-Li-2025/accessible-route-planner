@@ -61,7 +61,8 @@ export default function ForgotPasswordScreen() {
           <Ionicons name="mail-unread-outline" size={80} color="#2563EB" />
           <Text style={styles.successTitle}>Check your email</Text>
           <Text style={styles.successText}>
-            If an account exists for {email}, we've sent a password reset token.
+            If an account exists for {email}, we&apos;ve sent a password reset
+            token.
           </Text>
           <TouchableOpacity 
             style={styles.mainButton} 
@@ -98,7 +99,8 @@ export default function ForgotPasswordScreen() {
             <Animated.View entering={FadeInUp.duration(600).delay(200)}>
               <Text style={styles.title}>Reset Password</Text>
               <Text style={styles.subtitle}>
-                Enter your email address and we'll send you a token to reset your password.
+                Enter your email address and we&apos;ll send you a token to
+                reset your password.
               </Text>
             </Animated.View>
 

@@ -1,7 +1,7 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
-import { Coordinate, Hazard } from '../../models/spatial';
+import { Hazard } from '../../models/spatial';
 
 interface MapViewProps {
   centerCoordinate?: [number, number];

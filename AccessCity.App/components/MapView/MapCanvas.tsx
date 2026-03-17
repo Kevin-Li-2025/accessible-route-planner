@@ -13,7 +13,7 @@ type MapCanvasProps = {
   currentLocation: Coordinate | null;
   destination: Coordinate | null;
   hazards: Hazard[];
-  routeCoordinates: Coordinate[];
+  routeGeoJSON: any;
   onHazardPress: (hazard: Hazard) => void;
 };
 
@@ -22,7 +22,7 @@ export default function MapCanvas({
   currentLocation,
   destination,
   hazards,
-  routeCoordinates,
+  routeGeoJSON,
   onHazardPress,
 }: MapCanvasProps) {
   // Convert props to WebMapView format
@@ -31,14 +31,6 @@ export default function MapCanvas({
     : currentLocation 
       ? [currentLocation.longitude, currentLocation.latitude]
       : [initialRegion.longitude, initialRegion.latitude];
-
-  const routeGeoJSON = routeCoordinates.length > 0 ? {
-    type: 'Feature',
-    geometry: {
-      type: 'LineString',
-      coordinates: routeCoordinates.map(c => [c.longitude, c.latitude])
-    }
-  } : null;
 
   return (
     <View style={styles.container}>

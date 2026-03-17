@@ -70,7 +70,7 @@ namespace AccessCity.Tests
         public async Task GetMapBundle_Returns_Cached_Hazards()
         {
             // 1. Arrange
-            var client = _factory.CreateClient();
+            var client = await _factory.CreateAuthenticatedClientAsync();
             var hazard = new HazardReport
             {
                 Id = Guid.NewGuid(),

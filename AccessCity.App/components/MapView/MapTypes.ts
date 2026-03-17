@@ -10,7 +10,7 @@ export type Hazard = {
   latitude: number;
   longitude: number;
   description: string;
-  status: 'Acknowledged' | 'Pending' | 'Reported' | 'UnderReview' | string;
+  status: 'Acknowledged' | 'Pending' | 'Reported' | 'UnderReview' | 'Resolved' | string;
   locationText: string;
   reportedTime: string;
 };
