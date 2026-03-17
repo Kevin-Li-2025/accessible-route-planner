@@ -8,6 +8,8 @@ import {
   View,
 } from 'react-native';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import { router } from 'expo-router';
+import { useAuth } from '@/context/AuthContext';
 
 type ProfileAction = {
   id: string;
@@ -76,6 +78,13 @@ function ActionIcon({ item }: { item: ProfileAction }) {
 }
 
 export default function Profile() {
+  const { user, signOut } = useAuth();
+
+  async function handleSignOut() {
+    await signOut();
+    router.replace('/login');
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView
@@ -94,8 +103,8 @@ export default function Profile() {
             </View>
 
             <View style={styles.profileInfo}>
-              <Text style={styles.name}>Jane Doe</Text>
-              <Text style={styles.email}>jane.doe@email.com</Text>
+              <Text style={styles.name}>{user?.fullName || 'AccessCity User'}</Text>
+              <Text style={styles.email}>{user?.email || 'No email available'}</Text>
               <View style={styles.badge}>
                 <Text style={styles.badgeText}>Verified User</Text>
               </View>
@@ -150,7 +159,7 @@ export default function Profile() {
           ))}
         </View>
 
-        <TouchableOpacity activeOpacity={0.85} style={styles.logoutButton}>
+        <TouchableOpacity activeOpacity={0.85} style={styles.logoutButton} onPress={() => void handleSignOut()}>
           <Ionicons name="log-out-outline" size={20} color="#FF3B30" />
           <Text style={styles.logoutText}>Log Out</Text>
         </TouchableOpacity>

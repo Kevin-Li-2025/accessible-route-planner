@@ -18,6 +18,7 @@ builder.Services.AddStackExchangeRedisCache(options =>
     options.Configuration = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
 });
 
+builder.Services.AddHttpClient();
 builder.Services.AddMemoryCache();
 #pragma warning disable EXTEXP0018 // HybridCache is preview
 builder.Services.AddHybridCache(options =>

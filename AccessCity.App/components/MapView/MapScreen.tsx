@@ -19,18 +19,8 @@ import ReportHazardModal from './ReportHazardModal';
 import RouteInfoCard from './RouteInfoCard';
 import SearchBar from './SearchBar';
 import { api } from '../../services/api';
+import { hazardsService } from '../../services/hazards.service';
 import { Coordinate, Hazard, ReportHazardType, RouteFilters } from './MapTypes';
-
-type BackendHazard = {
-  id: string | number;
-  type?: string;
-  description?: string;
-  location?: {
-    coordinates?: [number, number];
-  };
-  status?: number | string;
-  reportedAt?: string;
-};
 
 type GeocodingResult = {
   lat: string;
@@ -53,21 +43,14 @@ type RouteResponse = {
   SafetyScore?: number;
 };
 
-function formatHazardTypeLabel(type?: string) {
-  if (!type) return 'Hazard reported';
-
-  return type
-    .replace(/[_-]+/g, ' ')
-    .replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
-function formatHazardStatus(status?: number | string) {
-  if (status === 0) return 'Reported';
-  if (status === 1) return 'UnderReview';
-  if (status === 2) return 'Resolved';
-  if (typeof status === 'string' && status.trim()) return status;
-  return 'Reported';
-}
+const reportTypeToBackendType: Record<ReportHazardType, string> = {
+  broken_street_light: 'broken_street_light',
+  blocked_pavement: 'blocked_pavement',
+  parked_car_blocking_dropped_kerb: 'parked_car_blocking_dropped_kerb',
+  road_obstruction: 'road_obstruction',
+  unsafe_crossing: 'unsafe_crossing',
+  other: 'other',
+};
 
 export default function MapScreen() {
   const [currentLocation, setCurrentLocation] = useState<Coordinate | null>(null);
@@ -122,40 +105,7 @@ export default function MapScreen() {
 
   async function fetchHazards() {
     try {
-      const data = await api.get<BackendHazard[]>('/hazards');
-
-      if (!Array.isArray(data)) {
-        setHazards([]);
-        return;
-      }
-
-      const mappedHazards = data
-        .map((hazard) => {
-          const coordinates = hazard.location?.coordinates;
-
-          if (!coordinates || coordinates.length < 2) {
-            return null;
-          }
-
-          const description = hazard.description?.trim() || 'Hazard reported';
-
-          return {
-            id: hazard.id,
-            title: description.split('.')[0]?.trim() || formatHazardTypeLabel(hazard.type),
-            type: hazard.type || 'lighting',
-            latitude: coordinates[1],
-            longitude: coordinates[0],
-            description,
-            status: formatHazardStatus(hazard.status),
-            locationText: 'Hazard reported',
-            reportedTime: hazard.reportedAt
-              ? new Date(hazard.reportedAt).toLocaleDateString()
-              : 'Recently',
-          };
-        })
-        .filter((hazard): hazard is Hazard => hazard !== null);
-
-      setHazards(mappedHazards);
+      setHazards(await hazardsService.getHazards());
     } catch (error) {
       console.error('Failed to fetch hazards:', error);
     }
@@ -370,8 +320,34 @@ export default function MapScreen() {
     setReportStep(1);
   }
 
-  function handleSubmitReport() {
-    setReportStep(3);
+  async function handleSubmitReport() {
+    if (!selectedReportType) {
+      Alert.alert('Missing type', 'Please select a hazard type.');
+      return;
+    }
+
+    if (!currentLocation) {
+      Alert.alert('Location unavailable', 'Please enable location services to report a hazard.');
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      await hazardsService.reportHazard({
+        latitude: currentLocation.latitude,
+        longitude: currentLocation.longitude,
+        type: reportTypeToBackendType[selectedReportType],
+        description: reportDescription.trim() || 'Hazard reported by user.',
+      });
+      await fetchHazards();
+      setReportStep(3);
+    } catch (error) {
+      console.error('Failed to submit hazard report:', error);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      Alert.alert('Report failed', `Could not submit report: ${message}`);
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   function handleDoneFromSuccess() {
