@@ -16,14 +16,13 @@ import {
   Pressable,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import { AntDesign, FontAwesome, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { AntDesign, FontAwesome, Ionicons } from "@expo/vector-icons";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
   withTiming,
   interpolate,
-  withSequence,
   withDelay,
 } from "react-native-reanimated";
 import { router } from "expo-router";
@@ -59,7 +58,7 @@ export default function AuthScreen() {
     }
     contentOpacity.value = withDelay(300, withTiming(1, { duration: 800 }));
     headerTranslateY.value = withSpring(0, { damping: 15 });
-  }, [isAuthenticated]);
+  }, [contentOpacity, headerTranslateY, isAuthenticated]);
 
   useEffect(() => {
     animation.value = withSpring(isSignup ? 1 : 0, {
@@ -297,7 +296,10 @@ export default function AuthScreen() {
               ) : (
                 <View style={styles.form}>
                   <Text style={styles.forgotHeaderTitle}>Reset Password</Text>
-                  <Text style={styles.forgotSubtitle}>Enter your email address and we'll send you a token to reset your password.</Text>
+                  <Text style={styles.forgotSubtitle}>
+                    Enter your email address and we&apos;ll send you a token to
+                    reset your password.
+                  </Text>
                   
                   <View style={[styles.inputWrapper, isEmailFocused && styles.inputWrapperFocused]}>
                     <Ionicons name="mail-outline" size={20} color={isEmailFocused ? "#3B82F6" : "#64748B"} />
