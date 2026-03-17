@@ -7,18 +7,18 @@ namespace AccessCity.Tests
 {
     public class MapTileTests : IClassFixture<AccessCityApiFactory>
     {
-        private readonly HttpClient _client;
         private readonly AccessCityApiFactory _factory;
 
         public MapTileTests(AccessCityApiFactory factory)
         {
             _factory = factory;
-            _client = factory.CreateClient();
         }
 
         [Fact]
         public async Task GetTile_Returns_Pbf_Data_When_Hazards_Exist()
         {
+            var client = await _factory.CreateAuthenticatedClientAsync();
+
             // 1. Seed a hazard in the spatial cache
             using (var scope = _factory.Services.CreateScope())
             {
@@ -37,7 +37,7 @@ namespace AccessCity.Tests
 
             // 2. Request the tile containing that coordinate (Z=13, X=4052, Y=2743 for Birmingham)
             // Note: Approximate tile for -1.8904, 52.4862 at Z13 is 4052/2743
-            var response = await _client.GetAsync("/api/tiles/13/4052/2743.pbf");
+            var response = await client.GetAsync("/api/tiles/13/4052/2743.pbf");
 
             // 3. Assert
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
