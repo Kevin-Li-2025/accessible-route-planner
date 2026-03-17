@@ -4,13 +4,13 @@ export type Coordinate = {
 };
 
 export type Hazard = {
-  id: number;
+  id: string | number;
   title: string;
-  type: 'lighting' | 'wheelchair';
+  type: 'lighting' | 'wheelchair' | 'pothole' | 'construction' | 'obstruction' | string;
   latitude: number;
   longitude: number;
   description: string;
-  status: 'Acknowledged' | 'Pending';
+  status: 'Acknowledged' | 'Pending' | 'Reported' | 'UnderReview' | string;
   locationText: string;
   reportedTime: string;
 };

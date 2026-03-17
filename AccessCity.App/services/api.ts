@@ -2,7 +2,7 @@ import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
 const BASE_IP = Platform.OS === 'android' ? '10.0.2.2' : 'localhost';
-export const API_URL = process.env.EXPO_PUBLIC_API_URL || `http://${BASE_IP}:8080/api`;
+export const API_URL = process.env.EXPO_PUBLIC_API_URL || `http://${BASE_IP}:5005/api`;
 
 const TOKEN_KEY = 'ac_access_token';
 const REFRESH_TOKEN_KEY = 'ac_refresh_token';
