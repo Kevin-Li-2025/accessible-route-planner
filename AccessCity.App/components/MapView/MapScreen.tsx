@@ -12,6 +12,7 @@ import HazardDetailsModal from './HazardDetailsModal';
 import FilterModal from './FilterModal';
 import ReportHazardModal from './ReportHazardModal';
 import MapCanvas from './MapCanvas';
+import { api } from '../../services/api';
 
 import {
   Coordinate,
@@ -20,17 +21,8 @@ import {
   RouteFilters,
 } from './MapTypes';
 
-const API_BASE_URL = 'http://10.2.57.73:5005/api';
-
 async function fetchHazardsApi() {
-  const response = await fetch(`${API_BASE_URL}/hazards`);
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to fetch hazards: ${response.status} ${errorText}`);
-  }
-
-  return response.json();
+  return api.get<any[]>('/hazards', { skipAuth: true });
 }
 
 async function submitHazardReportApi(payload: {
@@ -39,25 +31,13 @@ async function submitHazardReportApi(payload: {
   latitude: number;
   longitude: number;
 }) {
-  const response = await fetch(`${API_BASE_URL}/hazards`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to submit hazard report: ${response.status} ${errorText}`);
-  }
-
-  return response.json();
+  return api.post('/hazards', payload, { skipAuth: true });
 }
 
 export default function MapScreen() {
   const mapRef = useRef<MapView | null>(null);
   const locationSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
+  const navigationModeRef = useRef(false);
 
   const [currentLocation, setCurrentLocation] = useState<Coordinate | null>(null);
   const [destinationText, setDestinationText] = useState('');
@@ -96,6 +76,10 @@ export default function MapScreen() {
   const { openReportModal: openReportModalParam } =
     useGlobalSearchParams<{ openReportModal?: string }>();
 
+  useEffect(() => {
+    navigationModeRef.current = navigationMode;
+  }, [navigationMode]);
+
   function mapBackendHazardToFrontend(item: any): Hazard {
     const rawType = String(item.type ?? item.hazardType ?? '').toLowerCase();
     const rawStatus = String(item.status ?? '').toLowerCase();
@@ -109,7 +93,7 @@ export default function MapScreen() {
       description: item.description ?? 'No description available.',
       status: rawStatus === 'acknowledged' ? 'Acknowledged' : 'Pending',
       locationText: item.locationText ?? item.location ?? 'Unknown location',
-      reportedTime: item.reportedTime ?? item.reportedAt ?? 'Recently reported'
+      reportedTime: item.reportedTime ?? item.reportedAt ?? 'Recently reported',
     };
   }
 
@@ -187,6 +171,42 @@ export default function MapScreen() {
     return `${hours}:${mins}`;
   }
 
+  function resetRouteState(clearSearchText = false) {
+    setNavigationMode(false);
+    navigationModeRef.current = false;
+
+    setDestination(null);
+    setRouteCoordinates([]);
+    setTravelTime('');
+    setDistance('');
+    setSafetyScore('');
+
+    if (clearSearchText) {
+      setDestinationText('');
+    }
+
+    setHazardPreviewVisible(false);
+    setHazardDetailsVisible(false);
+    setSelectedHazard(null);
+
+    if (currentLocation) {
+      mapRef.current?.animateCamera(
+        {
+          center: currentLocation,
+          pitch: 0,
+          heading: 0,
+          zoom: 15,
+          altitude: 1200,
+        },
+        { duration: 500 }
+      );
+    }
+  }
+
+  function handleClearSearch() {
+    resetRouteState(true);
+  }
+
   useEffect(() => {
     let isMounted = true;
 
@@ -223,8 +243,8 @@ export default function MapScreen() {
           {
             latitude: firstCoordinate.latitude,
             longitude: firstCoordinate.longitude,
-            latitudeDelta: navigationMode ? 0.01 : 0.02,
-            longitudeDelta: navigationMode ? 0.01 : 0.02,
+            latitudeDelta: 0.02,
+            longitudeDelta: 0.02,
           },
           800
         );
@@ -250,7 +270,7 @@ export default function MapScreen() {
               setHeading(updatedLocation.coords.heading);
             }
 
-            if (navigationMode) {
+            if (navigationModeRef.current) {
               const nextHeading = getNavigationHeading(newCoordinate);
 
               mapRef.current?.animateCamera(
@@ -282,7 +302,7 @@ export default function MapScreen() {
       locationSubscriptionRef.current?.remove();
       locationSubscriptionRef.current = null;
     };
-  }, [navigationMode, routeCoordinates]);
+  }, []);
 
   useEffect(() => {
     if (openReportModalParam) {
@@ -295,19 +315,12 @@ export default function MapScreen() {
 
   async function searchLocation(query: string) {
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/geocoding/search?query=${encodeURIComponent(query)}`
+      const results = await api.get<any[]>(
+        `/geocoding/search?query=${encodeURIComponent(query)}`,
+        { skipAuth: true }
       );
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Geocoding API error:', response.status, errorText);
-        throw new Error(`Failed to search location: ${response.status}`);
-      }
-
-      const results = await response.json();
       console.log('Geocoding results:', results);
-      return results;
+      return Array.isArray(results) ? results : [];
     } catch (error) {
       console.error('Geocoding error:', error);
       Alert.alert('Search error', 'Could not search for this location.');
@@ -316,12 +329,14 @@ export default function MapScreen() {
   }
 
   async function handleSetDestination() {
-    if (!destinationText.trim()) {
+    const trimmedText = destinationText.trim();
+
+    if (!trimmedText) {
       Alert.alert('Missing destination', 'Please enter a destination.');
       return;
     }
 
-    const results = await searchLocation(destinationText);
+    const results = await searchLocation(trimmedText);
 
     if (!results || results.length === 0) {
       Alert.alert('No results', 'No matching location was found.');
@@ -330,24 +345,26 @@ export default function MapScreen() {
 
     const firstResult = results[0];
 
-    const lat = parseFloat(firstResult.lat);
-    const lon = parseFloat(firstResult.lon);
+    const lat = parseFloat(String(firstResult.lat));
+    const lon = parseFloat(String(firstResult.lon));
 
     if (Number.isNaN(lat) || Number.isNaN(lon)) {
       Alert.alert('Search error', 'Invalid coordinates returned from geocoding.');
       return;
     }
 
+    // 先清掉旧路线和旧导航状态，但保留新的搜索文字
+    setNavigationMode(false);
+    navigationModeRef.current = false;
+    setRouteCoordinates([]);
+    setTravelTime('');
+    setDistance('');
+    setSafetyScore('');
+
     setDestination({
       latitude: lat,
       longitude: lon,
     });
-
-    setNavigationMode(false);
-    setRouteCoordinates([]);
-    setTravelTime('Route ready');
-    setDistance('--');
-    setSafetyScore('--');
 
     mapRef.current?.animateToRegion(
       {
@@ -367,32 +384,18 @@ export default function MapScreen() {
     }
 
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/routing/safe-path`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            start: {
-              x: currentLocation.longitude,
-              y: currentLocation.latitude,
-            },
-            end: {
-              x: destination.longitude,
-              y: destination.latitude,
-            },
-            safetyWeight: 0.5,
-          }),
-        }
-      );
+      const data = await api.post<any>('/routing/safe-path', {
+        start: {
+          x: currentLocation.longitude,
+          y: currentLocation.latitude,
+        },
+        end: {
+          x: destination.longitude,
+          y: destination.latitude,
+        },
+        safetyWeight: 0.5,
+      });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Route API error:', response.status, errorText);
-        throw new Error(`Failed to fetch route: ${response.status}`);
-      }
-
-      const data = await response.json();
       console.log('Route API data:', data);
 
       const rawCoordinates =
@@ -402,16 +405,32 @@ export default function MapScreen() {
         data?.coordinates ||
         [];
 
-      const coords = rawCoordinates.map((item: [number, number]) => ({
-        latitude: item[1],
-        longitude: item[0],
-      }));
+      const coords = Array.isArray(rawCoordinates)
+        ? rawCoordinates
+            .map((item: [number, number]) => ({
+              latitude: Number(item?.[1]),
+              longitude: Number(item?.[0]),
+            }))
+            .filter(
+              (item) =>
+                !Number.isNaN(item.latitude) &&
+                !Number.isNaN(item.longitude)
+            )
+        : [];
+
+      if (coords.length < 2) {
+        console.error('Invalid route coordinates:', rawCoordinates);
+        Alert.alert('Route error', 'Backend returned an invalid route.');
+        return false;
+      }
 
       setRouteCoordinates(coords);
       setTravelTime(
-        data?.estimatedTime ? `${Math.round(data.estimatedTime / 60)} min` : 'Route ready'
+        data?.estimatedTime
+          ? `${Math.round(data.estimatedTime / 60)} min`
+          : 'Route ready'
       );
-      setDistance(data?.distance ? `${data.distance.toFixed(1)} m` : '--');
+      setDistance(data?.distance ? `${Number(data.distance).toFixed(1)} m` : '--');
       setSafetyScore(
         typeof data?.safetyScore === 'number'
           ? `${(data.safetyScore * 100).toFixed(0)}%`
@@ -437,15 +456,12 @@ export default function MapScreen() {
       return;
     }
 
-    let success = true;
-
-    if (!routeCoordinates || routeCoordinates.length === 0) {
-      success = await fetchRouteFromBackend();
-    }
+    const success = await fetchRouteFromBackend();
 
     if (!success) return;
 
     setNavigationMode(true);
+    navigationModeRef.current = true;
 
     const nextHeading = getNavigationHeading(currentLocation);
 
@@ -463,6 +479,7 @@ export default function MapScreen() {
 
   function handleExitNavigation() {
     setNavigationMode(false);
+    navigationModeRef.current = false;
 
     if (currentLocation) {
       mapRef.current?.animateCamera(
@@ -640,6 +657,7 @@ export default function MapScreen() {
             value={destinationText}
             onChangeText={setDestinationText}
             onSubmitEditing={handleSetDestination}
+            onClear={handleClearSearch}
           />
 
           <TouchableOpacity

@@ -1,4 +1,4 @@
-import React, { RefObject } from 'react';
+import React, { RefObject, memo, useMemo } from 'react';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { StyleSheet, View } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -20,7 +20,7 @@ type MapCanvasProps = {
   onHazardPress: (hazard: Hazard) => void;
 };
 
-export default function MapCanvas({
+function MapCanvasComponent({
   mapRef,
   initialRegion,
   currentLocation,
@@ -30,6 +30,27 @@ export default function MapCanvas({
   navigationMode,
   onHazardPress,
 }: MapCanvasProps) {
+  const safeRouteCoordinates = useMemo(() => {
+    if (!Array.isArray(routeCoordinates)) return [];
+
+    return routeCoordinates.filter(
+      (point) =>
+        point &&
+        typeof point.latitude === 'number' &&
+        typeof point.longitude === 'number' &&
+        !Number.isNaN(point.latitude) &&
+        !Number.isNaN(point.longitude)
+    );
+  }, [routeCoordinates]);
+
+  const polylineKey = useMemo(() => {
+    if (safeRouteCoordinates.length < 2) return 'empty-route';
+
+    return safeRouteCoordinates
+      .map((point) => `${point.latitude},${point.longitude}`)
+      .join('|');
+  }, [safeRouteCoordinates]);
+
   function renderHazardMarker(hazard: Hazard) {
     if (hazard.type === 'wheelchair') {
       return (
@@ -63,18 +84,23 @@ export default function MapCanvas({
       showsUserLocation
       showsMyLocationButton={false}
       followsUserLocation={false}
-      rotateEnabled={true}
-      pitchEnabled={true}
-      scrollEnabled={true}
-      zoomEnabled={true}
+      rotateEnabled
+      pitchEnabled
+      scrollEnabled
+      zoomEnabled
       showsCompass={navigationMode}
       toolbarEnabled={false}
+      moveOnMarkerPress={false}
     >
       {!navigationMode && currentLocation && (
-        <Marker coordinate={currentLocation} title="Current Location" pinColor="blue" />
+        <Marker
+          coordinate={currentLocation}
+          title="Current Location"
+          pinColor="blue"
+        />
       )}
 
-      {destination && !navigationMode && (
+      {!navigationMode && destination && (
         <Marker coordinate={destination} title="Destination">
           <View style={styles.destinationMarkerOuter}>
             <View style={styles.destinationMarkerInner}>
@@ -87,10 +113,10 @@ export default function MapCanvas({
       {!navigationMode &&
         hazards.map((hazard) => (
           <Marker
-            key={hazard.id}
+            key={String(hazard.id)}
             coordinate={{
-              latitude: hazard.latitude,
-              longitude: hazard.longitude,
+              latitude: Number(hazard.latitude),
+              longitude: Number(hazard.longitude),
             }}
             title={hazard.title}
             onPress={() => onHazardPress(hazard)}
@@ -99,13 +125,15 @@ export default function MapCanvas({
           </Marker>
         ))}
 
-      {routeCoordinates.length > 0 && (
+      {safeRouteCoordinates.length >= 2 && (
         <Polyline
-          coordinates={routeCoordinates}
+          key={polylineKey}
+          coordinates={safeRouteCoordinates}
           strokeWidth={6}
           strokeColor="#1D4ED8"
           lineCap="round"
           lineJoin="round"
+          geodesic
         />
       )}
     </MapView>
@@ -171,3 +199,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 });
+
+export default memo(MapCanvasComponent);

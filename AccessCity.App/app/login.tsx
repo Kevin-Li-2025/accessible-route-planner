@@ -19,6 +19,7 @@ import { router } from "expo-router";
 import { useAuth } from "@/context/AuthContext";
 import { ErrorMessage } from "@/components/ErrorMessage";
 import { useFormAnimation } from "@/hooks/use-form-animation";
+import { authService } from "@/services/auth.service";
 
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
@@ -30,6 +31,8 @@ export default function LoginScreen() {
   const { shake, shakeStyle } = useFormAnimation();
 
   const handleLogin = async () => {
+    await authService.clearSession();
+
     setErrorStatus(null);
     if (!email || !password) {
       setErrorStatus("All fields are mandatory");

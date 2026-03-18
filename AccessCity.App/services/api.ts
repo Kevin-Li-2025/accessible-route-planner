@@ -1,78 +1,115 @@
-import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
-const BASE_IP = Platform.OS === 'android' ? '10.0.2.2' : 'localhost';
-export const API_URL = process.env.EXPO_PUBLIC_API_URL || `http://${BASE_IP}:8080/api`;
+const BASE_IP = '10.2.57.73';
+export const API_URL = `http://${BASE_IP}:5005/api`;
 
 const TOKEN_KEY = 'ac_access_token';
 const REFRESH_TOKEN_KEY = 'ac_refresh_token';
+const USER_KEY = 'ac_user_data';
 
 interface RequestOptions extends RequestInit {
   skipAuth?: boolean;
+  _retry?: boolean;
+}
+
+type RefreshResponse = {
+  token?: string;
+  accessToken?: string;
+  refreshToken?: string;
+};
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+async function clearStoredSession() {
+  await SecureStore.deleteItemAsync(TOKEN_KEY);
+  await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
+  await SecureStore.deleteItemAsync(USER_KEY);
 }
 
 export const api = {
   async request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
     const url = `${API_URL}${endpoint}`;
     const headers = new Headers(options.headers || {});
-    
+
     if (!headers.has('Content-Type')) {
       headers.set('Content-Type', 'application/json');
     }
 
-    // Attach token if not skipped
     if (!options.skipAuth) {
       const token = await SecureStore.getItemAsync(TOKEN_KEY);
-      if (token) {
+      console.log('REQUEST TOKEN:', token);
+
+      if (isNonEmptyString(token)) {
         headers.set('Authorization', `Bearer ${token}`);
       }
+    } else {
+      console.log('REQUEST SKIPS AUTH:', url);
     }
+
+    console.log('REQUEST URL:', url);
+    console.log('REQUEST METHOD:', options.method || 'GET');
 
     const response = await fetch(url, { ...options, headers });
 
-    // Handle Token Expiry
-    if (response.status === 401 && !options.skipAuth) {
+    console.log('RESPONSE STATUS:', response.status, 'URL:', url);
+
+    if (response.status === 401 && !options.skipAuth && !options._retry) {
+      console.log('401 DETECTED - TRYING REFRESH TOKEN');
+
       const refreshed = await this.refreshToken();
+
+      console.log('REFRESH STATUS:', refreshed);
+
       if (refreshed) {
-        // Retry original request with new token
-        return this.request(endpoint, options);
+        console.log('RETRYING ORIGINAL REQUEST:', endpoint);
+
+        return this.request<T>(endpoint, {
+          ...options,
+          _retry: true,
+        });
       }
-      // If refresh fails, let the error bubble up (AuthContext will handle logout)
+
+      await clearStoredSession();
+      throw new Error('Session expired. Please log in again.');
     }
 
     if (!response.ok) {
       let message = `Error: ${response.status}`;
       const text = await response.text().catch(() => '');
-      
+
+      console.log('ERROR RESPONSE TEXT:', text);
+
       if (text) {
         try {
           const errorData = JSON.parse(text);
-          
-          // Handle ASP.NET Identity Errors (Array of {code, description})
+
           if (Array.isArray(errorData)) {
-            message = errorData.map(e => e.description).join('\n');
-          } 
-          // Handle ASP.NET Validation Errors (Dictionary of errors)
-          else if (errorData.errors) {
-            const errorList = Object.values(errorData.errors).flat();
+            message = errorData.map((e: any) => e.description ?? String(e)).join('\n');
+          } else if (errorData.errors) {
+            const errorList = Object.values(errorData.errors).flat() as string[];
             message = errorList.join('\n');
-          }
-          else if (errorData.message || errorData.title) {
+          } else if (errorData.message || errorData.title) {
             message = errorData.message || errorData.title;
-          }
-          else if (typeof errorData === 'string') {
+          } else if (typeof errorData === 'string') {
             message = errorData;
           }
-        } catch (e) {
-          // Not JSON, use the raw text
+        } catch {
           message = text;
         }
       }
-      
+
       throw new Error(message);
     }
 
-    return response.json();
+    const contentType = response.headers.get('Content-Type') || '';
+
+    if (contentType.includes('application/json')) {
+      return response.json() as Promise<T>;
+    }
+
+    return {} as T;
   },
 
   async post<T>(endpoint: string, data: any, options: RequestOptions = {}): Promise<T> {
@@ -84,31 +121,99 @@ export const api = {
   },
 
   async get<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
-    return this.request<T>(endpoint, { ...options, method: 'GET' });
+    return this.request<T>(endpoint, {
+      ...options,
+      method: 'GET',
+    });
   },
 
+  async put<T>(endpoint: string, data: any, options: RequestOptions = {}): Promise<T> {
+    return this.request<T>(endpoint, {
+      ...options,
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async delete<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
+    return this.request<T>(endpoint, {
+      ...options,
+      method: 'DELETE',
+    });
+  },
   async refreshToken(): Promise<boolean> {
-    try {
-      const refreshToken = await SecureStore.getItemAsync(REFRESH_TOKEN_KEY);
-      if (!refreshToken) return false;
+  try {
+    const storedRefreshToken = await SecureStore.getItemAsync(REFRESH_TOKEN_KEY);
+    console.log('REFRESH TOKEN FROM STORE:', storedRefreshToken);
 
-      // Call refresh endpoint
-      const response = await fetch(`${API_URL}/auth/refresh-token?token=${refreshToken}`, {
-        method: 'POST'
-      });
-
-      if (!response.ok) throw new Error('Refresh failed');
-
-      const data = await response.json();
-      
-      // Save new tokens
-      await SecureStore.setItemAsync(TOKEN_KEY, data.token);
-      await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, data.refreshToken);
-      
-      return true;
-    } catch (e) {
-      console.error('Token refresh failed', e);
+    if (!storedRefreshToken || storedRefreshToken.trim() === '') {
+      console.log('NO VALID REFRESH TOKEN FOUND');
+      await SecureStore.deleteItemAsync(TOKEN_KEY);
+      await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
       return false;
     }
+
+    // 先试 query，而且不要再 encode
+    const refreshUrl = `${API_URL}/auth/refresh-token?token=${storedRefreshToken}`;
+    console.log('REFRESH REQUEST URL:', refreshUrl);
+
+    let response = await fetch(refreshUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    console.log('REFRESH RESPONSE STATUS:', response.status);
+
+    if (!response.ok) {
+      const firstErrorText = await response.text().catch(() => '');
+      console.log('REFRESH ERROR TEXT (QUERY MODE):', firstErrorText);
+
+      console.log('TRYING REFRESH AGAIN WITH JSON BODY');
+
+      response = await fetch(`${API_URL}/auth/refresh-token`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          token: storedRefreshToken,
+        }),
+      });
+
+      console.log('REFRESH RESPONSE STATUS (BODY MODE):', response.status);
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      console.log('REFRESH ERROR TEXT:', errorText);
+
+      await SecureStore.deleteItemAsync(TOKEN_KEY);
+      await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
+      return false;
+    }
+
+    const data = await response.json();
+    console.log('REFRESH RESPONSE DATA:', data);
+
+    if (!data.token || !data.refreshToken) {
+      console.log('REFRESH RESPONSE MISSING TOKEN FIELDS');
+      await SecureStore.deleteItemAsync(TOKEN_KEY);
+      await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
+      return false;
+    }
+
+    await SecureStore.setItemAsync(TOKEN_KEY, data.token);
+    await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, data.refreshToken);
+
+    console.log('TOKEN REFRESH SUCCESS');
+    return true;
+  } catch (e) {
+    console.error('TOKEN REFRESH FAILED:', e);
+    await SecureStore.deleteItemAsync(TOKEN_KEY);
+    await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
+    return false;
   }
+}
 };
