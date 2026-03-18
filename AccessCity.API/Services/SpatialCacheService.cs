@@ -32,7 +32,7 @@ namespace AccessCity.API.Services
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        public async Task<IReadOnlyList<HazardReport>> GetHazardsInBoundsAsync(Envelope bounds)
+        public Task<IReadOnlyList<HazardReport>> GetHazardsInBoundsAsync(Envelope bounds)
         {
             _indexLock.EnterReadLock();
             try
@@ -46,12 +46,12 @@ namespace AccessCity.API.Services
                     _logger.LogWarning("Spatial query execution reached warning threshold: {Elapsed}ms for bounds {Bounds}.", stopwatch.ElapsedMilliseconds, bounds);
                 }
 
-                return results;
+                return Task.FromResult(results);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to query spatial index.");
-                return new List<HazardReport>();
+                return Task.FromResult<IReadOnlyList<HazardReport>>(new List<HazardReport>());
             }
             finally
             {
@@ -62,12 +62,8 @@ namespace AccessCity.API.Services
         public async Task UpdateHazardCacheAsync(HazardReport hazard)
         {
             if (hazard == null) return;
-
-            // 1. Update persistent L2 cache
             string key = $"{CacheKeyPrefix}{hazard.Id}";
             await _hybridCache.SetAsync(key, hazard);
-
-            // 2. Update in-memory spatial index
             _indexLock.EnterWriteLock();
             try
             {
@@ -85,14 +81,10 @@ namespace AccessCity.API.Services
 
             var hazardList = hazards.ToList();
             if (hazardList.Count == 0) return;
-
-            // 1. Bulk update L2 entries
             foreach (var hazard in hazardList)
             {
                 await _hybridCache.SetAsync($"{CacheKeyPrefix}{hazard.Id}", hazard);
             }
-
-            // 2. Update in-memory spatial index
             _indexLock.EnterWriteLock();
             try
             {

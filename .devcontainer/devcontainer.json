@@ -18,7 +18,8 @@
 			"userGid": "automatic"
 		},
 		"ghcr.io/devcontainers/features/dotnet:2": {
-			"version": "latest"
+			"version": "9.0",
+			"additionalVersions": "10.0, 11.0"
 		},
 		"ghcr.io/devcontainers/features/node:1": {
 			"nodeGypDependencies": true,
@@ -35,7 +36,8 @@
 		"vscode": {
 			"extensions": [
 				"ms-dotnettools.csdevkit",
-				"expo.vscode-expo-tools"
+				"expo.vscode-expo-tools",
+				"openai.chatgpt"
 			]
 		}
 	}

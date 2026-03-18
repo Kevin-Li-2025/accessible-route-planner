@@ -1,5 +1,5 @@
-import MapView from '@/components/MapView';
+import MapScreen from '@/components/MapView/MapScreen';
 
-export default function MapScreen() {
-  return <MapView />;
+export default function MapPage() {
+  return <MapScreen />;
 }

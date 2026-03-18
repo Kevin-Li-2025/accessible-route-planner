@@ -10,7 +10,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   StatusBar,
-  Alert,
   ActivityIndicator,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
@@ -31,7 +30,7 @@ export default function SignupScreen() {
   const [validationError, setValidationError] = useState<string | null>(null);
 
   const { signUp } = useAuth();
-  const { shake, animatedStyle: shakeStyle } = useFormAnimation();
+  const { shake, shakeStyle } = useFormAnimation();
 
   const handleSignup = async () => {
     setValidationError(null);

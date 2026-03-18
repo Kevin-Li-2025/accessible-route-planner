@@ -10,7 +10,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   StatusBar,
-  Alert,
   ActivityIndicator,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
@@ -28,7 +27,7 @@ export default function LoginScreen() {
   const [errorStatus, setErrorStatus] = useState<string | null>(null);
 
   const { signIn } = useAuth();
-  const { shake, animatedStyle: shakeStyle } = useFormAnimation();
+  const { shake, shakeStyle } = useFormAnimation();
 
   const handleLogin = async () => {
     setErrorStatus(null);
@@ -122,7 +121,10 @@ export default function LoginScreen() {
 
               <ErrorMessage visible={!!errorStatus} message={errorStatus ?? undefined} />
 
-              <TouchableOpacity style={styles.forgotPasswordContainer}>
+              <TouchableOpacity
+                style={styles.forgotPasswordContainer}
+                onPress={() => router.push("/forgot-password")}
+              >
                 <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
               </TouchableOpacity>
 

@@ -1,4 +1,4 @@
-import { Tabs } from 'expo-router';
+import { router, Tabs } from 'expo-router';
 import React from 'react';
 
 import { HapticTab } from '@/components/haptic-tab';
@@ -11,6 +11,7 @@ export default function TabLayout() {
 
   return (
     <Tabs
+      initialRouteName="map"
       screenOptions={{
         tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
         headerShown: false,
@@ -19,8 +20,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Home',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
+          href: null,
         }}
       />
       <Tabs.Screen
@@ -31,12 +31,18 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="report"
+        name="report/reportpage"
+        listeners={{
+          tabPress: (e) => {
+            e.preventDefault();
+            router.push({
+              pathname: '/map',
+              params: { openReportModal: String(Date.now())},
+            });
+          }
+        }}
         options={{
-          title: 'Report',
-          tabBarIcon: ({ color }) => (
-            <IconSymbol size={28} name="exclamationmark.bubble.fill" color={color} />
-          ),
+          title:'Report',
         }}
       />
       <Tabs.Screen
@@ -55,19 +61,6 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => (
             <IconSymbol size={28} name="person.fill" color={color} />
           ),
-        }}
-      />
-      <Tabs.Screen
-        name="report/details"
-        options={{
-          href: null,
-        }}
-      />
-
-      <Tabs.Screen
-        name="report/success"
-        options={{
-          href: null,
         }}
       />
     </Tabs>

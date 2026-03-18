@@ -1,4 +1,5 @@
 import * as FileSystem from 'expo-file-system';
+import { Paths } from 'expo-file-system';
 import * as SQLite from 'expo-sqlite';
 
 /**
@@ -7,7 +8,7 @@ import * as SQLite from 'expo-sqlite';
  */
 class TileCacheManager {
   private db: SQLite.SQLiteDatabase | null = null;
-  private readonly CACHE_DIR = `${FileSystem.cacheDirectory}map_tiles/`;
+  private readonly CACHE_DIR = `${Paths.cache.uri}/map_tiles/`;
 
   async init() {
     this.db = await SQLite.openDatabaseAsync('tiles_cache.db');
@@ -83,7 +84,7 @@ class TileCacheManager {
   private async deleteTile(key: string, path: string) {
     await this.db?.runAsync('DELETE FROM tiles WHERE key = ?', [key]);
     try {
-      await FileSystem.deleteAsync(path, { Idempotent: true });
+      await FileSystem.deleteAsync(path, { idempotent: true });
     } catch {}
   }
 }
