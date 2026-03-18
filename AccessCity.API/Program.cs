@@ -87,7 +87,9 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 builder.Services.AddAuthorization();
 
 builder.Services.AddSingleton<RiskScoringService>();
-builder.Services.AddSingleton<RoutingService>();
+builder.Services.AddScoped<PredictiveRiskModel>();
+builder.Services.AddHttpClient<AccessCity.API.Services.External.IOsrmClient, AccessCity.API.Services.External.OsrmClient>();
+builder.Services.AddScoped<RoutingService>();
 builder.Services.AddScoped<ITokenService, TokenService>();
 
 builder.Services.AddRateLimiter(options =>

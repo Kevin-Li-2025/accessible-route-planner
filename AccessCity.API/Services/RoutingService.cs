@@ -1,27 +1,408 @@
 using NetTopologySuite.Geometries;
 using AccessCity.API.Models;
+using AccessCity.API.Services.External;
 
 namespace AccessCity.API.Services
 {
     /// <summary>
-    /// Safety-aware A* routing engine.
+    /// Safety-aware routing engine using OSRM for real road-following routes.
     /// 
-    /// The engine constructs a street graph from PostGIS data (or, for the PoC,
-    /// from an in-memory synthetic grid), then finds the optimal path by minimising
-    /// a blended cost function:
-    /// 
-    ///     cost(e) = (1 − w) · distance(e)  +  w · risk(e)
-    /// 
-    /// where w ∈ [0,1] is the user's safety-weight preference.
-    /// 
-    /// Accessibility preferences (wheelchair, avoid-stairs, …) are applied as hard
-    /// constraints that prune edges before the search begins.
+    /// Strategy:
+    ///   1. Get a real road route from OSRM (foot profile)
+    ///   2. Check if route passes near reported hazards
+    ///   3. If hazards are close, compute avoidance waypoints and re-query OSRM
+    ///   4. Score each segment for safety using RiskScoringService
+    ///   5. Fallback to synthetic grid if OSRM is unavailable
     /// </summary>
     public class RoutingService
     {
         private readonly RiskScoringService _riskService;
+        private readonly PredictiveRiskModel _aiRisk;
+        private readonly IOsrmClient _osrmClient;
 
         private const double WalkingSpeed = 1.3;
+        private const double HazardAvoidanceRadiusMetres = 50.0;
+        private const double HazardWaypointOffsetMetres = 100.0;
+
+        public RoutingService(RiskScoringService riskService, PredictiveRiskModel aiRisk, IOsrmClient osrmClient)
+        {
+            _riskService = riskService;
+            _aiRisk = aiRisk;
+            _osrmClient = osrmClient;
+        }
+
+        /// <summary>
+        /// Compute the safest / most accessible route from start to end.
+        /// Uses OSRM for real road geometry, with hazard-aware rerouting.
+        /// </summary>
+        public async Task<RouteResponse> FindSafePathAsync(
+            RouteRequest request,
+            IEnumerable<HazardReport> allHazards)
+        {
+            var hazardList = allHazards
+                .Where(h => h.Status == HazardStatus.Reported || h.Status == HazardStatus.UnderReview)
+                .ToList();
+
+            // Step 1: Try OSRM for real road routing
+            var primaryRoute = await _osrmClient.GetRouteAsync(request.Start, request.End);
+
+            if (primaryRoute != null && primaryRoute.Coordinates.Count >= 2)
+            {
+                // Step 2: Check for hazards near the route
+                var nearbyHazards = FindHazardsNearRoute(primaryRoute.Coordinates, hazardList);
+
+                if (nearbyHazards.Count > 0 && request.SafetyWeight > 0.1)
+                {
+                    // Step 3: Try alternatives or waypoint-based avoidance
+                    var saferRoute = await FindSaferRouteAsync(
+                        request, primaryRoute, nearbyHazards, hazardList);
+
+                    if (saferRoute != null)
+                        return BuildOsrmResponse(saferRoute, hazardList, request);
+                }
+
+                return BuildOsrmResponse(primaryRoute, hazardList, request);
+            }
+
+            // Fallback: synthetic grid (for when OSRM is unavailable)
+            return FindSafePathFallback(request, hazardList);
+        }
+
+        /// <summary>
+        /// Synchronous fallback — uses the old synthetic grid approach.
+        /// </summary>
+        public RouteResponse FindSafePath(
+            RouteRequest request,
+            IEnumerable<HazardReport> allHazards)
+        {
+            return FindSafePathFallback(request, allHazards.ToList());
+        }
+
+        // ──────── OSRM-based routing ────────
+
+        /// <summary>
+        /// Find hazards that are dangerously close to the route path.
+        /// </summary>
+        private List<HazardReport> FindHazardsNearRoute(
+            List<Coordinate> routeCoords,
+            List<HazardReport> hazards)
+        {
+            var result = new List<HazardReport>();
+
+            foreach (var hazard in hazards)
+            {
+                double minDist = double.MaxValue;
+
+                // Sample every Nth point for performance (routes can have 100s of points)
+                int step = Math.Max(1, routeCoords.Count / 50);
+                for (int i = 0; i < routeCoords.Count; i += step)
+                {
+                    double dist = RiskScoringService.HaversineDistance(
+                        routeCoords[i].Y, routeCoords[i].X,
+                        hazard.Location.Y, hazard.Location.X);
+
+                    if (dist < minDist) minDist = dist;
+                    if (minDist < HazardAvoidanceRadiusMetres) break;
+                }
+
+                if (minDist < HazardAvoidanceRadiusMetres)
+                    result.Add(hazard);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Try to find a safer route by:
+        ///   1. Requesting OSRM alternative routes and picking the safest
+        ///   2. If that fails, inserting avoidance waypoints
+        /// </summary>
+        private async Task<OsrmRouteResult?> FindSaferRouteAsync(
+            RouteRequest request,
+            OsrmRouteResult primaryRoute,
+            List<HazardReport> nearbyHazards,
+            List<HazardReport> allHazards)
+        {
+            // Strategy A: Ask OSRM for alternative routes
+            var alternatives = await _osrmClient.GetAlternativeRoutesAsync(request.Start, request.End);
+
+            if (alternatives != null && alternatives.Count > 1)
+            {
+                var scored = alternatives.Select(route => new
+                {
+                    Route = route,
+                    HazardCount = FindHazardsNearRoute(route.Coordinates, nearbyHazards).Count,
+                    TotalRisk = ComputeRouteTotalRisk(route.Coordinates, allHazards),
+                    DistancePenalty = route.DistanceMetres / primaryRoute.DistanceMetres
+                })
+                .OrderBy(x => x.HazardCount)
+                .ThenBy(x => x.TotalRisk * request.SafetyWeight +
+                             x.DistancePenalty * (1.0 - request.SafetyWeight))
+                .ToList();
+
+                var best = scored.First();
+                if (best.HazardCount < nearbyHazards.Count ||
+                    best.TotalRisk < ComputeRouteTotalRisk(primaryRoute.Coordinates, allHazards) * 0.8)
+                {
+                    return best.Route;
+                }
+            }
+
+            // Strategy B: Insert avoidance waypoints
+            var waypoints = ComputeAvoidanceWaypoints(primaryRoute.Coordinates, nearbyHazards);
+            if (waypoints.Count > 0)
+            {
+                var rerouted = await _osrmClient.GetRouteAsync(request.Start, request.End, waypoints);
+                if (rerouted != null && rerouted.Coordinates.Count >= 2)
+                {
+                    // Verify the reroute is reasonable (not > 3× the original distance)
+                    if (rerouted.DistanceMetres < primaryRoute.DistanceMetres * 3.0)
+                        return rerouted;
+                }
+            }
+
+            return null; // Stick with primary route
+        }
+
+        /// <summary>
+        /// Compute avoidance waypoints by pushing the route perpendicular to the
+        /// direction of travel at hazard locations.
+        /// </summary>
+        private List<Coordinate> ComputeAvoidanceWaypoints(
+            List<Coordinate> routeCoords,
+            List<HazardReport> hazards)
+        {
+            var waypoints = new List<Coordinate>();
+
+            foreach (var hazard in hazards)
+            {
+                // Find the closest point on the route to this hazard
+                int closestIdx = 0;
+                double closestDist = double.MaxValue;
+
+                for (int i = 0; i < routeCoords.Count; i++)
+                {
+                    double dist = RiskScoringService.HaversineDistance(
+                        routeCoords[i].Y, routeCoords[i].X,
+                        hazard.Location.Y, hazard.Location.X);
+                    if (dist < closestDist)
+                    {
+                        closestDist = dist;
+                        closestIdx = i;
+                    }
+                }
+
+                // Compute perpendicular offset direction
+                int prevIdx = Math.Max(0, closestIdx - 1);
+                int nextIdx = Math.Min(routeCoords.Count - 1, closestIdx + 1);
+
+                double dLon = routeCoords[nextIdx].X - routeCoords[prevIdx].X;
+                double dLat = routeCoords[nextIdx].Y - routeCoords[prevIdx].Y;
+
+                // Perpendicular direction (rotate 90 degrees)
+                double perpLon = -dLat;
+                double perpLat = dLon;
+                double perpLen = Math.Sqrt(perpLon * perpLon + perpLat * perpLat);
+
+                if (perpLen < 1e-10) continue;
+
+                perpLon /= perpLen;
+                perpLat /= perpLen;
+
+                // Offset in degrees (approximate: 1 degree lat ≈ 111,320m)
+                double offsetDegLat = (HazardWaypointOffsetMetres / 111320.0) * perpLat;
+                double offsetDegLon = (HazardWaypointOffsetMetres /
+                    (111320.0 * Math.Cos(hazard.Location.Y * Math.PI / 180.0))) * perpLon;
+
+                // Choose the offset direction AWAY from the hazard
+                double waypointLon1 = routeCoords[closestIdx].X + offsetDegLon;
+                double waypointLat1 = routeCoords[closestIdx].Y + offsetDegLat;
+                double waypointLon2 = routeCoords[closestIdx].X - offsetDegLon;
+                double waypointLat2 = routeCoords[closestIdx].Y - offsetDegLat;
+
+                double dist1 = RiskScoringService.HaversineDistance(
+                    waypointLat1, waypointLon1,
+                    hazard.Location.Y, hazard.Location.X);
+                double dist2 = RiskScoringService.HaversineDistance(
+                    waypointLat2, waypointLon2,
+                    hazard.Location.Y, hazard.Location.X);
+
+                // Pick the waypoint that is farther from the hazard
+                if (dist1 > dist2)
+                    waypoints.Add(new Coordinate(waypointLon1, waypointLat1));
+                else
+                    waypoints.Add(new Coordinate(waypointLon2, waypointLat2));
+            }
+
+            return waypoints;
+        }
+
+        /// <summary>
+        /// Compute cumulative risk score along a route.
+        /// </summary>
+        private double ComputeRouteTotalRisk(List<Coordinate> coords, List<HazardReport> hazards)
+        {
+            double totalRisk = 0;
+            int step = Math.Max(1, coords.Count / 30);
+
+            for (int i = 0; i < coords.Count; i += step)
+            {
+                totalRisk += _aiRisk.QuickPredictiveRisk(coords[i].Y, coords[i].X, hazards, 200);
+            }
+
+            return totalRisk;
+        }
+
+        /// <summary>
+        /// Build the standard RouteResponse from an OSRM result.
+        /// </summary>
+        private RouteResponse BuildOsrmResponse(
+            OsrmRouteResult osrmRoute,
+            List<HazardReport> hazards,
+            RouteRequest request)
+        {
+            var coordinates = osrmRoute.Coordinates.ToArray();
+            var lineString = new LineString(coordinates);
+
+            var steps = new List<RouteStep>();
+            var warnings = new List<string>();
+            double safetySum = 0;
+            double totalDist = osrmRoute.DistanceMetres;
+
+            // Build steps from OSRM step data
+            if (osrmRoute.Steps.Count > 0)
+            {
+                int stepIdx = 0;
+                foreach (var osrmStep in osrmRoute.Steps)
+                {
+                    if (osrmStep.Geometry.Count < 2) continue;
+                    if (osrmStep.Distance < 0.1) continue; // Skip zero-distance steps
+
+                    var from = osrmStep.Geometry.First();
+                    var to = osrmStep.Geometry.Last();
+
+                    double midLat = (from.Y + to.Y) / 2.0;
+                    double midLon = (from.X + to.X) / 2.0;
+                    double segRisk = _aiRisk.QuickPredictiveRisk(midLat, midLon, hazards, 200);
+                    double segSafety = 1.0 - segRisk;
+                    safetySum += segSafety * osrmStep.Distance;
+
+                    string instruction = FormatOsrmInstruction(osrmStep, stepIdx, osrmRoute.Steps.Count);
+
+                    steps.Add(new RouteStep
+                    {
+                        From = new Point(from),
+                        To = new Point(to),
+                        Distance = Math.Round(osrmStep.Distance, 1),
+                        SafetyScore = Math.Round(segSafety, 3),
+                        Instruction = instruction
+                    });
+
+                    // Generate warnings for segments near hazards
+                    if (segRisk > 0.5)
+                        warnings.Add($"Step {stepIdx + 1}: Elevated risk area (score {segRisk:F2}).");
+
+                    // Check for specific hazard types nearby
+                    foreach (var hazard in hazards)
+                    {
+                        double dist = RiskScoringService.HaversineDistance(
+                            midLat, midLon, hazard.Location.Y, hazard.Location.X);
+                        if (dist < 100)
+                        {
+                            string warnMsg = hazard.Type switch
+                            {
+                                "construction" => $"Step {stepIdx + 1}: Active construction zone nearby — proceed with caution.",
+                                "poor_lighting" => $"Step {stepIdx + 1}: Poor street lighting detected.",
+                                "pothole" => $"Step {stepIdx + 1}: Reported pothole nearby — watch your step.",
+                                "obstruction" => $"Step {stepIdx + 1}: Footpath obstruction reported nearby.",
+                                "missing_curb_ramp" => $"Step {stepIdx + 1}: Missing kerb ramp — limited wheelchair access.",
+                                "broken_pavement" => $"Step {stepIdx + 1}: Broken pavement reported nearby.",
+                                "steep_gradient" => $"Step {stepIdx + 1}: Steep gradient ahead.",
+                                "missing_crossing" => $"Step {stepIdx + 1}: No pedestrian crossing — use caution.",
+                                _ => $"Step {stepIdx + 1}: Hazard ({hazard.Type}) reported nearby."
+                            };
+                            warnings.Add(warnMsg);
+                        }
+                    }
+
+                    stepIdx++;
+                }
+            }
+            else
+            {
+                // No detailed steps — build from raw coordinates
+                for (int i = 0; i < coordinates.Length - 1; i++)
+                {
+                    double segDist = RiskScoringService.HaversineDistance(
+                        coordinates[i].Y, coordinates[i].X,
+                        coordinates[i + 1].Y, coordinates[i + 1].X);
+
+                    double midLat = (coordinates[i].Y + coordinates[i + 1].Y) / 2.0;
+                    double midLon = (coordinates[i].X + coordinates[i + 1].X) / 2.0;
+                    double segRisk = _aiRisk.QuickPredictiveRisk(midLat, midLon, hazards, 200);
+                    double segSafety = 1.0 - segRisk;
+                    safetySum += segSafety * segDist;
+                }
+            }
+
+            double avgSafety = totalDist > 0 ? safetySum / totalDist : 1.0;
+
+            return new RouteResponse
+            {
+                Path = lineString,
+                Distance = Math.Round(totalDist, 1),
+                EstimatedTime = Math.Round(osrmRoute.DurationSeconds, 0),
+                SafetyScore = Math.Round(Math.Clamp(avgSafety, 0, 1), 3),
+                Warnings = warnings.Distinct().ToList(),
+                Steps = steps
+            };
+        }
+
+        /// <summary>
+        /// Format OSRM maneuver into a human-readable instruction.
+        /// </summary>
+        private static string FormatOsrmInstruction(OsrmStepResult step, int index, int total)
+        {
+            string distText = step.Distance < 100
+                ? $"{step.Distance:F0}m"
+                : $"{step.Distance / 1000.0:F2}km";
+
+            string streetInfo = !string.IsNullOrEmpty(step.StreetName)
+                ? $" on {step.StreetName}"
+                : "";
+
+            if (index == 0)
+                return $"Head{streetInfo} for {distText}.";
+
+            if (index == total - 1 || step.ManeuverType == "arrive")
+                return $"Arrive at your destination{streetInfo}.";
+
+            string direction = step.ManeuverModifier switch
+            {
+                "left" => "Turn left",
+                "right" => "Turn right",
+                "slight left" => "Bear left",
+                "slight right" => "Bear right",
+                "sharp left" => "Turn sharp left",
+                "sharp right" => "Turn sharp right",
+                "straight" => "Continue straight",
+                "uturn" => "Make a U-turn",
+                _ => step.ManeuverType switch
+                {
+                    "turn" => "Turn",
+                    "new name" => "Continue",
+                    "depart" => "Depart",
+                    "merge" => "Merge",
+                    "fork" => "Take the fork",
+                    "roundabout" => "Enter the roundabout",
+                    _ => "Continue"
+                }
+            };
+
+            return $"{direction}{streetInfo} for {distText}.";
+        }
+
+        // ──────── Fallback: Synthetic Grid (kept for resilience) ────────
 
         private static readonly Dictionary<string, Func<GraphEdge, bool>> EdgeFilters = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -40,38 +421,29 @@ namespace AccessCity.API.Services
             ["prefer-crossings"]   = e => e.HasCrossing ? 0.85 : 1.15,
         };
 
-        public RoutingService(RiskScoringService riskService)
-        {
-            _riskService = riskService;
-        }
-
-        /// <summary>
-        /// Compute the safest / most accessible route from start to end.
-        /// </summary>
-        public RouteResponse FindSafePath(
+        private RouteResponse FindSafePathFallback(
             RouteRequest request,
-            IEnumerable<HazardReport> allHazards)
+            List<HazardReport> hazardList)
         {
             double directDist = RiskScoringService.HaversineDistance(
                 request.Start.Y, request.Start.X,
                 request.End.Y, request.End.X);
 
-            // Optimization for very long distances to avoid memory overflow in synthetic grid
             double latStep = 0.0007;
             double lonStep = 0.0010;
 
-            if (directDist > 10000) // > 10km
+            if (directDist > 10000)
             {
-                latStep = 0.005; // ~500m
+                latStep = 0.005;
                 lonStep = 0.007;
             }
-            if (directDist > 50000) // > 50km
+            if (directDist > 50000)
             {
-                latStep = 0.02; // ~2.2km
+                latStep = 0.02;
                 lonStep = 0.03;
             }
 
-            var graph = BuildGraph(request.Start, request.End, allHazards, latStep, lonStep);
+            var graph = BuildGraph(request.Start, request.End, hazardList, latStep, lonStep);
             long startId = FindNearest(graph, request.Start);
             long endId   = FindNearest(graph, request.End);
 
@@ -79,40 +451,36 @@ namespace AccessCity.API.Services
             {
                 return new RouteResponse
                 {
-                    Path        = new LineString(new[] { request.Start, request.End }),
-                    Distance    = RiskScoringService.HaversineDistance(
-                                      request.Start.Y, request.Start.X,
-                                      request.End.Y,   request.End.X),
+                    Path = new LineString(new[] { request.Start, request.End }),
+                    Distance = directDist,
                     SafetyScore = 1.0,
-                    Warnings    = new List<string> { "Origin and destination are very close." }
+                    Warnings = new List<string> { "Origin and destination are very close." }
                 };
             }
 
-            var path = AStarSearch(graph, startId, endId, request, allHazards);
+            var path = AStarSearch(graph, startId, endId, request, hazardList);
 
             if (path == null || path.Count < 2)
             {
                 return new RouteResponse
                 {
                     SafetyScore = 0,
-                    Warnings    = new List<string>
+                    Warnings = new List<string>
                     {
                         "No accessible route found. Try relaxing your accessibility preferences."
                     }
                 };
             }
 
-            return BuildResponse(path, graph, request, allHazards);
+            return BuildFallbackResponse(path, graph, request, hazardList);
         }
 
         private List<long>? AStarSearch(
             Dictionary<long, GraphNode> graph,
-            long startId,
-            long endId,
+            long startId, long endId,
             RouteRequest request,
-            IEnumerable<HazardReport> hazards)
+            List<HazardReport> hazards)
         {
-            var hazardList = hazards.ToList();
             var endNode = graph[endId];
             var gScore = new Dictionary<long, double> { [startId] = 0 };
             var fScore = new Dictionary<long, double>
@@ -152,8 +520,7 @@ namespace AccessCity.API.Services
                     if (!passesFilters) continue;
 
                     double edgeCost = ComputeEdgeCost(edge, currentNode, graph[neighbourId],
-                                                       request, hazardList);
-
+                                                       request, hazards);
                     double tentativeG = gScore[current] + edgeCost;
 
                     if (tentativeG < gScore.GetValueOrDefault(neighbourId, double.MaxValue))
@@ -171,28 +538,17 @@ namespace AccessCity.API.Services
             return null;
         }
 
-        /// <summary>
-        /// Admissible heuristic: straight-line Haversine distance, downscaled by
-        /// safety weight so the search explores safer detours when w is high.
-        /// </summary>
         private static double Heuristic(Coordinate a, Coordinate b, double safetyWeight)
         {
             double dist = RiskScoringService.HaversineDistance(a.Y, a.X, b.Y, b.X);
             return dist * (1.0 - safetyWeight * 0.3);
         }
 
-        /// <summary>
-        /// Blended edge cost combining distance, hazard risk, and preference modifiers.
-        /// </summary>
         private double ComputeEdgeCost(
-            GraphEdge edge,
-            GraphNode fromNode,
-            GraphNode toNode,
-            RouteRequest request,
-            List<HazardReport> hazards)
+            GraphEdge edge, GraphNode fromNode, GraphNode toNode,
+            RouteRequest request, List<HazardReport> hazards)
         {
             double w = Math.Clamp(request.SafetyWeight, 0.0, 1.0);
-
             double distCost = edge.DistanceMetres;
             double midLat = (fromNode.Location.Y + toNode.Location.Y) / 2.0;
             double midLon = (fromNode.Location.X + toNode.Location.X) / 2.0;
@@ -208,7 +564,6 @@ namespace AccessCity.API.Services
             }
 
             double blended = ((1.0 - w) * distCost + w * safetyCost) * modifier;
-
             return Math.Max(blended, 0.001);
         }
 
@@ -224,20 +579,19 @@ namespace AccessCity.API.Services
             return path;
         }
 
-        private RouteResponse BuildResponse(
+        private RouteResponse BuildFallbackResponse(
             List<long> path,
             Dictionary<long, GraphNode> graph,
             RouteRequest request,
-            IEnumerable<HazardReport> hazards)
+            List<HazardReport> hazards)
         {
-            var hazardList  = hazards.ToList();
             var coordinates = path.Select(id => graph[id].Location).ToArray();
             var lineString  = new LineString(coordinates);
 
-            double totalDist   = 0;
-            double safetySum   = 0;
-            var steps          = new List<RouteStep>();
-            var warnings       = new List<string>();
+            double totalDist = 0;
+            double safetySum = 0;
+            var steps    = new List<RouteStep>();
+            var warnings = new List<string>();
 
             for (int i = 0; i < path.Count - 1; i++)
             {
@@ -250,7 +604,7 @@ namespace AccessCity.API.Services
 
                 double midLat = (fromNode.Location.Y + toNode.Location.Y) / 2.0;
                 double midLon = (fromNode.Location.X + toNode.Location.X) / 2.0;
-                double segRisk = _riskService.QuickRisk(midLat, midLon, hazardList);
+                double segRisk = _riskService.QuickRisk(midLat, midLon, hazards);
                 double segSafety = 1.0 - segRisk;
                 safetySum += segSafety * segDist;
 
@@ -288,11 +642,8 @@ namespace AccessCity.API.Services
             };
         }
 
-        /// <summary>
-        /// Generate a human-readable turn-by-turn instruction for a segment.
-        /// </summary>
         private static string GenerateInstruction(
-            GraphNode from, GraphNode to, GraphEdge edge  , int stepIndex, int totalSteps)
+            GraphNode from, GraphNode to, GraphEdge edge, int stepIndex, int totalSteps)
         {
             double bearing = CalculateBearing(from.Location, to.Location);
             string direction = BearingToCardinal(bearing);
@@ -339,32 +690,21 @@ namespace AccessCity.API.Services
         private static double ToRad(double deg) => deg * Math.PI / 180.0;
         private static double ToDeg(double rad) => rad * 180.0 / Math.PI;
 
-        /// <summary>
-        /// Build a walkable routing graph.
-        /// 
-        /// In production this queries PostGIS for the road / footpath network
-        /// (OpenStreetMap imports via osm2pgsql or pg_routing).
-        /// 
-        /// For the PoC we generate a fine-grained grid around the bounding box
-        /// of start ↔ end, with hazard-aware edge weights.
-        /// </summary>
+        // ──────── Graph building (fallback only) ────────
+
         private Dictionary<long, GraphNode> BuildGraph(
             Coordinate start, Coordinate end,
-            IEnumerable<HazardReport> hazards,
-            double latStep = 0.0007,
-            double lonStep = 0.0010)
+            List<HazardReport> hazards,
+            double latStep = 0.0007, double lonStep = 0.0010)
         {
-            var hazardList = hazards.ToList();
-            double minLat = Math.Min(start.Y, end.Y) - latStep * 5; 
+            double minLat = Math.Min(start.Y, end.Y) - latStep * 5;
             double maxLat = Math.Max(start.Y, end.Y) + latStep * 5;
             double minLon = Math.Min(start.X, end.X) - lonStep * 5;
             double maxLon = Math.Max(start.X, end.X) + lonStep * 5;
-            
-            // Limit total nodes to prevent OOM
+
             int rows = Math.Min((int)Math.Ceiling((maxLat - minLat) / latStep), 150);
             int cols = Math.Min((int)Math.Ceiling((maxLon - minLon) / lonStep), 150);
-            
-            // Adjust back max to fit rows/cols if capped
+
             maxLat = minLat + rows * latStep;
             maxLon = minLon + cols * lonStep;
 
@@ -378,18 +718,13 @@ namespace AccessCity.API.Services
                     double lat = minLat + r * latStep;
                     double lon = minLon + c * lonStep;
                     long id = nextId++;
-
-                    graph[id] = new GraphNode
-                    {
-                        Id       = id,
-                        Location = new Coordinate(lon, lat)
-                    };
+                    graph[id] = new GraphNode { Id = id, Location = new Coordinate(lon, lat) };
                     coordToId[(r, c)] = id;
                 }
             }
+
             int[] dr = { -1, -1, -1,  0, 0,  1, 1, 1 };
             int[] dc = { -1,  0,  1, -1, 1, -1, 0, 1 };
-
             var rng = new Random(42);
 
             for (int r = 0; r <= rows; r++)
@@ -410,13 +745,14 @@ namespace AccessCity.API.Services
 
                         double dist = RiskScoringService.HaversineDistance(
                             fromNode.Location.Y, fromNode.Location.X,
-                            toNode.Location.Y,   toNode.Location.X);
+                            toNode.Location.Y, toNode.Location.X);
+
                         double midLat = (fromNode.Location.Y + toNode.Location.Y) / 2.0;
                         double midLon = (fromNode.Location.X + toNode.Location.X) / 2.0;
-                        double riskAtMid = _riskService.QuickRisk(midLat, midLon, hazardList, 150);
+                        double riskAtMid = _riskService.QuickRisk(midLat, midLon, hazards, 150);
+
                         int seed = HashCode.Combine(
-                            Math.Round(midLat, 5),
-                            Math.Round(midLon, 5));
+                            Math.Round(midLat, 5), Math.Round(midLon, 5));
                         var localRng = new Random(seed);
 
                         string surface = localRng.NextDouble() switch
@@ -428,45 +764,32 @@ namespace AccessCity.API.Services
                             _      => "unpaved"
                         };
 
-                        bool hasStairs       = localRng.NextDouble() < 0.03;
-                        bool hasCrossing     = localRng.NextDouble() < 0.25;
-                        bool underConstruct  = localRng.NextDouble() < 0.02;
-                        bool isSteep         = localRng.NextDouble() < 0.05;
-                        double lighting      = 0.4 + localRng.NextDouble() * 0.6;
-
                         fromNode.Edges[toId] = new GraphEdge
                         {
                             TargetNodeId        = toId,
                             DistanceMetres      = dist,
                             BaseSafetyCost      = riskAtMid,
                             SurfaceType         = surface,
-                            HasStairs           = hasStairs,
-                            HasCrossing         = hasCrossing,
-                            IsUnderConstruction = underConstruct,
-                            LightingQuality     = lighting,
-                            IsSteep             = isSteep
+                            HasStairs           = localRng.NextDouble() < 0.03,
+                            HasCrossing         = localRng.NextDouble() < 0.25,
+                            IsUnderConstruction = localRng.NextDouble() < 0.02,
+                            LightingQuality     = 0.4 + localRng.NextDouble() * 0.6,
+                            IsSteep             = localRng.NextDouble() < 0.05
                         };
                     }
                 }
             }
-            InjectVirtualNode(graph, 0, start, coordToId, rows, cols, latStep, lonStep, minLat, minLon, hazardList);
-            InjectVirtualNode(graph, -1, end,  coordToId, rows, cols, latStep, lonStep, minLat, minLon, hazardList);
+
+            InjectVirtualNode(graph, 0, start, coordToId, rows, cols, latStep, lonStep, minLat, minLon, hazards);
+            InjectVirtualNode(graph, -1, end, coordToId, rows, cols, latStep, lonStep, minLat, minLon, hazards);
 
             return graph;
         }
 
-        /// <summary>
-        /// Insert a virtual node (start or end point) and connect it to
-        /// its 4 nearest grid nodes so the A* can reach it.
-        /// </summary>
         private void InjectVirtualNode(
-            Dictionary<long, GraphNode> graph,
-            long virtualId,
-            Coordinate coord,
-            Dictionary<(int, int), long> coordToId,
-            int rows, int cols,
-            double latStep, double lonStep,
-            double minLat, double minLon,
+            Dictionary<long, GraphNode> graph, long virtualId, Coordinate coord,
+            Dictionary<(int, int), long> coordToId, int rows, int cols,
+            double latStep, double lonStep, double minLat, double minLon,
             List<HazardReport> hazards)
         {
             var vNode = new GraphNode { Id = virtualId, Location = coord };
@@ -475,6 +798,7 @@ namespace AccessCity.API.Services
             int c = (int)Math.Round((coord.X - minLon) / lonStep);
             r = Math.Clamp(r, 0, rows);
             c = Math.Clamp(c, 0, cols);
+
             for (int dr = -1; dr <= 1; dr++)
             {
                 for (int dc = -1; dc <= 1; dc++)
@@ -489,8 +813,7 @@ namespace AccessCity.API.Services
                     var gridNode = graph[gridId];
 
                     double dist = RiskScoringService.HaversineDistance(
-                        coord.Y, coord.X,
-                        gridNode.Location.Y, gridNode.Location.X);
+                        coord.Y, coord.X, gridNode.Location.Y, gridNode.Location.X);
 
                     var edge = new GraphEdge
                     {

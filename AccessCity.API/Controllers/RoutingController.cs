@@ -17,27 +17,30 @@ namespace AccessCity.API.Controllers
     {
         private readonly RoutingService     _routing;
         private readonly RiskScoringService _risk;
+        private readonly PredictiveRiskModel _aiRisk;
 
-        public RoutingController(RoutingService routing, RiskScoringService risk)
+        public RoutingController(RoutingService routing, RiskScoringService risk, PredictiveRiskModel aiRisk)
         {
             _routing = routing;
             _risk    = risk;
+            _aiRisk  = aiRisk;
         }
 
         /// <summary>
         /// Compute an accessible, safety-aware route between two points.
+        /// Uses OSRM for real road geometry with AI-powered multi-factor safety scoring.
         /// 
         /// The response includes:
         ///   • A GeoJSON LineString path
         ///   • Total distance (m) and estimated walking time (s)
-        ///   • A composite safety score (0–1)
+        ///   • An AI-computed composite safety score (0–1)
         ///   • Turn-by-turn steps with per-segment safety
         ///   • Contextual warnings (stairs, construction, poor lighting, etc.)
         /// </summary>
         [HttpPost("safe-path")]
         [ProducesResponseType(typeof(RouteResponse), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
-        public ActionResult<RouteResponse> GetSafePath([FromBody] RouteRequest request)
+        public async Task<ActionResult<RouteResponse>> GetSafePath([FromBody] RouteRequest request)
         {
             if (request.Start == null || request.End == null)
                 return BadRequest(new { error = "Both 'start' and 'end' coordinates are required." });
@@ -49,7 +52,7 @@ namespace AccessCity.API.Controllers
                 return BadRequest(new { error = "'safetyWeight' must be between 0 and 1." });
 
             var hazards = GetActiveHazards();
-            var result = _routing.FindSafePath(request, hazards);
+            var result = await _routing.FindSafePathAsync(request, hazards);
 
             return Ok(result);
         }
@@ -76,6 +79,35 @@ namespace AccessCity.API.Controllers
 
             var hazards = GetActiveHazards();
             var result = await _risk.EvaluateRiskAsync(lat, lng, radius, hazards);
+
+            return Ok(result);
+        }
+
+        /// <summary>
+        /// AI-powered predictive risk evaluation at a geographic point.
+        /// 
+        /// Uses a multi-factor model combining:
+        ///   • Reported hazard proximity and density
+        ///   • Time-of-day circadian safety patterns
+        ///   • Live weather conditions (OpenWeatherMap)
+        ///   • UK Police street crime data
+        ///   • Infrastructure quality heuristics
+        /// 
+        /// Returns an overall risk score with per-factor breakdown and human-readable explanations.
+        /// </summary>
+        [HttpGet("ai-risk-score")]
+        [ProducesResponseType(typeof(PredictiveRiskResult), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        public async Task<ActionResult<PredictiveRiskResult>> GetAiRiskScore(
+            [FromQuery] double lat,
+            [FromQuery] double lng,
+            [FromQuery] double radius = 200)
+        {
+            if (lat < -90 || lat > 90 || lng < -180 || lng > 180)
+                return BadRequest(new { error = "Invalid WGS-84 coordinates." });
+
+            var hazards = GetActiveHazards();
+            var result = await _aiRisk.EvaluateSegmentRiskAsync(lat, lng, hazards, radius);
 
             return Ok(result);
         }
