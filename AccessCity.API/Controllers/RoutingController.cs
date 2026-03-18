@@ -12,7 +12,7 @@ namespace AccessCity.API.Controllers
     ///   POST /api/routing/safe-path   — Compute an accessible, safety-optimised route
     ///   GET  /api/routing/risk-score  — Predictive risk scoring at a geographic point
     /// </summary>
-    [Authorize]
+    [AllowAnonymous]
     [ApiController]
     [Route("api/[controller]")]
     public class RoutingController : ControllerBase

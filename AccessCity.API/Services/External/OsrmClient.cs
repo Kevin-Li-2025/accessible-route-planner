@@ -50,7 +50,7 @@ namespace AccessCity.API.Services.External
     public class OsrmClient : IOsrmClient
     {
         private readonly HttpClient _httpClient;
-        private const string BaseUrl = "https://router.project-osrm.org/route/v1/foot/";
+        private const string BaseUrl = "http://router.project-osrm.org/route/v1/foot/";
 
         public OsrmClient(HttpClient httpClient)
         {
@@ -82,8 +82,10 @@ namespace AccessCity.API.Services.External
 
                 return ParseRoute(response.Routes[0]);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                Console.WriteLine($"[OSRM ERROR] {ex.Message}");
+                if (ex.InnerException != null) Console.WriteLine($"[OSRM ERROR INNER] {ex.InnerException.Message}");
                 return null; // Fail gracefully — caller uses fallback
             }
         }

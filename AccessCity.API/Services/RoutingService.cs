@@ -591,7 +591,9 @@ namespace AccessCity.API.Services
             double totalDist = 0;
             double safetySum = 0;
             var steps    = new List<RouteStep>();
-            var warnings = new List<string>();
+            var warnings = new List<string> { 
+                "Real road calculation is unavailable for this distance/area. An approximate straight-path mesh is shown." 
+            };
 
             for (int i = 0; i < path.Count - 1; i++)
             {
