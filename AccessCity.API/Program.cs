@@ -44,8 +44,18 @@ builder.Services.AddControllers(options =>
         options.JsonSerializerOptions.NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals;
     });
 
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseInMemoryDatabase("AccessCityMemoryDb"));
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+
+if (builder.Environment.IsDevelopment() && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("USE_POSTGRES")))
+{
+    builder.Services.AddDbContext<AppDbContext>(options =>
+        options.UseInMemoryDatabase("AccessCityMemoryDb"));
+}
+else
+{
+    builder.Services.AddDbContext<AppDbContext>(options =>
+        options.UseNpgsql(connectionString, o => o.UseNetTopologySuite()));
+}
 
 builder.Services.AddIdentityCore<AccessCityUser>(options =>
 {
