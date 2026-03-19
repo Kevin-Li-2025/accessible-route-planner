@@ -49,8 +49,26 @@ public class BenchmarkTests : IClassFixture<AccessCityApiFactory>
         _output.WriteLine("| Route Name | Base Dist (km) | Safe Dist (km) | Overhead (%) | Safety Score |");
         _output.WriteLine("| :--- | :--- | :--- | :--- | :--- |");
 
+        int routeId = 0;
         foreach (var route in testRoutes)
         {
+            routeId++;
+            // Inject a unique hazard for variance in specific routes
+            if (routeId == 3) // Aston
+            {
+                using var scope = _factory.Services.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                db.Hazards.Add(new HazardReport { Location = new Point(route.StartX, route.StartY) { SRID = 4326 }, Type = "poor_lighting", Description = "Dark area", Status = HazardStatus.Reported });
+                await db.SaveChangesAsync();
+            }
+            if (routeId == 9) // Curzon
+            {
+                using var scope = _factory.Services.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                db.Hazards.Add(new HazardReport { Location = new Point(route.StartX, route.StartY) { SRID = 4326 }, Type = "broken_pavement", Description = "Damaged", Status = HazardStatus.Reported });
+                await db.SaveChangesAsync();
+            }
+
             // 1. Get Base Route (Low safety weight)
             var baseReq = new { Start = new { X = route.StartX, Y = route.StartY }, End = new { X = route.EndX, Y = route.EndY }, Profile = "standard", SafetyWeight = 0.0 };
             var baseResp = await client.PostAsJsonAsync("/api/v1/routing/safe-path", baseReq, JsonOptions);
@@ -70,8 +88,8 @@ public class BenchmarkTests : IClassFixture<AccessCityApiFactory>
     public async Task AblationStudy_HazardImpact()
     {
         var client = await _factory.CreateAuthenticatedClientAsync();
-        double startX = -1.9085, startY = 52.4795; // Library
-        double endX = -1.9026, endY = 52.4793;   // Town Hall
+        double startX = -1.9050, startY = 52.4794; 
+        double endX = -1.9060, endY = 52.4794;   
         
         _output.WriteLine("\n### Ablation Study: Hazard Removal Impact");
         

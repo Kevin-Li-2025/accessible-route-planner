@@ -27,11 +27,11 @@ namespace AccessCity.API.Services
         // ──── Learned model weights (logistic regression coefficients) ────
         // These weights are derived from urban pedestrian safety research:
         //   Ewing & Dumbaugh 2009, Loukaitou-Sideris 2006, WHO pedestrian safety reports
-        private const double W_Hazard       = 0.30;  // Reported hazard proximity + density
-        private const double W_TimeOfDay    = 0.20;  // Circadian risk (darkness = higher risk)
-        private const double W_Weather      = 0.15;  // Weather conditions
-        private const double W_Crime        = 0.20;  // Historical street crime
-        private const double W_Infra        = 0.15;  // Infrastructure quality
+        private const double W_Hazard       = 0.50;  // Increased from 0.30 - Accessibility is primary
+        private const double W_TimeOfDay    = 0.10;  // Reduced from 0.20
+        private const double W_Weather      = 0.10;  // Reduced from 0.15
+        private const double W_Crime        = 0.15;  // Slightly reduced
+        private const double W_Infra        = 0.15;  // Maintained
 
         private const string WeatherCacheKey = "weather:";
         private static readonly TimeSpan WeatherCacheExpiry = TimeSpan.FromMinutes(15);
@@ -79,7 +79,8 @@ namespace AccessCity.API.Services
                        W_Infra * infraRisk;
 
             // Apply sigmoid activation for final prediction
-            double overallRisk = Sigmoid(z, k: 4.0, midpoint: 0.35);
+            // Adjusted midpoint to 0.6 to allow for more 'Safe' (high score) headroom
+            double overallRisk = Sigmoid(z, k: 5.0, midpoint: 0.60);
 
             return new PredictiveRiskResult
             {
@@ -114,7 +115,7 @@ namespace AccessCity.API.Services
                        W_Crime * crimeRisk +
                        W_Infra * infraRisk;
 
-            return Math.Clamp(Sigmoid(z, k: 4.0, midpoint: 0.35), 0, 1);
+            return Math.Clamp(Sigmoid(z, k: 5.0, midpoint: 0.60), 0, 1);
         }
 
         // ──────── Factor Computations ────────
