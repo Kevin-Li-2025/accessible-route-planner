@@ -807,4 +807,28 @@ public class RoutingService
 
     private static double ToRad(double degrees) => degrees * Math.PI / 180.0;
     private static double ToDeg(double radians) => radians * 180.0 / Math.PI;
+
+    private static string GenerateInstruction(GraphNode from, GraphNode to, GraphEdge edge, int stepIndex, int totalSteps)
+    {
+        if (stepIndex == 0) return $"Start at ({Math.Round(from.Location.Y, 5)}, {Math.Round(from.Location.X, 5)}) and head towards the next waypoint.";
+        
+        double dy = to.Location.Y - from.Location.Y;
+        double dx = (to.Location.X - from.Location.X) * Math.Cos(ToRad(from.Location.Y));
+        double angle = Math.Atan2(dy, dx) * 180.0 / Math.PI;
+
+        string direction = angle switch
+        {
+            > -22.5 and <= 22.5 => "East",
+            > 22.5 and <= 67.5 => "Northeast",
+            > 67.5 and <= 112.5 => "North",
+            > 112.5 and <= 157.5 => "Northwest",
+            > 157.5 or <= -157.5 => "West",
+            > -157.5 and <= -112.5 => "Southwest",
+            > -112.5 and <= -67.5 => "South",
+            _ => "Southeast"
+        };
+
+        string surfaceText = string.IsNullOrEmpty(edge.SurfaceType) ? "" : $" on {edge.SurfaceType} surface";
+        return $"Head {direction} for {Math.Round(edge.DistanceMetres, 0)}m{surfaceText}.";
+    }
 }
