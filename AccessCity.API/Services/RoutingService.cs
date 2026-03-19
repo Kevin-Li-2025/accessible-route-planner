@@ -43,25 +43,35 @@ public class RoutingService
             .Where(h => h.Status == HazardStatus.Reported || h.Status == HazardStatus.UnderReview)
             .ToList();
 
-        // Step 1: Try OSRM for real road routing
-        var primaryRoute = await _osrmClient.GetRouteAsync(request.Start, request.End);
+        // Step 1: Proactively try OSRM with alternatives
+        var alternatives = await _osrmClient.GetAlternativeRoutesAsync(request.Start, request.End);
 
-        if (primaryRoute != null && primaryRoute.Coordinates.Count >= 2)
+        if (alternatives != null && alternatives.Count > 0)
         {
-            // Step 2: Check for hazards near the route
-            var nearbyHazards = FindHazardsNearRoute(primaryRoute.Coordinates, hazardList);
-
-            if (nearbyHazards.Count > 0 && request.SafetyWeight > 0.1)
+            var scoredRoutes = alternatives.Select(r => new
             {
-                // Step 3: Try alternatives or waypoint-based avoidance
-                var saferRoute = await FindSaferRouteAsync(
-                    request, primaryRoute, nearbyHazards, hazardList);
+                Route = r,
+                Cost = ScoreRoute(r, hazardList, request.SafetyWeight)
+            })
+            .OrderBy(x => x.Cost)
+            .ToList();
 
-                if (saferRoute != null)
-                    return BuildOsrmResponse(saferRoute, hazardList, request);
+            var bestRoute = scoredRoutes.First().Route;
+
+            // Step 2: If the best OSRM route still has severe hazards, try waypoint-based avoidance
+            var severeHazards = FindHazardsNearRoute(bestRoute.Coordinates, hazardList);
+            if (severeHazards.Count > 0 && request.SafetyWeight > 0.3)
+            {
+                var rerouted = await AttemptWaypointRerouteAsync(request, bestRoute, severeHazards, hazardList);
+                if (rerouted != null)
+                {
+                    double rerouteCost = ScoreRoute(rerouted, hazardList, request.SafetyWeight);
+                    if (rerouteCost < scoredRoutes.First().Cost)
+                        bestRoute = rerouted;
+                }
             }
 
-            return BuildOsrmResponse(primaryRoute, hazardList, request);
+            return BuildOsrmResponse(bestRoute, hazardList, request);
         }
 
         // Fallback: synthetic grid (for when OSRM is unavailable)
@@ -112,56 +122,37 @@ public class RoutingService
         return result;
     }
 
-    /// <summary>
-    /// Try to find a safer route by:
-    ///   1. Requesting OSRM alternative routes and picking the safest
-    ///   2. If that fails, inserting avoidance waypoints
-    /// </summary>
-    private async Task<OsrmRouteResult?> FindSaferRouteAsync(
+    private async Task<OsrmRouteResult?> AttemptWaypointRerouteAsync(
         RouteRequest request,
         OsrmRouteResult primaryRoute,
         List<HazardReport> nearbyHazards,
         List<HazardReport> allHazards)
     {
-        // Strategy A: Ask OSRM for alternative routes
-        var alternatives = await _osrmClient.GetAlternativeRoutesAsync(request.Start, request.End);
-
-        if (alternatives != null && alternatives.Count > 1)
-        {
-            var scored = alternatives.Select(route => new
-            {
-                Route = route,
-                HazardCount = FindHazardsNearRoute(route.Coordinates, nearbyHazards).Count,
-                TotalRisk = ComputeRouteTotalRisk(route.Coordinates, allHazards),
-                DistancePenalty = route.DistanceMetres / primaryRoute.DistanceMetres
-            })
-            .OrderBy(x => x.HazardCount)
-            .ThenBy(x => x.TotalRisk * request.SafetyWeight +
-                         x.DistancePenalty * (1.0 - request.SafetyWeight))
-            .ToList();
-
-            var best = scored.First();
-            if (best.HazardCount < nearbyHazards.Count ||
-                best.TotalRisk < ComputeRouteTotalRisk(primaryRoute.Coordinates, allHazards) * 0.8)
-            {
-                return best.Route;
-            }
-        }
-
-        // Strategy B: Insert avoidance waypoints
         var waypoints = ComputeAvoidanceWaypoints(primaryRoute.Coordinates, nearbyHazards);
         if (waypoints.Count > 0)
         {
             var rerouted = await _osrmClient.GetRouteAsync(request.Start, request.End, waypoints);
             if (rerouted != null && rerouted.Coordinates.Count >= 2)
             {
-                // Verify the reroute is reasonable (not > 3× the original distance)
-                if (rerouted.DistanceMetres < primaryRoute.DistanceMetres * 3.0)
+                // Verify the reroute is reasonable (not > 2× the original distance)
+                if (rerouted.DistanceMetres < primaryRoute.DistanceMetres * 2.0)
                     return rerouted;
             }
         }
 
-        return null; // Stick with primary route
+        return null;
+    }
+
+    private double ScoreRoute(OsrmRouteResult route, List<HazardReport> hazards, double safetyWeight)
+    {
+        double normalizedDist = route.DistanceMetres / 1000.0; // km
+        double totalRisk = ComputeRouteTotalRisk(route.Coordinates, hazards);
+        
+        // Balanced score: 0 is perfect, higher is worse
+        // We normalize risk by number of points sampled in ComputeRouteTotalRisk (roughly 30)
+        double normalizedRisk = totalRisk / 30.0;
+
+        return (normalizedDist * (1.0 - safetyWeight)) + (normalizedRisk * safetyWeight * 5.0);
     }
 
     /// <summary>
@@ -371,8 +362,15 @@ public class RoutingService
             ? $" on {step.StreetName}"
             : "";
 
+        string cardinal = "";
+        if (step.Geometry.Count >= 2)
+        {
+            double bearing = CalculateBearing(step.Geometry.First(), step.Geometry.Last());
+            cardinal = $" {BearingToCardinal(bearing)}";
+        }
+
         if (index == 0)
-            return $"Head{streetInfo} for {distText}.";
+            return $"Head{cardinal}{streetInfo} for {distText}.";
 
         if (index == total - 1 || step.ManeuverType == "arrive")
             return $"Arrive at your destination{streetInfo}.";
@@ -399,7 +397,7 @@ public class RoutingService
             }
         };
 
-        return $"{direction}{streetInfo} for {distText}.";
+        return $"{direction}{cardinal}{streetInfo} for {distText}.";
     }
 
     // ──────── Fallback: Synthetic Grid (kept for resilience) ────────
@@ -659,6 +657,9 @@ public class RoutingService
         int rows = Math.Min((int)Math.Ceiling((maxLat - minLat) / latStep), 150);
         int cols = Math.Min((int)Math.Ceiling((maxLon - minLon) / lonStep), 150);
 
+        maxLat = minLat + rows * latStep;
+        maxLon = minLon + cols * lonStep;
+
         var graph = new Dictionary<long, GraphNode>();
         var coordToId = new Dictionary<(int, int), long>();
         long nextId = 1;
@@ -677,6 +678,7 @@ public class RoutingService
 
         int[] dr = { -1, -1, -1, 0, 0, 1, 1, 1 };
         int[] dc = { -1, 0, 1, -1, 1, -1, 0, 1 };
+        var rng = new Random(42);
 
         for (int r = 0; r <= rows; r++)
         {
@@ -805,30 +807,51 @@ public class RoutingService
         return bestId;
     }
 
-    private static double ToRad(double degrees) => degrees * Math.PI / 180.0;
-    private static double ToDeg(double radians) => radians * 180.0 / Math.PI;
-
-    private static string GenerateInstruction(GraphNode from, GraphNode to, GraphEdge edge, int stepIndex, int totalSteps)
+    private static string GenerateInstruction(
+        GraphNode from, GraphNode to, GraphEdge edge, int stepIndex, int totalSteps)
     {
-        if (stepIndex == 0) return $"Start at ({Math.Round(from.Location.Y, 5)}, {Math.Round(from.Location.X, 5)}) and head towards the next waypoint.";
-        
-        double dy = to.Location.Y - from.Location.Y;
-        double dx = (to.Location.X - from.Location.X) * Math.Cos(ToRad(from.Location.Y));
-        double angle = Math.Atan2(dy, dx) * 180.0 / Math.PI;
+        double bearing = CalculateBearing(from.Location, to.Location);
+        string direction = BearingToCardinal(bearing);
+        string distText = edge.DistanceMetres < 100
+            ? $"{edge.DistanceMetres:F0}m"
+            : $"{edge.DistanceMetres / 1000.0:F2}km";
 
-        string direction = angle switch
-        {
-            > -22.5 and <= 22.5 => "East",
-            > 22.5 and <= 67.5 => "Northeast",
-            > 67.5 and <= 112.5 => "North",
-            > 112.5 and <= 157.5 => "Northwest",
-            > 157.5 or <= -157.5 => "West",
-            > -157.5 and <= -112.5 => "Southwest",
-            > -112.5 and <= -67.5 => "South",
-            _ => "Southeast"
-        };
+        if (stepIndex == 0)
+            return $"Head {direction} for {distText}.";
+        if (stepIndex == totalSteps - 1)
+            return $"Continue {direction} for {distText} to reach your destination.";
 
-        string surfaceText = string.IsNullOrEmpty(edge.SurfaceType) ? "" : $" on {edge.SurfaceType} surface";
-        return $"Head {direction} for {Math.Round(edge.DistanceMetres, 0)}m{surfaceText}.";
+        string surfaceNote = edge.SurfaceType != "asphalt"
+            ? $" (surface: {edge.SurfaceType})"
+            : "";
+
+        return $"Continue {direction} for {distText}{surfaceNote}.";
     }
+
+    private static double CalculateBearing(Coordinate from, Coordinate to)
+    {
+        double dLon = ToRad(to.X - from.X);
+        double lat1 = ToRad(from.Y);
+        double lat2 = ToRad(to.Y);
+        double y = Math.Sin(dLon) * Math.Cos(lat2);
+        double x = Math.Cos(lat1) * Math.Sin(lat2) -
+                   Math.Sin(lat1) * Math.Cos(lat2) * Math.Cos(dLon);
+        double brng = Math.Atan2(y, x);
+        return (ToDeg(brng) + 360) % 360;
+    }
+
+    private static string BearingToCardinal(double bearing) => bearing switch
+    {
+        >= 337.5 or < 22.5   => "north",
+        >= 22.5  and < 67.5  => "northeast",
+        >= 67.5  and < 112.5 => "east",
+        >= 112.5 and < 157.5 => "southeast",
+        >= 157.5 and < 202.5 => "south",
+        >= 202.5 and < 247.5 => "southwest",
+        >= 247.5 and < 292.5 => "west",
+        _                    => "northwest"
+    };
+
+    private static double ToRad(double deg) => deg * Math.PI / 180.0;
+    private static double ToDeg(double rad) => rad * 180.0 / Math.PI;
 }
