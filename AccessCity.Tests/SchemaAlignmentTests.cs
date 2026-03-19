@@ -1,0 +1,65 @@
+using Npgsql;
+
+namespace AccessCity.Tests;
+
+public class SchemaAlignmentTests : IClassFixture<AccessCityApiFactory>
+{
+    private readonly AccessCityApiFactory _factory;
+
+    public SchemaAlignmentTests(AccessCityApiFactory factory)
+    {
+        _factory = factory;
+    }
+
+    [Fact]
+    public async Task Startup_Migrations_Create_RefreshToken_Table_And_Hazard_PhotoUrl()
+    {
+        using var client = _factory.CreateClient();
+
+        await using var connection = new NpgsqlConnection(_factory.ConnectionString);
+        await connection.OpenAsync();
+
+        Assert.True(await TableExistsAsync(connection, "refresh_token"));
+        Assert.True(await ColumnExistsAsync(connection, "refresh_token", "token"));
+        Assert.True(await ColumnExistsAsync(connection, "refresh_token", "user_id"));
+        Assert.True(await ColumnExistsAsync(connection, "refresh_token", "expires_at"));
+        Assert.True(await ColumnExistsAsync(connection, "refresh_token", "revoked"));
+
+        Assert.True(await TableExistsAsync(connection, "hazard_report"));
+        Assert.True(await ColumnExistsAsync(connection, "hazard_report", "photo_url"));
+    }
+
+    private static async Task<bool> TableExistsAsync(NpgsqlConnection connection, string tableName)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name = @tableName
+            );
+            """;
+        command.Parameters.AddWithValue("tableName", tableName);
+
+        return (bool)(await command.ExecuteScalarAsync() ?? false);
+    }
+
+    private static async Task<bool> ColumnExistsAsync(NpgsqlConnection connection, string tableName, string columnName)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = @tableName
+                  AND column_name = @columnName
+            );
+            """;
+        command.Parameters.AddWithValue("tableName", tableName);
+        command.Parameters.AddWithValue("columnName", columnName);
+
+        return (bool)(await command.ExecuteScalarAsync() ?? false);
+    }
+}

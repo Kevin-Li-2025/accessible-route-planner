@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using AccessCity.API.Data;
 using AccessCity.API.Services;
 using NetTopologySuite.Geometries;
+using Microsoft.EntityFrameworkCore;
 
 namespace AccessCity.API.Controllers
 {
@@ -15,12 +17,12 @@ namespace AccessCity.API.Controllers
     public class OfflineMapController : ControllerBase
     {
         private readonly ISpatialCacheService _spatialCache;
-        private readonly RoutingService _routingService;
+        private readonly AppDbContext _dbContext;
 
-        public OfflineMapController(ISpatialCacheService spatialCache, RoutingService routingService)
+        public OfflineMapController(ISpatialCacheService spatialCache, AppDbContext dbContext)
         {
             _spatialCache = spatialCache;
-            _routingService = routingService;
+            _dbContext = dbContext;
         }
 
         /// <summary>
@@ -32,11 +34,22 @@ namespace AccessCity.API.Controllers
         {
             var bounds = new Envelope(minLng, maxLng, minLat, maxLat);
             var hazards = await _spatialCache.GetHazardsInBoundsAsync(bounds);
+            var infrastructure = await _dbContext.InfrastructureAssets
+                .FromSqlInterpolated($"""
+                    SELECT *
+                    FROM infrastructure_assets
+                    WHERE ST_Intersects(
+                        "Geometry",
+                        ST_MakeEnvelope({minLng}, {minLat}, {maxLng}, {maxLat}, 4326))
+                    """)
+                .AsNoTracking()
+                .ToListAsync();
 
             return Ok(new
             {
                 Area = new { minLat, minLng, maxLat, maxLng },
                 Hazards = hazards,
+                Infrastructure = infrastructure,
                 Timestamp = DateTime.UtcNow,
                 Version = "1.0.0"
             });

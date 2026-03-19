@@ -31,3 +31,6 @@ web-build/
 # OS
 .DS_Store
 Thumbs.db
+
+# SQLTools settings ignore
+.vscode/settings.json
