@@ -13,6 +13,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Caching.Hybrid;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 EnvironmentBootstrap.LoadRepoRootDotEnv();
 
@@ -38,7 +40,11 @@ builder.Services.AddHybridCache(options =>
 });
 #pragma warning restore EXTEXP0018
 
-builder.Services.AddControllers()
+builder.Services.AddControllers(options =>
+    {
+        options.Filters.Add<AccessCity.API.Filters.OverpassExceptionFilter>();
+        options.Filters.Add<AccessCity.API.Filters.BadRequestExceptionFilter>();
+    })
     .AddJsonOptions(options =>
     {
         var factory = new NetTopologySuite.IO.Converters.GeoJsonConverterFactory();
@@ -111,7 +117,17 @@ builder.Services.AddRateLimiter(options =>
     });
 });
 
-builder.Services.AddHttpClient<AccessCity.API.Services.External.IOpenStreetMapClient, AccessCity.API.Services.External.OverpassApiClient>();
+builder.Services.AddHttpClient<AccessCity.API.Services.External.IOpenStreetMapClient, AccessCity.API.Services.External.OverpassApiClient>()
+    .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddHttpClient("Nominatim", c =>
+{
+    c.BaseAddress = new Uri("https://nominatim.openstreetmap.org/");
+    c.DefaultRequestHeaders.Add("User-Agent", "AccessCity-App/1.0");
+    c.Timeout = TimeSpan.FromSeconds(10);
+});
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<AppDbContext>("db", tags: new[] { "ready" });
+builder.Services.AddScoped<IRealHazardDataService, RealHazardDataService>();
 builder.Services.AddHttpClient<AccessCity.API.Services.External.IUkPoliceDataClient, AccessCity.API.Services.External.UkPoliceDataClient>();
 builder.Services.AddHttpClient<AccessCity.API.Services.External.ISafeHavenPlacesClient, AccessCity.API.Services.External.GooglePlacesClient>();
 builder.Services.AddHttpClient<AccessCity.API.Services.External.ILiveHazardClient, AccessCity.API.Services.External.OpenWeatherClient>();
@@ -148,6 +164,8 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();
 app.MapControllers();
+app.MapHealthChecks("/health");
+app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = check => check.Tags.Contains("ready") });
 
 app.Run();
 

@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using AccessCity.API.Models.Identity;
 using AccessCity.API.Services.Security;
@@ -9,6 +10,7 @@ namespace AccessCity.API.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
+    [EnableRateLimiting("auth")]
     public class AuthController : ControllerBase
     {
         private readonly UserManager<AccessCityUser> _userManager;
@@ -156,9 +158,10 @@ namespace AccessCity.API.Controllers
 
             var token = await _userManager.GeneratePasswordResetTokenAsync(user);
 
-            Console.WriteLine("----------------------------------");
-            Console.WriteLine($"RESET TOKEN for {request.Email}: {token}");
-            Console.WriteLine("----------------------------------");
+            if (string.Equals(Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"), "Development", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"RESET TOKEN for {request.Email}: {token}");
+            }
 
             return Ok(new { message = "If your email is registered, you will receive a reset token." });
         }

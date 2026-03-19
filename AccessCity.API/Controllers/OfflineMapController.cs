@@ -18,11 +18,13 @@ namespace AccessCity.API.Controllers
     {
         private readonly ISpatialCacheService _spatialCache;
         private readonly AppDbContext _dbContext;
+        private readonly IRealHazardDataService _realHazardData;
 
-        public OfflineMapController(ISpatialCacheService spatialCache, AppDbContext dbContext)
+        public OfflineMapController(ISpatialCacheService spatialCache, AppDbContext dbContext, IRealHazardDataService realHazardData)
         {
             _spatialCache = spatialCache;
             _dbContext = dbContext;
+            _realHazardData = realHazardData;
         }
 
         /// <summary>
@@ -32,8 +34,19 @@ namespace AccessCity.API.Controllers
         [HttpGet("bundle")]
         public async Task<IActionResult> GetMapBundle([FromQuery] double minLat, [FromQuery] double minLng, [FromQuery] double maxLat, [FromQuery] double maxLng)
         {
+            if (minLat < -90 || minLat > 90 || maxLat < -90 || maxLat > 90)
+                return BadRequest(new { error = "Latitude values must be between -90 and 90." });
+            if (minLng < -180 || minLng > 180 || maxLng < -180 || maxLng > 180)
+                return BadRequest(new { error = "Longitude values must be between -180 and 180." });
+            if (minLat > maxLat || minLng > maxLng)
+                return BadRequest(new { error = "minLat must be <= maxLat and minLng must be <= maxLng." });
+
             var bounds = new Envelope(minLng, maxLng, minLat, maxLat);
             var hazards = await _spatialCache.GetHazardsInBoundsAsync(bounds);
+            
+            // Optionally supplement with real-time data if needed, or keep them separate.
+            // For now, we'll return the cached hazards which should include real-time ones if the cache is updated.
+            
             var infrastructure = await _dbContext.InfrastructureAssets
                 .FromSqlInterpolated($"""
                     SELECT *

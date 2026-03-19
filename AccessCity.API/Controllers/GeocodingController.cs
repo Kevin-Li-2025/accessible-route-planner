@@ -7,12 +7,11 @@ namespace AccessCity.API.Controllers
     [Route("api/[controller]")]
     public class GeocodingController : ControllerBase
     {
-        private readonly HttpClient _httpClient;
+        private readonly IHttpClientFactory _httpClientFactory;
 
-        public GeocodingController(HttpClient httpClient)
+        public GeocodingController(IHttpClientFactory httpClientFactory)
         {
-            _httpClient = httpClient;
-            _httpClient.DefaultRequestHeaders.Add("User-Agent", "AccessCity-App/1.0");
+            _httpClientFactory = httpClientFactory;
         }
 
         [HttpGet("search")]
@@ -21,38 +20,43 @@ namespace AccessCity.API.Controllers
             if (string.IsNullOrWhiteSpace(query))
                 return BadRequest("Query is required");
 
-            var url = $"https://nominatim.openstreetmap.org/search?q={Uri.EscapeDataString(query)}&format=json&limit=5";
-            
-            try 
+            var client = _httpClientFactory.CreateClient("Nominatim");
+            var url = $"search?q={Uri.EscapeDataString(query)}&format=json&limit=5";
+
+            try
             {
-                var response = await _httpClient.GetAsync(url);
+                var response = await client.GetAsync(url);
                 if (!response.IsSuccessStatusCode)
                 {
                     var error = await response.Content.ReadAsStringAsync();
-                    return StatusCode((int)response.StatusCode, $"Nominatim error: {error}");
+                    return StatusCode((int)response.StatusCode, new { error = $"Nominatim error: {error}" });
                 }
                 var results = await response.Content.ReadFromJsonAsync<List<NominatimResult>>();
                 return Ok(results);
             }
             catch (Exception ex)
             {
-                return StatusCode(500, $"Geocoding error: {ex.Message}");
+                return StatusCode(500, new { error = $"Geocoding error: {ex.Message}" });
             }
         }
 
         [HttpGet("reverse")]
         public async Task<IActionResult> Reverse([FromQuery] double lat, [FromQuery] double lon)
         {
-            var url = $"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json";
-            
-            try 
+            if (lat < -90 || lat > 90 || lon < -180 || lon > 180)
+                return BadRequest(new { error = "Invalid WGS-84 coordinates (lat in [-90,90], lon in [-180,180])." });
+
+            var client = _httpClientFactory.CreateClient("Nominatim");
+            var url = $"reverse?lat={lat}&lon={lon}&format=json";
+
+            try
             {
-                var result = await _httpClient.GetFromJsonAsync<NominatimResult>(url);
+                var result = await client.GetFromJsonAsync<NominatimResult>(url);
                 return Ok(result);
             }
             catch (Exception ex)
             {
-                return StatusCode(500, $"Reverse geocoding error: {ex.Message}");
+                return StatusCode(500, new { error = $"Reverse geocoding error: {ex.Message}" });
             }
         }
     }

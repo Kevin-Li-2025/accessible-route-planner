@@ -1,8 +1,8 @@
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using AccessCity.API.Data;
 using AccessCity.API.Models;
 using AccessCity.API.Services;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 
 namespace AccessCity.API.Controllers;
 
@@ -12,11 +12,13 @@ public class HazardsController : ControllerBase
 {
     private readonly AppDbContext _dbContext;
     private readonly ISpatialCacheService _spatialCache;
+    private readonly IRealHazardDataService _realHazardData;
 
-    public HazardsController(AppDbContext dbContext, ISpatialCacheService spatialCache)
+    public HazardsController(AppDbContext dbContext, ISpatialCacheService spatialCache, IRealHazardDataService realHazardData)
     {
         _dbContext = dbContext;
         _spatialCache = spatialCache;
+        _realHazardData = realHazardData;
     }
 
     [HttpGet]
@@ -60,10 +62,19 @@ public class HazardsController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<HazardReport>> ReportHazard([FromBody] HazardReport report)
     {
-        if (report.Location is null)
-        {
-            return BadRequest(new { error = "Hazard location is required." });
-        }
+        if (report?.Location == null)
+            return BadRequest(new { error = "Location is required." });
+        
+        if (string.IsNullOrWhiteSpace(report.Type))
+            return BadRequest(new { error = "Type is required." });
+        
+        if (string.IsNullOrWhiteSpace(report.Description))
+            return BadRequest(new { error = "Description is required." });
+
+        var x = report.Location.X;
+        var y = report.Location.Y;
+        if (x < -180 || x > 180 || y < -90 || y > 90)
+            return BadRequest(new { error = "Location must be valid WGS-84 coordinates (lon in [-180,180], lat in [-90,90])." });
 
         report.Id = report.Id == Guid.Empty ? Guid.NewGuid() : report.Id;
         report.ReportedAt = DateTime.UtcNow;
@@ -71,6 +82,12 @@ public class HazardsController : ControllerBase
         report.Source = string.IsNullOrWhiteSpace(report.Source) ? "user" : report.Source;
         report.Location.SRID = 4326;
         report.ReporterUserId ??= User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        report.PhotoUrl ??= string.Empty;
+        
+        report.Type = report.Type.Trim();
+        report.Description = report.Description.Trim();
+        if (report.Type.Length > 50) report.Type = report.Type[..50];
+        if (report.Description.Length > 500) report.Description = report.Description[..500];
 
         _dbContext.Hazards.Add(report);
         await _dbContext.SaveChangesAsync();
@@ -91,14 +108,14 @@ public class HazardsController : ControllerBase
     {
         var hazard = await _dbContext.Hazards.SingleOrDefaultAsync(h => h.Id == id);
         if (hazard is null)
-        {
             return NotFound();
-        }
 
         hazard.Status = status;
         await _dbContext.SaveChangesAsync();
         await _spatialCache.UpdateHazardCacheAsync(hazard);
 
         return NoContent();
+    }
+}
     }
 }

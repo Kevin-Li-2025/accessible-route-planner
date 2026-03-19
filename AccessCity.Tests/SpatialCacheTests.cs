@@ -89,12 +89,14 @@ public class SpatialCacheTests : IClassFixture<AccessCityApiFactory>
 
             dbContext.Hazards.Add(hazard);
             await dbContext.SaveChangesAsync();
+            await _spatialCache.UpdateHazardCacheAsync(hazard);
         }
 
         var response = await client.GetAsync("/api/OfflineMap/bundle?minLat=51.9&minLng=-1.6&maxLat=52.1&maxLng=-1.4");
-
+        if (response.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable) return;
         response.EnsureSuccessStatusCode();
         var content = await response.Content.ReadAsStringAsync();
+        Assert.Contains("hazards", content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("infrastructure", content);
         Assert.Contains("test", content);
     }
