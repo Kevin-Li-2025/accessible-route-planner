@@ -10,6 +10,8 @@ namespace AccessCity.API.Services.External
     /// Service for fetching precise street accessibility and physical hazard data
     /// (e.g. stairs, tactile paving, cobblestone paths, lighting).
     /// </summary>
+    public interface IOpenStreetMapClient
+    {
         /// <summary>Fetches real OSM features that represent hazards/barriers: barriers, steps, poor surface.</summary>
         Task<List<OverpassElement>?> GetHazardLikeDataAsync(double minLat, double minLng, double maxLat, double maxLng);
     }

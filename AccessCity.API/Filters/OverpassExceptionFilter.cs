@@ -38,5 +38,3 @@ public class OverpassExceptionFilter : IExceptionFilter
         context.ExceptionHandled = true;
     }
 }
-    }
-}
