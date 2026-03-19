@@ -14,6 +14,23 @@ AccessCity follows a modular monolithic pattern, utilizing a .NET and React Nati
 
 ---
 
+## 📐 Mathematical Foundation: Cost Function
+
+The routing engine optimizes a multi-objective cost function $C$, balancing accessibility, safety, and travel distance based on the user-selected **Safety Weight** ($\alpha$).
+
+$$ C = (d \cdot (1 - \alpha)) + (\bar{R} \cdot \alpha \cdot w_1) + (P \cdot \alpha \cdot w_2) $$
+
+Where:
+- **$d$**: Normalized travel distance (km).
+- **$\alpha$**: User safety preference $[0, 1]$.
+- **$\bar{R}$**: Cumulative AI Predictive Risk (derived from crime, weather, and time).
+- **$P$**: PostGIS Obstacle Penalty (stairs, barriers, surface quality).
+- **$w_1, w_2$**: Heuristic importance coefficients (tuned to $5.0$ and $3.0$ respectively).
+
+This function ensures that as $\alpha$ increases, the engine exponentially penalizes inaccessible infrastructure and high-risk zones, triggering detours when the safety benefit outweighs the distance cost.
+
+---
+
 ## 🔬 Quantitative Evaluation
 
 We evaluated the routing engine across 10 diverse urban routes in Birmingham, measuring the sensitivity of the **Safety Score** and the resulting **Travel Cost Tradeoff**.
