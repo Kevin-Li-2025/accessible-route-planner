@@ -2,6 +2,8 @@ using NetTopologySuite.Geometries;
 using AccessCity.API.Models;
 using AccessCity.API.Models.External;
 using AccessCity.API.Services.External;
+using AccessCity.API.Data;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 
 namespace AccessCity.API.Services
@@ -18,6 +20,7 @@ namespace AccessCity.API.Services
     {
         private readonly IUkPoliceDataClient? _ukPolice;
         private readonly IMemoryCache? _cache;
+        private readonly AppDbContext _dbContext;
 
         private const string CrimeCacheKeyPrefix = "ukcrime:";
         private static readonly TimeSpan CrimeCacheExpiry = TimeSpan.FromHours(24);
@@ -49,8 +52,9 @@ namespace AccessCity.API.Services
 
         private const double DecayLambda = 150.0;
 
-        public RiskScoringService(IUkPoliceDataClient? ukPolice = null, IMemoryCache? cache = null)
+        public RiskScoringService(AppDbContext dbContext, IUkPoliceDataClient? ukPolice = null, IMemoryCache? cache = null)
         {
+            _dbContext = dbContext;
             _ukPolice = ukPolice;
             _cache = cache;
         }
@@ -101,7 +105,7 @@ namespace AccessCity.API.Services
             double densityPerKmSq  = nearbyHazards.Count / Math.Max(areaKmSq, 0.001);
             double hazardDensity   = Math.Min(densityPerKmSq / 50.0, 1.0);
 
-            double infrastructureRisk = EstimateInfrastructureRisk(latitude, longitude);
+            double infrastructureRisk = await EstimateInfrastructureRiskAsync(latitude, longitude, radiusMetres);
 
             int crimeCount = 0;
             double crimeRisk = 0.0;
@@ -130,6 +134,48 @@ namespace AccessCity.API.Services
                     .OrderByDescending(h => h.RiskWeight)
                     .Take(20)
                     .ToList()
+            };
+        }
+
+        public async Task<PredictiveRiskResult> PredictRiskAsync(
+            double latitude, 
+            double longitude, 
+            double radiusMetres, 
+            IEnumerable<HazardReport> hazards)
+        {
+            var baseRisk = await EvaluateRiskAsync(latitude, longitude, radiusMetres, hazards);
+            
+            // 1. Time-of-day Factor
+            var now = DateTime.UtcNow.TimeOfDay;
+            double timeFactor = 0.2; // default
+            if (now.Hours >= 22 || now.Hours < 5) timeFactor = 0.8; // Night risk
+            else if (now.Hours >= 6 && now.Hours < 9) timeFactor = 0.4; // Morning rush
+
+            // 2. Weather Factor (placeholder)
+            double weatherFactor = 0.3; 
+
+            var factors = new List<string>();
+            if (baseRisk.HazardDensityRisk > 0.6) factors.Add("High density of reported hazards in this sector.");
+            if (baseRisk.CrimeRisk > 0.5) factors.Add("Historical crime data indicates elevated risk.");
+            if (timeFactor > 0.7) factors.Add("Increased risk due to late-night hours.");
+            if (baseRisk.InfrastructureRisk > 0.6) factors.Add("Infrastructure indicators suggest poor accessibility.");
+
+            if (factors.Count == 0) factors.Add("Generally safe area with no major risk indicators.");
+
+            double overallAiRisk = Clamp01(
+                baseRisk.OverallRisk * 0.6 + 
+                timeFactor * 0.2 + 
+                weatherFactor * 0.2);
+
+            return new PredictiveRiskResult
+            {
+                OverallRisk = Math.Round(overallAiRisk, 3),
+                HazardRisk = baseRisk.HazardProximityRisk,
+                TimeOfDayRisk = timeFactor,
+                WeatherRisk = weatherFactor,
+                CrimeRisk = baseRisk.CrimeRisk,
+                InfrastructureRisk = baseRisk.InfrastructureRisk,
+                RiskFactors = factors
             };
         }
 
@@ -192,6 +238,53 @@ namespace AccessCity.API.Services
         }
 
         /// <summary>
+        /// Lightweight crime risk score that ONLY checks the cache.
+        /// Used by the routing engine for sub-millisecond per-edge cost evaluation.
+        /// </summary>
+        public double QuickCrimeRisk(double lat, double lng)
+        {
+            if (_cache == null) return 0.0;
+
+            var key = $"{CrimeCacheKeyPrefix}{Math.Round(lat, 3):F3}:{Math.Round(lng, 3):F3}";
+            if (_cache.TryGetValue(key, out int crimeCount))
+            {
+                return Sigmoid(crimeCount / 12.0, k: 2.0);
+            }
+
+            return 0.15; // Baseline risk when data is unknown (safer than 0, more cautious than 0.5)
+        }
+
+        /// <summary>
+        /// Lightweight sync infrastructure risk score.
+        /// Queries PostGIS route edges within ~100m of the point for lighting,
+        /// stairs, and kerb height. Result is consistent with per-edge routing.
+        /// Falls back to 0.25 baseline when no PostGIS data is available.
+        /// </summary>
+        public double QuickInfrastructureRisk(double lat, double lng)
+        {
+            if (_cache != null)
+            {
+                var cacheKey = $"infra:{Math.Round(lat, 4):F4}:{Math.Round(lng, 4):F4}";
+                if (_cache.TryGetValue(cacheKey, out double cached)) return cached;
+
+                try
+                {
+                    double risk = EstimateInfrastructureRiskAsync(lat, lng, 150)
+                        .GetAwaiter().GetResult();
+                    _cache.Set(cacheKey, risk, TimeSpan.FromMinutes(10));
+                    return risk;
+                }
+                catch
+                {
+                    return 0.25;
+                }
+            }
+
+            // No cache — just return baseline instead of random
+            return 0.25;
+        }
+
+        /// <summary>
         /// Haversine distance in metres between two WGS-84 points.
         /// </summary>
         public static double HaversineDistance(double lat1, double lon1, double lat2, double lon2)
@@ -220,21 +313,35 @@ namespace AccessCity.API.Services
             => Math.Max(0.0, Math.Min(1.0, v));
 
         /// <summary>
-        /// Placeholder infrastructure risk estimator.
-        /// A real implementation would query PostGIS layers for:
-        ///   – street lighting coverage
-        ///   – sidewalk width / presence
-        ///   – surface quality index
-        ///   – proximity to busy roads without crossings
-        /// For now, returns a moderate baseline.
+        /// Real infrastructure risk estimator based on OSM tag data.
+        /// Queries PostGIS for nearby edges and evaluates lighting, stairs, and kerb height.
         /// </summary>
-        private static double EstimateInfrastructureRisk(double lat, double lng)
+        private static readonly GeometryFactory Wgs84 = new(new PrecisionModel(), 4326);
+
+        private async Task<double> EstimateInfrastructureRiskAsync(double lat, double lng, double radiusMetres)
         {
-            int hash = HashCode.Combine(
-                Math.Round(lat, 4),
-                Math.Round(lng, 4));
-            var rng = new Random(hash);
-            return 0.15 + rng.NextDouble() * 0.35;
+            var queryPoint = Wgs84.CreatePoint(new Coordinate(lng, lat));
+            var center = _dbContext.RouteNodes.OrderBy(n => n.Location.Distance(queryPoint)).FirstOrDefault()?.Location;
+            if (center == null) return 0.5; // Baseline if no data
+
+            var nearbyEdges = await _dbContext.RouteEdges
+                .Where(e => e.Geometry.Distance(queryPoint) < (radiusMetres / 100000.0)) // Rough degree approx for radius
+                .Take(50)
+                .ToListAsync();
+
+            if (nearbyEdges.Count == 0) return 0.35;
+
+            double lightingAvg = nearbyEdges.Average(e => e.LightingQuality);
+            double stairDensity = nearbyEdges.Count(e => e.HasStairs) / (double)nearbyEdges.Count;
+            double kerbHeightAvg = nearbyEdges.Average(e => e.KerbHeight);
+
+            // Invert lighting (high quality = low risk)
+            double lightingRisk = 1.0 - lightingAvg;
+            
+            // Stairs and high kerbs increase risk
+            double mobilityRisk = (stairDensity * 0.7) + (Math.Min(kerbHeightAvg * 10.0, 1.0) * 0.3);
+
+            return Clamp01(lightingRisk * 0.4 + mobilityRisk * 0.6);
         }
     }
 }

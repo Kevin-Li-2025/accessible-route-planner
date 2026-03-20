@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="AccessCity.Tests">
+  <node id="1001" lat="52.4862" lon="-1.8904" />
+  <node id="1002" lat="52.4862" lon="-1.8899">
+    <tag k="highway" v="crossing" />
+    <tag k="crossing" v="marked" />
+  </node>
+  <node id="1003" lat="52.4862" lon="-1.8894" />
+  <node id="1004" lat="52.48645" lon="-1.8899">
+    <tag k="amenity" v="toilets" />
+    <tag k="wheelchair" v="yes" />
+    <tag k="name" v="Accessible Toilets" />
+  </node>
+  <node id="1005" lat="52.4860" lon="-1.8899">
+    <tag k="highway" v="elevator" />
+    <tag k="wheelchair" v="yes" />
+    <tag k="name" v="Lift Access" />
+  </node>
+  <way id="2001">
+    <nd ref="1001" />
+    <nd ref="1002" />
+    <nd ref="1003" />
+    <tag k="highway" v="footway" />
+    <tag k="surface" v="asphalt" />
+    <tag k="lit" v="yes" />
+    <tag k="name" v="Accessible Walkway" />
+  </way>
+  <way id="2002">
+    <nd ref="1002" />
+    <nd ref="1004" />
+    <tag k="highway" v="footway" />
+    <tag k="surface" v="paving_stones" />
+    <tag k="lit" v="yes" />
+    <tag k="footway" v="crossing" />
+  </way>
+</osm>

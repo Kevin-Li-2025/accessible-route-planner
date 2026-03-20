@@ -1,8 +1,9 @@
-using NetTopologySuite.Geometries;
-using NetTopologySuite.Index.Strtree;
-using NetTopologySuite.Index.Quadtree;
-using Microsoft.Extensions.Caching.Hybrid;
 using AccessCity.API.Models;
+using AccessCity.API.Data;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Hybrid;
+using NetTopologySuite.Geometries;
+using NetTopologySuite.Index.Quadtree;
 
 namespace AccessCity.API.Services
 {
@@ -20,19 +21,25 @@ namespace AccessCity.API.Services
 
     public class SpatialCacheService : ISpatialCacheService
     {
+        private readonly IServiceScopeFactory _scopeFactory;
         private readonly HybridCache _hybridCache;
         private readonly ILogger<SpatialCacheService> _logger;
-        private readonly Quadtree<HazardReport> _spatialIndex = new();
+        private readonly Dictionary<Guid, HazardReport> _hazards = new();
+        private Quadtree<HazardReport> _spatialIndex = new();
         private readonly ReaderWriterLockSlim _indexLock = new();
         private const string CacheKeyPrefix = "spatial:hazard:";
 
-        public SpatialCacheService(HybridCache hybridCache, ILogger<SpatialCacheService> logger)
+        public SpatialCacheService(
+            IServiceScopeFactory scopeFactory,
+            HybridCache hybridCache,
+            ILogger<SpatialCacheService> logger)
         {
+            _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
             _hybridCache = hybridCache ?? throw new ArgumentNullException(nameof(hybridCache));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        public Task<IReadOnlyList<HazardReport>> GetHazardsInBoundsAsync(Envelope bounds)
+        public async Task<IReadOnlyList<HazardReport>> GetHazardsInBoundsAsync(Envelope bounds)
         {
             _indexLock.EnterReadLock();
             try
@@ -46,17 +53,39 @@ namespace AccessCity.API.Services
                     _logger.LogWarning("Spatial query execution reached warning threshold: {Elapsed}ms for bounds {Bounds}.", stopwatch.ElapsedMilliseconds, bounds);
                 }
 
-                return Task.FromResult(results);
+                if (results.Count > 0)
+                {
+                    return results;
+                }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to query spatial index.");
-                return Task.FromResult<IReadOnlyList<HazardReport>>(new List<HazardReport>());
             }
             finally
             {
                 _indexLock.ExitReadLock();
             }
+
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var databaseResults = await dbContext.Hazards
+                .FromSqlInterpolated($"""
+                    SELECT *
+                    FROM hazard_report
+                    WHERE ST_Intersects(
+                        geom,
+                        ST_MakeEnvelope({bounds.MinX}, {bounds.MinY}, {bounds.MaxX}, {bounds.MaxY}, 4326))
+                    """)
+                .AsNoTracking()
+                .ToListAsync();
+
+            if (databaseResults.Count > 0)
+            {
+                await BulkUpdateHazardsAsync(databaseResults);
+            }
+
+            return databaseResults;
         }
 
         public async Task UpdateHazardCacheAsync(HazardReport hazard)
@@ -67,7 +96,8 @@ namespace AccessCity.API.Services
             _indexLock.EnterWriteLock();
             try
             {
-                _spatialIndex.Insert(hazard.Location.EnvelopeInternal, hazard);
+                _hazards[hazard.Id] = hazard;
+                RebuildIndex();
             }
             finally
             {
@@ -90,12 +120,22 @@ namespace AccessCity.API.Services
             {
                 foreach (var hazard in hazardList)
                 {
-                    _spatialIndex.Insert(hazard.Location.EnvelopeInternal, hazard);
+                    _hazards[hazard.Id] = hazard;
                 }
+                RebuildIndex();
             }
             finally
             {
                 _indexLock.ExitWriteLock();
+            }
+        }
+
+        private void RebuildIndex()
+        {
+            _spatialIndex = new Quadtree<HazardReport>();
+            foreach (var hazard in _hazards.Values.Where(h => h.Location is not null))
+            {
+                _spatialIndex.Insert(hazard.Location.EnvelopeInternal, hazard);
             }
         }
     }

@@ -20,6 +20,11 @@ namespace AccessCity.API.Models
         /// Default 0.5 gives balanced routing.
         /// </summary>
         public double SafetyWeight { get; set; } = 0.5;
+
+        /// <summary>
+        /// User profile for routing (e.g. "manual-wheelchair", "power-wheelchair", "stroller", "standard").
+        /// </summary>
+        public string Profile { get; set; } = "standard";
     }
 
     /// <summary>Full route response returned to the client.</summary>
@@ -80,6 +85,18 @@ namespace AccessCity.API.Models
         public List<NearbyHazard> NearbyHazards { get; set; } = new();
     }
 
+    /// <summary>AI-driven predictive risk breakdown.</summary>
+    public class PredictiveRiskResult
+    {
+        public double OverallRisk { get; set; }
+        public double HazardRisk { get; set; }
+        public double TimeOfDayRisk { get; set; }
+        public double WeatherRisk { get; set; }
+        public double CrimeRisk { get; set; }
+        public double InfrastructureRisk { get; set; }
+        public List<string> RiskFactors { get; set; } = new();
+    }
+
     /// <summary>A nearby hazard surfaced in the risk response.</summary>
     public class NearbyHazard
     {
@@ -125,5 +142,15 @@ namespace AccessCity.API.Models
 
         /// <summary>True if the segment has a steep gradient.</summary>
         public bool IsSteep { get; set; }
+
+        public double KerbHeight { get; set; }
+        public string? Smoothness { get; set; }
+        public double? WidthMetres { get; set; }
+        public bool HasTactilePaving { get; set; }
+        public bool HasBarrier { get; set; }
+        public string? Access { get; set; }
+
+        /// <summary>Actual road shape (lon/lat) for this segment. When set, used so the route follows roads instead of straight lines.</summary>
+        public Coordinate[]? Geometry { get; set; }
     }
 }

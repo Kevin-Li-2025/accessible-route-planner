@@ -22,8 +22,36 @@ CREATE TABLE IF NOT EXISTS road_closure (
     start_time              TIMESTAMPTZ NOT NULL,
     end_time                TIMESTAMPTZ,
     created_by_user_id      UUID REFERENCES app_user(id) ON DELETE SET NULL,
-    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_road_closure_geom 
 ON road_closure USING GIST (affected_geom);
+
+CREATE TABLE IF NOT EXISTS emergency_alert (
+    id                      BIGSERIAL PRIMARY KEY,
+    title                   TEXT NOT NULL,
+    message                 TEXT NOT NULL,
+    severity                alert_severity NOT NULL DEFAULT 'warning',
+    affected_geom           geometry(Geometry, 4326),
+    starts_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ends_at                 TIMESTAMPTZ,
+    created_by_user_id      UUID REFERENCES app_user(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_emergency_alert_geom 
+ON emergency_alert USING GIST (affected_geom);
+
+CREATE TABLE IF NOT EXISTS emergency_location (
+    id                      BIGSERIAL PRIMARY KEY,
+    name                    TEXT NOT NULL,
+    location_type           TEXT NOT NULL, -- shelter, aid_point
+    geom                    geometry(Point, 4326) NOT NULL,
+    is_open                 BOOLEAN NOT NULL DEFAULT TRUE,
+    notes                   TEXT,
+    created_by_user_id      UUID REFERENCES app_user(id) ON DELETE SET NULL,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_emergency_location_geom 
+ON emergency_location USING GIST (geom);

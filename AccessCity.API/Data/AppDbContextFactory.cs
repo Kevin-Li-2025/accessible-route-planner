@@ -1,26 +1,35 @@
+using AccessCity.API.Configuration;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
-using Microsoft.Extensions.Configuration;
-using System.IO;
 
-namespace AccessCity.API.Data
+namespace AccessCity.API.Data;
+
+public sealed class AppDbContextFactory : IDesignTimeDbContextFactory<AppDbContext>
 {
-    public class AppDbContextFactory : IDesignTimeDbContextFactory<AppDbContext>
+    public AppDbContext CreateDbContext(string[] args)
     {
-        public AppDbContext CreateDbContext(string[] args)
+        EnvironmentBootstrap.LoadRepoRootDotEnv();
+
+        var configuration = new ConfigurationBuilder()
+            .SetBasePath(Directory.GetCurrentDirectory())
+            .AddJsonFile("appsettings.json", optional: true)
+            .AddJsonFile("appsettings.Development.json", optional: true)
+            .AddEnvironmentVariables()
+            .Build();
+
+        var connectionString = PostgresConnectionStringResolver.Resolve(configuration);
+        var historySchema = PostgresConnectionStringResolver.GetPrimarySearchPath(connectionString);
+
+        var optionsBuilder = new DbContextOptionsBuilder<AppDbContext>();
+        optionsBuilder.UseNpgsql(connectionString, npgsql =>
         {
-            var configuration = new ConfigurationBuilder()
-                .SetBasePath(Directory.GetCurrentDirectory())
-                .AddJsonFile("appsettings.json")
-                .AddEnvironmentVariables()
-                .Build();
+            npgsql.UseNetTopologySuite();
+            if (!string.IsNullOrWhiteSpace(historySchema))
+            {
+                npgsql.MigrationsHistoryTable("__EFMigrationsHistory", historySchema);
+            }
+        });
 
-            var builder = new DbContextOptionsBuilder<AppDbContext>();
-            var connectionString = configuration.GetConnectionString("DefaultConnection");
-
-            builder.UseNpgsql(connectionString, x => x.UseNetTopologySuite());
-
-            return new AppDbContext(builder.Options);
-        }
+        return new AppDbContext(optionsBuilder.Options);
     }
 }

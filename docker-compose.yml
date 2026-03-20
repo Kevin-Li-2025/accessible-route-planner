@@ -12,18 +12,29 @@ services:
       Jwt__Issuer: AccessCity.API
       Jwt__Audience: AccessCity.App
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+    mem_limit: 4g
+    volumes:
+      - ./AccessCity.API/london.osm:/app/london.osm:ro
+      - ./AccessCity.API/birmingham.osm:/app/birmingham.osm:ro
 
   db:
-    image: postgis/postgis:15-3.3
+    image: postgis/postgis:16-3.4
+    container_name: accesscity_dev_db
     ports:
       - "5432:5432"
     environment:
       POSTGRES_USER: accesscity
-      POSTGRES_PASSWORD: AccessCity_Dev_2026!
-      POSTGRES_DB: accesscity
+      POSTGRES_PASSWORD: accesscity123
+      POSTGRES_DB: accesscitydb
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d accesscitydb -U accesscity"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres_data:

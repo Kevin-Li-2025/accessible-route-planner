@@ -3,6 +3,8 @@ using AccessCity.API.Models.External;
 using AccessCity.API.Services.External;
 using Microsoft.Extensions.Caching.Memory;
 using NetTopologySuite.Geometries;
+using System.Linq;
+using Microsoft.EntityFrameworkCore;
 
 namespace AccessCity.API.Services;
 
@@ -21,6 +23,7 @@ public class RealHazardDataService : IRealHazardDataService
 {
     private readonly IOpenStreetMapClient _openStreetMapClient;
     private readonly IMemoryCache _cache;
+    private readonly Data.AppDbContext _dbContext;
 
     private const string CacheKeyPrefix = "real_hazards:";
     private static readonly TimeSpan CacheExpiration = TimeSpan.FromMinutes(2);
@@ -31,10 +34,11 @@ public class RealHazardDataService : IRealHazardDataService
     private const double DefaultMaxLat = 52.52;
     private const double DefaultMaxLng = -1.88;
 
-    public RealHazardDataService(IOpenStreetMapClient openStreetMapClient, IMemoryCache cache)
+    public RealHazardDataService(IOpenStreetMapClient openStreetMapClient, IMemoryCache cache, Data.AppDbContext dbContext)
     {
         _openStreetMapClient = openStreetMapClient;
         _cache = cache;
+        _dbContext = dbContext;
     }
 
     public async Task<List<HazardReport>> GetActiveHazardsAsync(double? minLat = null, double? minLng = null, double? maxLat = null, double? maxLng = null)
@@ -44,13 +48,38 @@ public class RealHazardDataService : IRealHazardDataService
         var maxLatVal = maxLat ?? DefaultMaxLat;
         var maxLngVal = maxLng ?? DefaultMaxLng;
 
+        if (minLatVal < -90 || minLatVal > 90 || maxLatVal < -90 || maxLatVal > 90)
+            throw new ArgumentException("Latitude values must be between -90 and 90.");
+        if (minLngVal < -180 || minLngVal > 180 || maxLngVal < -180 || maxLngVal > 180)
+            throw new ArgumentException("Longitude values must be between -180 and 180.");
+        if (minLatVal > maxLatVal)
+            throw new ArgumentException("minLat must be less than or equal to maxLat.");
+        if (minLngVal > maxLngVal)
+            throw new ArgumentException("minLng must be less than or equal to maxLng.");
+
         var cacheKey = $"{CacheKeyPrefix}{minLatVal:F4}_{minLngVal:F4}_{maxLatVal:F4}_{maxLngVal:F4}";
 
         if (_cache.TryGetValue(cacheKey, out List<HazardReport>? cached))
             return cached ?? new List<HazardReport>();
 
+        // 1. Fetch from External OSM
         var list = await FetchAndMapHazardsAsync(minLatVal, minLngVal, maxLatVal, maxLngVal);
 
+        // 2. Fetch from Local Database
+        try 
+        {
+            var dbHazards = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.ToListAsync(
+                _dbContext.Hazards.Where(h => 
+                    h.Location.X >= minLngVal && h.Location.X <= maxLngVal && 
+                    h.Location.Y >= minLatVal && h.Location.Y <= maxLatVal));
+            
+            list.AddRange(dbHazards);
+        }
+        catch (Exception ex)
+        {
+            // Fail gracefully if DB is down, still return OSM data
+            Console.WriteLine($"[DB ERROR] Failed to fetch hazards: {ex.Message}");
+        }
         _cache.Set(cacheKey, list, CacheExpiration);
 
         return list;

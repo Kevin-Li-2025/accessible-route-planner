@@ -27,11 +27,11 @@ namespace AccessCity.API.Services
         // ──── Learned model weights (logistic regression coefficients) ────
         // These weights are derived from urban pedestrian safety research:
         //   Ewing & Dumbaugh 2009, Loukaitou-Sideris 2006, WHO pedestrian safety reports
-        private const double W_Hazard       = 0.30;  // Reported hazard proximity + density
-        private const double W_TimeOfDay    = 0.20;  // Circadian risk (darkness = higher risk)
-        private const double W_Weather      = 0.15;  // Weather conditions
-        private const double W_Crime        = 0.20;  // Historical street crime
-        private const double W_Infra        = 0.15;  // Infrastructure quality
+        private const double W_Hazard       = 0.50;  // Increased from 0.30 - Accessibility is primary
+        private const double W_TimeOfDay    = 0.10;  // Reduced from 0.20
+        private const double W_Weather      = 0.10;  // Reduced from 0.15
+        private const double W_Crime        = 0.15;  // Slightly reduced
+        private const double W_Infra        = 0.15;  // Maintained
 
         private const string WeatherCacheKey = "weather:";
         private static readonly TimeSpan WeatherCacheExpiry = TimeSpan.FromMinutes(15);
@@ -64,11 +64,11 @@ namespace AccessCity.API.Services
             // Factor 3: Weather risk
             double weatherRisk = await GetWeatherRiskAsync(lat, lon);
 
-            // Factor 4: Crime risk (use base service's existing crime integration)
-            double crimeRisk = EstimateCrimeRisk(lat, lon);
+            // Factor 4: Crime risk — uses cached UK Police street crime data
+            double crimeRisk = _baseRisk.QuickCrimeRisk(lat, lon);
 
-            // Factor 5: Infrastructure quality
-            double infraRisk = EstimateInfrastructureRisk(lat, lon);
+            // Factor 5: Infrastructure quality — uses real PostGIS route edge data
+            double infraRisk = _baseRisk.QuickInfrastructureRisk(lat, lon);
 
             // ──── Logistic Regression Combination ────
             // z = w₁·x₁ + w₂·x₂ + ... + wₙ·xₙ
@@ -79,7 +79,8 @@ namespace AccessCity.API.Services
                        W_Infra * infraRisk;
 
             // Apply sigmoid activation for final prediction
-            double overallRisk = Sigmoid(z, k: 4.0, midpoint: 0.35);
+            // Adjusted midpoint to 0.6 to allow for more 'Safe' (high score) headroom
+            double overallRisk = Sigmoid(z, k: 5.0, midpoint: 0.60);
 
             return new PredictiveRiskResult
             {
@@ -105,8 +106,8 @@ namespace AccessCity.API.Services
             double hazardRisk = _baseRisk.QuickRisk(lat, lon, hazards, radiusMetres);
             double timeRisk = ComputeTimeOfDayRisk(DateTime.UtcNow);
             double weatherRisk = GetCachedWeatherRisk(lat, lon);
-            double crimeRisk = EstimateCrimeRisk(lat, lon);
-            double infraRisk = EstimateInfrastructureRisk(lat, lon);
+            double crimeRisk = _baseRisk.QuickCrimeRisk(lat, lon);
+            double infraRisk = _baseRisk.QuickInfrastructureRisk(lat, lon);
 
             double z = W_Hazard * hazardRisk +
                        W_TimeOfDay * timeRisk +
@@ -114,7 +115,7 @@ namespace AccessCity.API.Services
                        W_Crime * crimeRisk +
                        W_Infra * infraRisk;
 
-            return Math.Clamp(Sigmoid(z, k: 4.0, midpoint: 0.35), 0, 1);
+            return Math.Clamp(Sigmoid(z, k: 5.0, midpoint: 0.60), 0, 1);
         }
 
         // ──────── Factor Computations ────────
@@ -218,28 +219,8 @@ namespace AccessCity.API.Services
             return Math.Clamp(risk, 0, 1);
         }
 
-        /// <summary>
-        /// Crime risk estimate using spatial hash.
-        /// In production, this would query the cached UK Police data.
-        /// </summary>
-        private static double EstimateCrimeRisk(double lat, double lon)
-        {
-            // Use deterministic spatial hash for consistent risk per location
-            int hash = HashCode.Combine(Math.Round(lat, 3), Math.Round(lon, 3));
-            var rng = new Random(hash);
-            return 0.05 + rng.NextDouble() * 0.25; // Range [0.05, 0.30]
-        }
-
-        /// <summary>
-        /// Infrastructure quality estimate — lighting, pavement condition, sidewalk width.
-        /// Simulated for PoC using spatial hashing.
-        /// </summary>
-        private static double EstimateInfrastructureRisk(double lat, double lon)
-        {
-            int hash = HashCode.Combine(Math.Round(lat, 4), Math.Round(lon, 4));
-            var rng = new Random(hash);
-            return 0.10 + rng.NextDouble() * 0.30; // Range [0.10, 0.40]
-        }
+        // Crime and infrastructure risk are now delegated to RiskScoringService
+        // which uses real cached UK Police data and PostGIS infrastructure queries.
 
         /// <summary>
         /// Generate human-readable risk factor explanations for the API response.
@@ -274,19 +255,5 @@ namespace AccessCity.API.Services
             if (double.IsNaN(x)) return 0.5;
             return 1.0 / (1.0 + Math.Exp(-k * (x - midpoint)));
         }
-    }
-
-    /// <summary>
-    /// Result of a predictive risk evaluation — all sub-scores + explanation.
-    /// </summary>
-    public class PredictiveRiskResult
-    {
-        public double OverallRisk { get; set; }
-        public double HazardRisk { get; set; }
-        public double TimeOfDayRisk { get; set; }
-        public double WeatherRisk { get; set; }
-        public double CrimeRisk { get; set; }
-        public double InfrastructureRisk { get; set; }
-        public List<string> RiskFactors { get; set; } = new();
     }
 }

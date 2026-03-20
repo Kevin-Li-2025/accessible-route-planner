@@ -1,12 +1,14 @@
+using AccessCity.API.Services;
+using Asp.Versioning;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using AccessCity.API.Services;
 
 namespace AccessCity.API.Controllers
 {
     [Authorize]
     [ApiController]
-    [Route("api/tiles")]
+    [ApiVersion("1.0")]
+    [Route("api/v{version:apiVersion}/tiles")]
     public class MapTileController : ControllerBase
     {
         private readonly IMapTileService _tileService;

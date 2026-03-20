@@ -1,8 +1,16 @@
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
-const BASE_IP = '10.2.57.73';
-export const API_URL = `http://${BASE_IP}:5005/api`;
+// Android emulator uses 10.0.2.2 to reach host; iOS simulator & web use localhost.
+// On physical device, set EXPO_PUBLIC_API_HOST to your machine's LAN IP (e.g. 192.168.1.x).
+const DEFAULT_HOST = Platform.OS === 'android' ? '10.0.2.2' : 'localhost';
+const HOST = process.env.EXPO_PUBLIC_API_HOST || DEFAULT_HOST;
+const PORT = process.env.EXPO_PUBLIC_API_PORT || '8080';
+const BASE_URL = process.env.EXPO_PUBLIC_API_URL
+  ? process.env.EXPO_PUBLIC_API_URL.replace(/\/api\/?$/, '')
+  : `http://${HOST}:${PORT}`;
+export const API_URL = BASE_URL + '/api/v1';
+export const API_BASE_URL = BASE_URL;
 
 const TOKEN_KEY = 'ac_access_token';
 const REFRESH_TOKEN_KEY = 'ac_refresh_token';
@@ -91,7 +99,13 @@ export const api = {
           } else if (errorData.errors) {
             const errorList = Object.values(errorData.errors).flat() as string[];
             message = errorList.join('\n');
-          } else if (errorData.message || errorData.title) {
+          }
+          else if (errorData.error) {
+            message = errorData.hint
+              ? `${errorData.error}\n\n${errorData.hint}`
+              : errorData.error;
+          }
+          else if (errorData.message || errorData.title) {
             message = errorData.message || errorData.title;
           } else if (typeof errorData === 'string') {
             message = errorData;

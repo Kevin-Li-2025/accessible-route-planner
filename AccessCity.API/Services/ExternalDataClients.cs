@@ -12,7 +12,6 @@ namespace AccessCity.API.Services.External
     /// </summary>
     public interface IOpenStreetMapClient
     {
-        Task<List<OverpassElement>?> GetInfrastructureDataAsync(double minLat, double minLng, double maxLat, double maxLng);
         /// <summary>Fetches real OSM features that represent hazards/barriers: barriers, steps, poor surface.</summary>
         Task<List<OverpassElement>?> GetHazardLikeDataAsync(double minLat, double minLng, double maxLat, double maxLng);
     }

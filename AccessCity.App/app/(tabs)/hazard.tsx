@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -8,11 +9,13 @@ import {
   View,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
+import { hazardsService } from '@/services/hazards.service';
 
 type HazardStatus = 'Reported' | 'Acknowledged' | 'Resolved';
 
 type HazardItem = {
-  id: number;
+  id: string | number;
   title: string;
   status: HazardStatus;
   description: string;
@@ -23,75 +26,6 @@ type HazardItem = {
 };
 
 const FILTERS: HazardStatus[] = ['Reported', 'Acknowledged', 'Resolved'];
-
-const HAZARDS: HazardItem[] = [
-  {
-    id: 1,
-    title: 'Gas Leak Detection!',
-    status: 'Reported',
-    description:
-      'A hazardous gas leak has been detected in this area. Workers should evacuate immediately.',
-    location: 'Hazard located in Zone 3',
-    reportedAt: '2 minutes ago',
-    icon: 'alert-outline',
-    iconFamily: 'ionicons',
-  },
-  {
-    id: 2,
-    title: 'Blocked pavement',
-    status: 'Reported',
-    description:
-      'Construction equipment is blocking the entire walkway. Pedestrians unable to pass.',
-    location: 'Near the east footpath',
-    reportedAt: '2 minutes ago',
-    icon: 'boom-gate-outline',
-    iconFamily: 'material',
-  },
-  {
-    id: 3,
-    title: 'Broken Street Light',
-    status: 'Acknowledged',
-    description:
-      'There is a broken street light. The street is dimly-lit and visibility is reduced for pedestrians.',
-    location: 'Hazard located in Park Avenue',
-    reportedAt: '2 hours ago',
-    icon: 'bulb-outline',
-    iconFamily: 'ionicons',
-  },
-  {
-    id: 4,
-    title: 'Damaged Footpath',
-    status: 'Acknowledged',
-    description:
-      'Large pothole on walking path. May cause tripping hazard and difficulty for wheelchair users.',
-    location: 'Hazard located in River Walk',
-    reportedAt: '45 minutes ago',
-    icon: 'wrench-outline',
-    iconFamily: 'ionicons',
-  },
-  {
-    id: 5,
-    title: 'Road Obstruction Cleared',
-    status: 'Resolved',
-    description:
-      'Debris has been removed from the sidewalk. Area is now safe for pedestrian traffic.',
-    location: 'Hazard located in Oak Street',
-    reportedAt: 'Yesterday',
-    icon: 'warning-outline',
-    iconFamily: 'ionicons',
-  },
-  {
-    id: 6,
-    title: 'Pothole Repaired',
-    status: 'Resolved',
-    description:
-      'Large pothole on walking path has been filled and is now safe for use.',
-    location: 'Hazard located in Town Square',
-    reportedAt: '2 days ago',
-    icon: 'wrench-outline',
-    iconFamily: 'ionicons',
-  },
-];
 
 const STATUS_STYLES: Record<
   HazardStatus,
@@ -123,11 +57,60 @@ function HazardIcon({ item }: { item: HazardItem }) {
 }
 
 export default function Hazard() {
+  const [hazards, setHazards] = useState<HazardItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [selectedFilter, setSelectedFilter] = useState<HazardStatus>('Reported');
 
+  async function loadHazards() {
+    try {
+      setIsLoading(true);
+      const data = await hazardsService.getHazards();
+      const mapped = data
+        .map<HazardItem | null>((hazard) => {
+          const status = hazard.status === 'UnderReview'
+            ? 'Acknowledged'
+            : hazard.status;
+
+          if (status !== 'Reported' && status !== 'Acknowledged' && status !== 'Resolved') {
+            return null;
+          }
+
+          return {
+            id: hazard.id,
+            title: hazard.title,
+            status,
+            description: hazard.description,
+            location: hazard.locationText,
+            reportedAt: hazard.reportedTime,
+            icon: hazard.type.includes('pavement') || hazard.type.includes('obstruction')
+              ? 'boom-gate-outline'
+              : hazard.type.includes('light')
+                ? 'bulb-outline'
+                : 'warning-outline',
+            iconFamily: hazard.type.includes('pavement') || hazard.type.includes('obstruction')
+              ? 'material'
+              : 'ionicons',
+          };
+        })
+        .filter((hazard): hazard is HazardItem => hazard !== null);
+      setHazards(mapped);
+    } catch (error) {
+      console.error('Failed to load hazards:', error);
+      setHazards([]);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  useFocusEffect(
+    React.useCallback(() => {
+      void loadHazards();
+    }, [])
+  );
+
   const filteredHazards = useMemo(
-    () => HAZARDS.filter((hazard) => hazard.status === selectedFilter),
-    [selectedFilter]
+    () => hazards.filter((hazard) => hazard.status === selectedFilter),
+    [hazards, selectedFilter]
   );
 
   return (
@@ -163,6 +146,19 @@ export default function Hazard() {
             );
           })}
         </View>
+
+        {isLoading ? (
+          <View style={styles.stateCard}>
+            <ActivityIndicator color="#174C8E" />
+            <Text style={styles.stateText}>Loading hazards...</Text>
+          </View>
+        ) : null}
+
+        {!isLoading && !filteredHazards.length ? (
+          <View style={styles.stateCard}>
+            <Text style={styles.stateText}>No hazards found for this status.</Text>
+          </View>
+        ) : null}
 
         {filteredHazards.map((hazard) => (
           <View key={hazard.id} style={styles.card}>
@@ -269,6 +265,19 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
     paddingHorizontal: 8,
     borderRadius: 999,
+  },
+  stateCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    paddingHorizontal: 18,
+    paddingVertical: 20,
+    alignItems: 'center',
+    gap: 10,
+  },
+  stateText: {
+    color: '#475569',
+    fontSize: 15,
+    fontWeight: '600',
   },
   filterButtonActive: {
     backgroundColor: '#2F2F2F',

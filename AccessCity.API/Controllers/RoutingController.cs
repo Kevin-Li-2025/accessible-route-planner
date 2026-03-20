@@ -1,128 +1,84 @@
+using Asp.Versioning;
+using AccessCity.API.Data;
+using AccessCity.API.Models;
+using AccessCity.API.Models.DTOs;
+using AccessCity.API.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using AccessCity.API.Models;
-using AccessCity.API.Services;
+using Microsoft.EntityFrameworkCore;
 
-namespace AccessCity.API.Controllers
+namespace AccessCity.API.Controllers;
+
+[AllowAnonymous]
+[ApiController]
+[ApiVersion("1.0")]
+[Route("api/v{version:apiVersion}/[controller]")]
+public class RoutingController : ControllerBase
 {
-    /// <summary>
-    /// Safety-Aware Routing API (F-1).
-    /// 
-    /// Provides two core capabilities:
-    ///   POST /api/routing/safe-path   — Compute an accessible, safety-optimised route
-    ///   GET  /api/routing/risk-score  — Predictive risk scoring at a geographic point
-    /// </summary>
-    [AllowAnonymous]
-    [ApiController]
-    [Route("api/[controller]")]
-    public class RoutingController : ControllerBase
+    private readonly RoutingService _routing;
+    private readonly RiskScoringService _risk;
+    private readonly PredictiveRiskModel _aiRisk;
+    private readonly AppDbContext _dbContext;
+
+    public RoutingController(RoutingService routing, RiskScoringService risk, PredictiveRiskModel aiRisk, AppDbContext dbContext)
     {
-        private readonly RoutingService     _routing;
-        private readonly RiskScoringService _risk;
-        private readonly PredictiveRiskModel _aiRisk;
+        _routing = routing;
+        _risk = risk;
+        _aiRisk = aiRisk;
+        _dbContext = dbContext;
+    }
 
-        public RoutingController(RoutingService routing, RiskScoringService risk, PredictiveRiskModel aiRisk)
+    [HttpPost("safe-path")]
+    [ProducesResponseType(typeof(RouteResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<RouteResponse>> GetSafePath([FromBody] RouteRequest request, CancellationToken cancellationToken)
+    {
+        // FluentValidation automatically returns 400 if RouteRequest is invalid
+        var hazards = await LoadActiveHazardsAsync(cancellationToken);
+        var result = await _routing.FindSafePathAsync(request, hazards);
+
+        if (result is null)
         {
-            _routing = routing;
-            _risk    = risk;
-            _aiRisk  = aiRisk;
+            return NotFound(new
+            {
+                error = "No route found.",
+                hint = "The routing engine could not find a path. If you are using real-world routing, ensure OSRM is reachable. Otherwise, check if the chosen area is supported."
+            });
         }
 
-        /// <summary>
-        /// Compute an accessible, safety-aware route between two points.
-        /// Uses OSRM for real road geometry with AI-powered multi-factor safety scoring.
-        /// 
-        /// The response includes:
-        ///   • A GeoJSON LineString path
-        ///   • Total distance (m) and estimated walking time (s)
-        ///   • An AI-computed composite safety score (0–1)
-        ///   • Turn-by-turn steps with per-segment safety
-        ///   • Contextual warnings (stairs, construction, poor lighting, etc.)
-        /// </summary>
-        [HttpPost("safe-path")]
-        [ProducesResponseType(typeof(RouteResponse), StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status400BadRequest)]
-        public async Task<ActionResult<RouteResponse>> GetSafePath([FromBody] RouteRequest request)
-        {
-            if (request.Start == null || request.End == null)
-                return BadRequest(new { error = "Both 'start' and 'end' coordinates are required." });
+        return Ok(result);
+    }
 
-            if (!IsValidCoordinate(request.Start) || !IsValidCoordinate(request.End))
-                return BadRequest(new { error = "Coordinates must be valid WGS-84 (lon/lat) values." });
+    [HttpGet("risk-score")]
+    [ProducesResponseType(typeof(RiskScoreResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<RiskScoreResponse>> GetRiskScore(
+        [FromQuery] RiskScoreRequestDto request,
+        CancellationToken cancellationToken = default)
+    {
+        var hazards = await LoadActiveHazardsAsync(cancellationToken);
+        var result = await _risk.EvaluateRiskAsync(request.Lat, request.Lng, request.Radius, hazards);
+        return Ok(result);
+    }
 
-            if (request.SafetyWeight < 0 || request.SafetyWeight > 1)
-                return BadRequest(new { error = "'safetyWeight' must be between 0 and 1." });
+    [HttpGet("ai-risk-score")]
+    [ProducesResponseType(typeof(PredictiveRiskResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<PredictiveRiskResult>> GetAiRiskScore(
+        [FromQuery] RiskScoreRequestDto request,
+        CancellationToken cancellationToken = default)
+    {
+        var hazards = await LoadActiveHazardsAsync(cancellationToken);
+        var result = await _aiRisk.EvaluateSegmentRiskAsync(request.Lat, request.Lng, hazards, request.Radius);
+        return Ok(result);
+    }
 
-            var hazards = GetActiveHazards();
-            var result = await _routing.FindSafePathAsync(request, hazards);
-
-            return Ok(result);
-        }
-
-        /// <summary>
-        /// Compute a predictive risk score for a given location.
-        /// 
-        /// Returns a composite score (0 = perfectly safe, 1 = maximum risk)
-        /// with a detailed breakdown: hazard proximity, density, infrastructure, and UK Police street crime (cached 24h).
-        /// </summary>
-        [HttpGet("risk-score")]
-        [ProducesResponseType(typeof(RiskScoreResponse), StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status400BadRequest)]
-        public async Task<ActionResult<RiskScoreResponse>> GetRiskScore(
-            [FromQuery] double lat,
-            [FromQuery] double lng,
-            [FromQuery] double radius = 500)
-        {
-            if (lat < -90 || lat > 90 || lng < -180 || lng > 180)
-                return BadRequest(new { error = "Invalid WGS-84 coordinates." });
-
-            if (radius <= 0 || radius > 5000)
-                return BadRequest(new { error = "Radius must be between 1 and 5000 metres." });
-
-            var hazards = GetActiveHazards();
-            var result = await _risk.EvaluateRiskAsync(lat, lng, radius, hazards);
-
-            return Ok(result);
-        }
-
-        /// <summary>
-        /// AI-powered predictive risk evaluation at a geographic point.
-        /// 
-        /// Uses a multi-factor model combining:
-        ///   • Reported hazard proximity and density
-        ///   • Time-of-day circadian safety patterns
-        ///   • Live weather conditions (OpenWeatherMap)
-        ///   • UK Police street crime data
-        ///   • Infrastructure quality heuristics
-        /// 
-        /// Returns an overall risk score with per-factor breakdown and human-readable explanations.
-        /// </summary>
-        [HttpGet("ai-risk-score")]
-        [ProducesResponseType(typeof(PredictiveRiskResult), StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status400BadRequest)]
-        public async Task<ActionResult<PredictiveRiskResult>> GetAiRiskScore(
-            [FromQuery] double lat,
-            [FromQuery] double lng,
-            [FromQuery] double radius = 200)
-        {
-            if (lat < -90 || lat > 90 || lng < -180 || lng > 180)
-                return BadRequest(new { error = "Invalid WGS-84 coordinates." });
-
-            var hazards = GetActiveHazards();
-            var result = await _aiRisk.EvaluateSegmentRiskAsync(lat, lng, hazards, radius);
-
-            return Ok(result);
-        }
-
-        private static bool IsValidCoordinate(NetTopologySuite.Geometries.Coordinate c)
-            => c.X >= -180 && c.X <= 180 && c.Y >= -90 && c.Y <= 90;
-
-        /// <summary>
-        /// In-memory hazard data for the prototype.
-        /// </summary>
-        private static List<HazardReport> GetActiveHazards()
-        {
-            return AccessCity.API.Data.StaticHazardData.GetActiveHazards();
-        }
+    private async Task<List<HazardReport>> LoadActiveHazardsAsync(CancellationToken cancellationToken)
+    {
+        return await _dbContext.Hazards
+            .Where(h => h.Status == HazardStatus.Reported || h.Status == HazardStatus.UnderReview)
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
     }
 }

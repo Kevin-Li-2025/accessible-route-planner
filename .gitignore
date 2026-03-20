@@ -31,3 +31,15 @@ web-build/
 # OS
 .DS_Store
 Thumbs.db
+
+# SQLTools settings ignore
+.vscode/settings.json
+# Data files
+*.osm
+
+# Build / Cache files
+__pycache__/
+build_error.txt
+
+# Scripts
+scripts/

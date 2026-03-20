@@ -1,11 +1,13 @@
-using Microsoft.AspNetCore.Mvc;
 using AccessCity.API.Models;
 using AccessCity.API.Services;
+using Asp.Versioning;
+using Microsoft.AspNetCore.Mvc;
 
 namespace AccessCity.API.Controllers
 {
     [ApiController]
-    [Route("api/[controller]")]
+    [ApiVersion("1.0")]
+    [Route("api/v{version:apiVersion}/[controller]")]
     public class DashboardController : ControllerBase
     {
         private readonly IRealHazardDataService _realHazardData;
