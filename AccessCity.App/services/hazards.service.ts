@@ -71,8 +71,9 @@ function mapHazard(hazard: BackendHazard): AppHazard | null {
 }
 
 export const hazardsService = {
-  async getHazards(): Promise<AppHazard[]> {
-    const data = await api.get<BackendHazard[]>('/hazards');
+  async getHazards(status?: string): Promise<AppHazard[]> {
+    const query = status ? `?status=${status}` : '';
+    const data = await api.get<BackendHazard[]>(`/hazards${query}`);
 
     if (!Array.isArray(data)) {
       return [];

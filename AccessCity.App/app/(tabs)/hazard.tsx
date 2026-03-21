@@ -3,7 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   SafeAreaView,
-  ScrollView,
+  FlatList,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -90,6 +90,7 @@ export default function Hazard() {
       setIsLoading(true);
       const data = await hazardsService.getHazards(selectedFilter);
       const mapped = data
+        .slice(0, 100) // limit to 100 items to prevent out-of-memory on massive OSM datasets
         .map<HazardItem | null>((hazard) => {
           const status = hazard.status === 'UnderReview'
             ? 'Acknowledged'
@@ -134,53 +135,59 @@ export default function Hazard() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <ScrollView
+      <FlatList
         style={styles.screen}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
-      >
-        <Text style={styles.title}>Hazards</Text>
+        data={hazards}
+        keyExtractor={(item) => String(item.id)}
+        initialNumToRender={10}
+        windowSize={5}
+        ListHeaderComponent={
+          <>
+            <Text style={styles.title}>Hazards</Text>
 
-        <View style={styles.filterPill}>
-          {FILTERS.map((filter) => {
-            const isActive = filter === selectedFilter;
+            <View style={styles.filterPill}>
+              {FILTERS.map((filter) => {
+                const isActive = filter === selectedFilter;
 
-            return (
-              <TouchableOpacity
-                key={filter}
-                activeOpacity={0.9}
-                style={[
-                  styles.filterButton,
-                  isActive && styles.filterButtonActive,
-                ]}
-                onPress={() => setSelectedFilter(filter)}
-              >
-                <Text
-                  numberOfLines={1}
-                  style={[styles.filterText, isActive && styles.filterTextActive]}
-                >
-                  {filter}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
+                return (
+                  <TouchableOpacity
+                    key={filter}
+                    activeOpacity={0.9}
+                    style={[
+                      styles.filterButton,
+                      isActive && styles.filterButtonActive,
+                    ]}
+                    onPress={() => setSelectedFilter(filter)}
+                  >
+                    <Text
+                      numberOfLines={1}
+                      style={[styles.filterText, isActive && styles.filterTextActive]}
+                    >
+                      {filter}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
 
-        {isLoading ? (
-          <View style={styles.stateCard}>
-            <ActivityIndicator color="#174C8E" />
-            <Text style={styles.stateText}>Loading hazards...</Text>
-          </View>
-        ) : null}
+            {isLoading ? (
+              <View style={styles.stateCard}>
+                <ActivityIndicator color="#174C8E" />
+                <Text style={styles.stateText}>Loading hazards...</Text>
+              </View>
+            ) : null}
 
-        {!isLoading && !hazards.length ? (
-          <View style={styles.stateCard}>
-            <Text style={styles.stateText}>No hazards found for this status.</Text>
-          </View>
-        ) : null}
-
-        {hazards.map((hazard) => (
-          <View key={hazard.id} style={styles.card}>
+            {!isLoading && !hazards.length ? (
+              <View style={styles.stateCard}>
+                <Text style={styles.stateText}>No hazards found for this status.</Text>
+              </View>
+            ) : null}
+          </>
+        }
+        renderItem={({ item: hazard }) => (
+          <View style={styles.card}>
             <View style={styles.cardHeader}>
               <View style={styles.iconWrap}>
                 <HazardIcon item={hazard} />
@@ -246,8 +253,8 @@ export default function Hazard() {
               </TouchableOpacity>
             </View>
           </View>
-        ))}
-      </ScrollView>
+        )}
+      />
 
       <HazardDetailsModal
         visible={hazardDetailsVisible}
