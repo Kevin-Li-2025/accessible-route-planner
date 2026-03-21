@@ -8,7 +8,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
-  const MOCK_USER_ROLE: 'user' | 'admin' = 'admin'; // 改成 'user' 就会进 user report page
+  const MOCK_USER_ROLE: 'user' | 'admin' = 'admin';
 
   return (
     <Tabs
@@ -41,7 +41,7 @@ export default function TabLayout() {
         listeners={{
           tabPress: (e) => {
             e.preventDefault();
-
+            //After setting up the account, modify this condition.
             if (MOCK_USER_ROLE === 'admin') {
               router.push('/report/adminHazard-report');
             } else {
