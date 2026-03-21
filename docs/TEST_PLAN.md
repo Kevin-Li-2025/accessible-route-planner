@@ -10,7 +10,7 @@ Test plan for the first prototype. Unit tests target single features; integratio
 |-------|----------------|-----|
 | API (backend) | Every HTTP endpoint: status, body shape, validation, auth | Integration tests via `WebApplicationFactory` |
 | Services | Caching, hazard fetch, risk scoring, routing logic | Unit tests + integration (through API) |
-| Frontend | Screens and flows (login, map, report, profile) | Manual / optional E2E later |
+| Frontend | Screens and flows (login, map, report, profile) | **Jest + React Native Testing Library**: `login`, `signup`, landing `index`, `profile`, `hazard`, `map.web`, `reportpage`, plus `ErrorMessage` / `ThemedText`. **Playwright** (Chromium, Expo web): landing, tab switch, validation, map stub (`npm run test:e2e` in `AccessCity.App`). Native map (`MapScreen.native`) remains manual / device. |
 
 External services (Overpass, OSRM, Nominatim, UK Police) can fail or rate-limit; tests that depend on them allow 503 or skip so the suite stays green.
 
@@ -159,6 +159,30 @@ Stubs; we only check 200 and response shape.
 - **OverpassExceptionFilter**: maps `OverpassServiceException` → 503 with correlation id.
 - **BadRequestExceptionFilter**: maps `ArgumentException` → 400 with message (e.g. bbox validation).
 
+### 3.8 FluentValidation (unit, no HTTP)
+
+- **RouteRequestValidator**, **RiskScoreRequestValidator**, **CreateHazardRequestValidator**: valid/invalid coordinates, profiles, safety weight, radius bounds, string lengths — covered in `ValidatorUnitTests.cs`.
+
+### 3.9 Client TypeScript (Jest)
+
+- **`apiConfig.resolveApiUrls`**: env-based base URL / Android host / port overrides — `AccessCity.App/__tests__/apiConfig.test.ts`.
+- **Hazard mapping**: status labels, type labels, GeoJSON → app model — `AccessCity.App/__tests__/hazardMapping.test.ts`.
+
+### 3.10 Client screens & components (Jest + `@testing-library/react-native`)
+
+- **`__tests__/screens/*.screen.test.tsx`**: `login`, `signup`, `index` (landing auth), `profile` (with `AuthContext` test wrapper), `hazard` (mocked `hazardsService` + `useFocusEffect`), `map.web`, `reportpage` (mocked modal).
+- **`__tests__/components/*`**: `ErrorMessage`, `ThemedText`.
+
+### 3.11 E2E (Playwright, web only)
+
+- **`AccessCity.App/e2e/app.spec.ts`**: opens Expo web bundle — branding, Sign Up tab + Full Name field, empty submit validation (`testID="index-auth-submit"`), `/map` stub copy.
+- First run: `npx playwright install chromium` (from `AccessCity.App` or repo root with `npx playwright install` using local devDependency). Config can start `expo start --web` automatically, or set `PLAYWRIGHT_SKIP_WEBSERVER=1` if you already have a dev server on `PLAYWRIGHT_BASE_URL`.
+
+### 3.12 Load and spatial stress (backend)
+
+- **`ApiStressTests`**: parallel and staggered `/health`, parallel spatial POI, parallel hazards list (OK or 503), parallel authenticated dashboard feed (OK or 503). Sized to avoid tripping the global sliding rate limiter in Development.
+- **`SpatialCachePerformanceTests`**: concurrent hazard writes + spatial queries; additional high read fan-out over a hot bounding box.
+
 ---
 
 ## 4. Frontend Components (manual / future E2E)
@@ -175,13 +199,13 @@ Stubs; we only check 200 and response shape.
 | Routing / safety | Request route → path and safety info shown; risk score at point. |
 | Offline bundle | Authenticated request with bbox → bundle with hazards (or 503). |
 
-We don’t run automated E2E in CI for M4; evidence of “integration testing” is the API integration tests above.
+Automated **web E2E** (Playwright) covers the landing and map-web flows; full **native** navigation and MapLibre remain manual or future Detox/Maestro if the team adds them.
 
 ---
 
 ## 5. Test Data and Environment
 
-- **API tests**: `WebApplicationFactory` + in-memory DB (no Postgres/Redis required). Auth uses real JWT and Argon2.
+- **API tests**: `WebApplicationFactory` against **real PostgreSQL/PostGIS** (and Redis for the API stack), via `AccessCityApiFactory` + `DATABASE_URL` / `Postgres:ConnectionString`. Auth uses real JWT and Argon2. **GitLab CI** provisions PostGIS + Redis and runs `dotnet test` (see `.gitlab-ci.yml`).
 - **Hazard POST**: In-memory provider may not persist geometry; tests accept 201 (when Postgres used) or 500 (in-memory) for POST; GET by id and PATCH are tested when POST succeeds.
 - **External services**: Overpass, OSRM, Nominatim, UK Police – live calls in integration tests; 503 or timeouts are allowed where documented so the suite doesn’t fail on network issues.
 
@@ -189,21 +213,54 @@ We don’t run automated E2E in CI for M4; evidence of “integration testing”
 
 ## 6. Evidence Checklist
 
-- [ ] This TEST_PLAN.md in repo.
-- [ ] Unit/integration test code: AuthTests, RoutingTests, MapTileTests, SpatialCacheTests, SpatialCachePerformanceTests, ApiIntegrationTests, DeepApiTests (boundary/edge).
-- [ ] `dotnet test AccessCity.Tests/AccessCity.Tests.csproj` passes (or only known flaky 503s).
-- [ ] README states how to run tests.
+- [x] This TEST_PLAN.md in repo.
+- [x] Backend unit/integration/stress: AuthTests, RoutingTests, MapTileTests, SpatialCacheTests, SpatialCachePerformanceTests, ApiIntegrationTests, DeepApiTests, ValidatorUnitTests, ApiStressTests, BenchmarkTests, OsmImportTests, etc.
+- [x] Client unit + component/screen tests: `AccessCity.App/__tests__/**/*.test.ts(x)`.
+- [x] `dotnet test AccessCity.Tests/AccessCity.Tests.csproj` passes (or only known flaky 503s from upstream services).
+- [x] `npm test` under `AccessCity.App` passes.
+- [x] Playwright E2E spec present (`e2e/app.spec.ts`); run `npx playwright install chromium` once, then `npm run test:e2e`.
+- [x] README states how to run tests (backend + client + E2E).
+- [x] GitLab CI runs `backend:test` and `frontend:test` (see `.gitlab-ci.yml`).
 
 ---
 
 ## 7. Run Commands
 
 ```bash
-# From repo root
+# From repo root — backend (xUnit)
 dotnet test AccessCity.Tests/AccessCity.Tests.csproj
 
 # Verbose
 dotnet test AccessCity.Tests/AccessCity.Tests.csproj -v n
 ```
 
-No separate “unit” vs “integration” filter for M4; all tests are in one project and run together.
+```bash
+# Expo app — Jest (modules + screens + components)
+cd AccessCity.App
+npm install
+npm test
+```
+
+```bash
+# One-time browser binaries for E2E
+cd AccessCity.App
+npx playwright install chromium
+
+# E2E against Expo web (starts dev server from playwright.config unless SKIP is set)
+npm run test:e2e
+```
+
+Backend tests live in one project; the client uses Jest + `jest-expo` and Playwright separately.
+
+---
+
+## 8. GitLab CI
+
+Pipelines (stage `test`):
+
+| Job | What runs |
+|-----|-----------|
+| `backend:test` | `dotnet restore` / `build` / `test` on `CodeConquerors.sln` → `AccessCity.Tests`. Services: **postgis/postgis:16-3.4** (`postgres` host), **redis:7-alpine** (`redis` host). Env: `DATABASE_URL`, `ConnectionStrings__Redis`. Timeout 45 min (integration suite is slow). |
+| `frontend:test` | `cd AccessCity.App && npm ci && npm test -- --ci`. Cached `node_modules` from `package-lock.json`. |
+
+**Playwright** is not executed in CI (would require `expo start --web` + browser install; run locally with `npm run test:e2e`).

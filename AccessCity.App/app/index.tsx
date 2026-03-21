@@ -252,8 +252,9 @@ export default function AuthScreen() {
                       <Text style={styles.forgotText}>Forgot Password?</Text>
                     </TouchableOpacity>
 
-                    <TouchableOpacity 
-                      activeOpacity={0.8} 
+                    <TouchableOpacity
+                      testID="index-auth-submit"
+                      activeOpacity={0.8}
                       onPress={handleSubmit}
                       disabled={isSubmitting}
                       style={styles.mainBtnContainer}

@@ -1,16 +1,15 @@
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
+import { resolveApiUrls } from './apiConfig';
 
-// Android emulator uses 10.0.2.2 to reach host; iOS simulator & web use localhost.
-// On physical device, set EXPO_PUBLIC_API_HOST to your machine's LAN IP (e.g. 192.168.1.x).
-const DEFAULT_HOST = Platform.OS === 'android' ? '10.0.2.2' : 'localhost';
-const HOST = process.env.EXPO_PUBLIC_API_HOST || DEFAULT_HOST;
-const PORT = process.env.EXPO_PUBLIC_API_PORT || '8080';
-const BASE_URL = process.env.EXPO_PUBLIC_API_URL
-  ? process.env.EXPO_PUBLIC_API_URL.replace(/\/api\/?$/, '')
-  : `http://${HOST}:${PORT}`;
-export const API_URL = BASE_URL + '/api/v1';
-export const API_BASE_URL = BASE_URL;
+const { apiUrl: API_URL, baseUrl: API_BASE_URL } = resolveApiUrls({
+  expoPublicApiUrl: process.env.EXPO_PUBLIC_API_URL,
+  expoPublicApiHost: process.env.EXPO_PUBLIC_API_HOST,
+  expoPublicApiPort: process.env.EXPO_PUBLIC_API_PORT,
+  platformOs: Platform.OS,
+});
+
+export { API_URL, API_BASE_URL };
 
 const TOKEN_KEY = 'ac_access_token';
 const REFRESH_TOKEN_KEY = 'ac_refresh_token';

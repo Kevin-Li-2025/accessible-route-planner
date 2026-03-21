@@ -1,23 +1,72 @@
-build-job:
-  stage: build
-  script:
-    - echo "Hello, $GITLAB_USER_LOGIN!"
+# AccessCity — automated tests on GitLab CI
+# Backend: dotnet test (integration tests need PostgreSQL/PostGIS + Redis).
+# Frontend: Jest (Expo app). Playwright E2E is intentionally not run here (needs long-lived Expo web).
 
-test-job1:
+stages:
+  - test
+
+variables:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+  NUGET_XMLDOC_MODE: skip
+  # Matches docker-compose credentials; used by PostGIS service container.
+  POSTGRES_DB: accesscitydb
+  POSTGRES_USER: accesscity
+  POSTGRES_PASSWORD: accesscity123
+  DATABASE_URL: "postgresql://accesscity:accesscity123@postgres:5432/accesscitydb?sslmode=disable"
+  ConnectionStrings__Redis: "redis:6379"
+
+default:
+  interruptible: true
+
+# ─── Backend (xUnit + WebApplicationFactory; real Postgres + Redis) ─────────
+backend:test:
   stage: test
+  image: mcr.microsoft.com/dotnet/sdk:9.0
+  services:
+    - name: postgis/postgis:16-3.4
+      alias: postgres
+    - name: redis:7-alpine
+      alias: redis
+  timeout: 45m
+  before_script:
+    - apt-get update
+    - DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends netcat-openbsd
+    - |
+      echo "Waiting for PostgreSQL (postgis)..."
+      for i in $(seq 1 90); do
+        if nc -z postgres 5432 2>/dev/null; then echo "Postgres port open."; break; fi
+        sleep 2
+      done
+      nc -z postgres 5432 || { echo "PostgreSQL not reachable"; exit 1; }
+    - |
+      echo "Waiting for Redis..."
+      for i in $(seq 1 30); do
+        if nc -z redis 6379 2>/dev/null; then echo "Redis port open."; break; fi
+        sleep 1
+      done
+      nc -z redis 6379 || { echo "Redis not reachable"; exit 1; }
   script:
-    - echo "This job tests something"
-
-test-job2:
+    - dotnet --info
+    - dotnet restore CodeConquerors.sln
+    - dotnet build CodeConquerors.sln --configuration Release --no-restore
+    - dotnet test AccessCity.Tests/AccessCity.Tests.csproj --configuration Release --no-build --verbosity normal
+# ─── Frontend (Jest + jest-expo) ────────────────────────────────────────────
+frontend:test:
   stage: test
+  image: node:20-bookworm
+  timeout: 20m
+  cache:
+    key:
+      files:
+        - AccessCity.App/package-lock.json
+    paths:
+      - AccessCity.App/node_modules/
   script:
-    - echo "This job tests something, but takes more time than test-job1."
-    - echo "After the echo commands complete, it runs the sleep command for 20 seconds"
-    - echo "which simulates a test that runs 20 seconds longer than test-job1"
-    - sleep 20
-
-deploy-prod:
-  stage: deploy
-  script:
-    - echo "This job deploys something from the $CI_COMMIT_BRANCH branch."
-  environment: production
+    - cd AccessCity.App
+    - npm ci
+    - npm test -- --ci --watchAll=false
+  rules:
+    # Skip if the app folder is missing (e.g. sparse checkout).
+    - exists:
+        - AccessCity.App/package.json

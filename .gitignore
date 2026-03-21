@@ -43,3 +43,6 @@ build_error.txt
 
 # Scripts
 scripts/
+
+*.txt
+AccessCity.API/Logs/
