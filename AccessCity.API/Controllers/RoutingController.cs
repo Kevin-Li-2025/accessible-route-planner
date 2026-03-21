@@ -50,6 +50,22 @@ public class RoutingController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>
+    /// Multi-objective routing: same recommendation as <c>safe-path</c> when OSRM is used, plus up to three labelled
+    /// alternatives (shortest distance, lowest composite risk, fastest time) when the router returns multiple geometries.
+    /// </summary>
+    [HttpPost("safe-path/options")]
+    [ProducesResponseType(typeof(SafePathOptionsResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<SafePathOptionsResponse>> GetSafePathOptions(
+        [FromBody] RouteRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var hazards = await LoadActiveHazardsAsync(cancellationToken);
+        var result = await _routing.FindSafePathWithVariantsAsync(request, hazards);
+        return Ok(result);
+    }
+
     [HttpGet("risk-score")]
     [ProducesResponseType(typeof(RiskScoreResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -71,6 +87,22 @@ public class RoutingController : ControllerBase
     {
         var hazards = await LoadActiveHazardsAsync(cancellationToken);
         var result = await _aiRisk.EvaluateSegmentRiskAsync(request.Lat, request.Lng, hazards, request.Radius);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Alternative blend: full <see cref="RiskScoringService.EvaluateRiskAsync"/> plus time-of-day and live weather weights.
+    /// Prefer <c>ai-risk-score</c> for the logistic multi-factor model used in routing.
+    /// </summary>
+    [HttpGet("hazard-blend-risk")]
+    [ProducesResponseType(typeof(PredictiveRiskResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<PredictiveRiskResult>> GetHazardBlendRisk(
+        [FromQuery] RiskScoreRequestDto request,
+        CancellationToken cancellationToken = default)
+    {
+        var hazards = await LoadActiveHazardsAsync(cancellationToken);
+        var result = await _risk.PredictRiskAsync(request.Lat, request.Lng, request.Radius, hazards);
         return Ok(result);
     }
 

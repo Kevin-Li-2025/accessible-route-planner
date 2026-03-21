@@ -1,7 +1,9 @@
+using AccessCity.API.Data;
 using AccessCity.API.Models;
 using AccessCity.API.Services;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace AccessCity.API.Controllers
 {
@@ -11,10 +13,12 @@ namespace AccessCity.API.Controllers
     public class DashboardController : ControllerBase
     {
         private readonly IRealHazardDataService _realHazardData;
+        private readonly AppDbContext _db;
 
-        public DashboardController(IRealHazardDataService realHazardData)
+        public DashboardController(IRealHazardDataService realHazardData, AppDbContext db)
         {
             _realHazardData = realHazardData;
+            _db = db;
         }
 
         /// <summary>
@@ -28,10 +32,18 @@ namespace AccessCity.API.Controllers
             var pendingAlerts = hazards.Count(h =>
                 h.Status == HazardStatus.Reported || h.Status == HazardStatus.UnderReview);
 
+            var now = DateTime.UtcNow;
+            var activeUsers = await _db.RefreshTokens.AsNoTracking()
+                .Where(t => t.Revoked == null && t.Expires > now)
+                .Select(t => t.UserId)
+                .Distinct()
+                .CountAsync();
+
             return Ok(new
             {
                 TotalHazards = totalHazards,
-                ActiveUsers = 0,
+                ActiveUsers = activeUsers,
+                ActiveUsersDefinition = "Distinct accounts with at least one non-revoked, non-expired refresh token.",
                 PendingAlerts = pendingAlerts,
                 Resolved = hazards.Count(h => h.Status == HazardStatus.Resolved),
             });

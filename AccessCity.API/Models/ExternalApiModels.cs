@@ -15,6 +15,9 @@ namespace AccessCity.API.Models.External
         public long Id { get; set; }
         [JsonPropertyName("type")]
         public string Type { get; set; } = string.Empty; // "node" or "way"
+        /// <summary>Present when the Overpass query uses <c>out meta</c> — last update time of the OSM object.</summary>
+        [JsonPropertyName("timestamp")]
+        public string? Timestamp { get; set; }
         [JsonPropertyName("tags")]
         public Dictionary<string, string> Tags { get; set; } = new();
         [JsonPropertyName("lat")]
@@ -71,45 +74,67 @@ namespace AccessCity.API.Models.External
 
     public class PlacesSearchRequest
     {
+        [JsonPropertyName("includedTypes")]
         public List<string> IncludedTypes { get; set; } = new();
+        [JsonPropertyName("maxResultCount")]
         public int MaxResultCount { get; set; } = 10;
+        [JsonPropertyName("locationRestriction")]
         public LocationRestriction LocationRestriction { get; set; } = new();
     }
 
     public class LocationRestriction
     {
+        [JsonPropertyName("circle")]
         public CircleRestriction Circle { get; set; } = new();
     }
 
     public class CircleRestriction
     {
+        [JsonPropertyName("center")]
         public LatLng Center { get; set; } = new();
+        [JsonPropertyName("radius")]
         public double Radius { get; set; } = 500.0;
     }
 
     public class LatLng
     {
+        [JsonPropertyName("latitude")]
         public double Latitude { get; set; }
+        [JsonPropertyName("longitude")]
         public double Longitude { get; set; }
     }
 
     public class PlacesSearchResponse
     {
+        [JsonPropertyName("places")]
         public List<Place> Places { get; set; } = new();
     }
 
     public class Place
     {
+        [JsonPropertyName("id")]
         public string Id { get; set; } = string.Empty;
+        [JsonPropertyName("displayName")]
         public DisplayText DisplayName { get; set; } = new();
+        [JsonPropertyName("types")]
         public List<string> Types { get; set; } = new();
+        [JsonPropertyName("location")]
         public LatLng Location { get; set; } = new();
+        [JsonPropertyName("regularOpeningHours")]
         public RegularHours RegularOpeningHours { get; set; } = new();
     }
 
-    public class DisplayText { public string Text { get; set; } = string.Empty; }
-    
-    public class RegularHours { public bool OpenNow { get; set; } }
+    public class DisplayText
+    {
+        [JsonPropertyName("text")]
+        public string Text { get; set; } = string.Empty;
+    }
+
+    public class RegularHours
+    {
+        [JsonPropertyName("openNow")]
+        public bool OpenNow { get; set; }
+    }
 
     public class WeatherResponse
     {

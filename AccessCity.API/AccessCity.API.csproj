@@ -4,6 +4,7 @@
     <TargetFramework>net9.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>AccessCity.API-7f3c2a91-4b0e-4d6c-9a1f-2e8d5c4b3a00</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>

@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using AccessCity.API.Exceptions;
 using AccessCity.API.Models.External;
 using Microsoft.Extensions.Configuration;
@@ -65,7 +66,7 @@ namespace AccessCity.API.Services.External
                   way[""highway""=""path""][""surface""~""unpaved|gravel|cobblestone|mud|dirt""]({minLat},{minLng},{maxLat},{maxLng});
                   way[""highway""=""footway""][""surface""~""unpaved|gravel|cobblestone|mud|dirt""]({minLat},{minLng},{maxLat},{maxLng});
                 );
-                out center;
+                out center meta;
             ";
 
             try
@@ -220,5 +221,100 @@ namespace AccessCity.API.Services.External
                 return null;
             }
         }
+    }
+
+    /// <summary>
+    /// Queries OSM Overpass API for street lamps and CCTV cameras near a point.
+    /// Used by the risk scoring engine to quantify lighting and surveillance coverage.
+    /// </summary>
+    public interface IEnvironmentalDataClient
+    {
+        Task<EnvironmentalSummary> GetNearbyInfrastructureAsync(double lat, double lng, double radiusMetres);
+    }
+
+    public class EnvironmentalSummary
+    {
+        public int StreetLampCount { get; set; }
+        public int SurveillanceCameraCount { get; set; }
+    }
+
+    public class EnvironmentalDataClient : IEnvironmentalDataClient
+    {
+        private readonly HttpClient _httpClient;
+        private readonly ILogger<EnvironmentalDataClient> _logger;
+        private readonly string _endpoint;
+
+        public EnvironmentalDataClient(HttpClient httpClient, ILogger<EnvironmentalDataClient> logger, IConfiguration config)
+        {
+            _httpClient = httpClient;
+            _logger = logger;
+            _endpoint = config["Overpass:Endpoint"] ?? "https://overpass-api.de/api/interpreter";
+            _httpClient.DefaultRequestHeaders.Add("User-Agent", "AccessCity-UniversityProject/1.0");
+        }
+
+        public async Task<EnvironmentalSummary> GetNearbyInfrastructureAsync(double lat, double lng, double radiusMetres)
+        {
+            var query = $@"
+                [out:json][timeout:10];
+                (
+                  node[""highway""=""street_lamp""](around:{radiusMetres},{lat},{lng});
+                  node[""man_made""=""surveillance""](around:{radiusMetres},{lat},{lng});
+                );
+                out count;
+            ";
+
+            try
+            {
+                var response = await _httpClient.PostAsync(_endpoint, new StringContent(query));
+                if (!response.IsSuccessStatusCode)
+                    return new EnvironmentalSummary();
+
+                var data = await response.Content.ReadFromJsonAsync<OverpassCountResponse>();
+                int total = data?.Elements?.FirstOrDefault()?.Tags?.Total ?? 0;
+
+                // Re-query with typed counts for split
+                var lampQuery = $@"[out:json][timeout:8];node[""highway""=""street_lamp""](around:{radiusMetres},{lat},{lng});out count;";
+                var lampResp = await _httpClient.PostAsync(_endpoint, new StringContent(lampQuery));
+                int lamps = 0;
+                if (lampResp.IsSuccessStatusCode)
+                {
+                    var lampData = await lampResp.Content.ReadFromJsonAsync<OverpassCountResponse>();
+                    lamps = lampData?.Elements?.FirstOrDefault()?.Tags?.Total ?? 0;
+                }
+
+                return new EnvironmentalSummary
+                {
+                    StreetLampCount = lamps,
+                    SurveillanceCameraCount = Math.Max(0, total - lamps)
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Overpass environmental query failed for ({Lat},{Lng})", lat, lng);
+                return new EnvironmentalSummary();
+            }
+        }
+    }
+
+    // Minimal model for Overpass "out count" responses.
+    internal class OverpassCountResponse
+    {
+        [JsonPropertyName("elements")]
+        public List<OverpassCountElement>? Elements { get; set; }
+    }
+
+    internal class OverpassCountElement
+    {
+        [JsonPropertyName("tags")]
+        public OverpassCountTags? Tags { get; set; }
+    }
+
+    internal class OverpassCountTags
+    {
+        [JsonPropertyName("total")]
+        public int Total { get; set; }
+
+        [JsonPropertyName("nodes")]
+        public int Nodes { get; set; }
     }
 }

@@ -1,3 +1,4 @@
+using System.Globalization;
 using AccessCity.API.Models;
 using AccessCity.API.Models.External;
 using AccessCity.API.Services.External;
@@ -66,7 +67,7 @@ public class RealHazardDataService : IRealHazardDataService
         var list = new List<HazardReport>();
         if (status == null || status == HazardStatus.Reported)
         {
-            list = await FetchAndMapHazardsAsync(minLatVal, minLngVal, maxLatVal, maxLngVal);
+            list = await FetchAndMapHazardsAsync(minLatVal, minLngVal, maxLatVal, maxLngVal, DateTime.UtcNow);
         }
 
         // 2. Fetch from Local Database
@@ -95,7 +96,9 @@ public class RealHazardDataService : IRealHazardDataService
         return list;
     }
 
-    private async Task<List<HazardReport>> FetchAndMapHazardsAsync(double minLatVal, double minLngVal, double maxLatVal, double maxLngVal)
+    private async Task<List<HazardReport>> FetchAndMapHazardsAsync(
+        double minLatVal, double minLngVal, double maxLatVal, double maxLngVal,
+        DateTime snapshotUtc)
     {
         var elements = await _openStreetMapClient.GetHazardLikeDataAsync(minLatVal, minLngVal, maxLatVal, maxLngVal);
         if (elements == null || elements.Count == 0)
@@ -117,12 +120,29 @@ public class RealHazardDataService : IRealHazardDataService
                 Type = hazardType,
                 Description = description,
                 PhotoUrl = string.Empty,
-                ReportedAt = DateTime.UtcNow.AddYears(-1), // OSM data has no report date; use placeholder
+                ReportedAt = ResolveOsmReportedAt(el, snapshotUtc),
                 Status = HazardStatus.Reported
             });
         }
 
         return list;
+    }
+
+    /// <summary>
+    /// Uses Overpass <c>timestamp</c> when present (last OSM DB update for the object).
+    /// Otherwise uses <paramref name="snapshotUtc"/> — not a citizen report time, but the time of our Overpass fetch.
+    /// </summary>
+    private static DateTime ResolveOsmReportedAt(OverpassElement el, DateTime snapshotUtc)
+    {
+        if (!string.IsNullOrWhiteSpace(el.Timestamp)
+            && DateTime.TryParse(el.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
+        {
+            return parsed.Kind == DateTimeKind.Unspecified
+                ? DateTime.SpecifyKind(parsed, DateTimeKind.Utc)
+                : parsed.ToUniversalTime();
+        }
+
+        return snapshotUtc;
     }
 
     private static bool TryGetCoordinate(OverpassElement el, out double lon, out double lat)

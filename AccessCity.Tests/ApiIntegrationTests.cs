@@ -346,6 +346,36 @@ public class ApiIntegrationTests : IClassFixture<AccessCityApiFactory>
         Assert.True(list.GetArrayLength() <= 5);
     }
 
+    [Fact]
+    public async Task SafeHaven_Nearby_Returns_200()
+    {
+        var client = _factory.CreateClient();
+        var response = await client.GetAsync("/api/v1/safe-haven/nearby?lat=52.4862&lng=-1.8904&radius=500");
+        if (response.StatusCode == HttpStatusCode.ServiceUnavailable) return;
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
+        Assert.Equal(JsonValueKind.Object, json.ValueKind);
+        Assert.True(json.TryGetProperty("places", out _) || json.TryGetProperty("Places", out _));
+    }
+
+    [Fact]
+    public async Task Integrations_Status_Returns_200()
+    {
+        var client = _factory.CreateClient();
+        var response = await client.GetAsync("/api/v1/integrations/status");
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
+        Assert.Equal(JsonValueKind.Object, json.ValueKind);
+    }
+
+    [Fact]
+    public async Task Routing_HazardBlendRisk_Returns_200()
+    {
+        var client = _factory.CreateClient();
+        var response = await client.GetAsync("/api/v1/routing/hazard-blend-risk?lat=52.4862&lng=-1.8904&radius=200");
+        response.EnsureSuccessStatusCode();
+    }
+
     // ---- Geocoding ----
 
     [Fact]

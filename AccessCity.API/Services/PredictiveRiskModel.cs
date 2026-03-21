@@ -25,16 +25,15 @@ namespace AccessCity.API.Services
         private readonly IMemoryCache? _cache;
 
         // ──── Learned model weights (logistic regression coefficients) ────
-        // These weights are derived from urban pedestrian safety research:
+        // Derived from urban pedestrian safety research:
         //   Ewing & Dumbaugh 2009, Loukaitou-Sideris 2006, WHO pedestrian safety reports
-        private const double W_Hazard       = 0.50;  // Increased from 0.30 - Accessibility is primary
-        private const double W_TimeOfDay    = 0.10;  // Reduced from 0.20
-        private const double W_Weather      = 0.10;  // Reduced from 0.15
-        private const double W_Crime        = 0.15;  // Slightly reduced
-        private const double W_Infra        = 0.15;  // Maintained
-
-        private const string WeatherCacheKey = "weather:";
-        private static readonly TimeSpan WeatherCacheExpiry = TimeSpan.FromMinutes(15);
+        private const double W_Hazard       = 0.35;
+        private const double W_TimeOfDay    = 0.10;
+        private const double W_Weather      = 0.10;
+        private const double W_Crime        = 0.12;
+        private const double W_Infra        = 0.12;
+        private const double W_Lighting     = 0.12;
+        private const double W_Surveillance = 0.09;
 
         public PredictiveRiskModel(
             RiskScoringService baseRisk,
@@ -62,7 +61,7 @@ namespace AccessCity.API.Services
             double timeRisk = ComputeTimeOfDayRisk(DateTime.UtcNow);
 
             // Factor 3: Weather risk
-            double weatherRisk = await GetWeatherRiskAsync(lat, lon);
+            double weatherRisk = await WeatherRiskEvaluator.GetRiskAsync(_weatherClient, _cache, lat, lon);
 
             // Factor 4: Crime risk — uses cached UK Police street crime data
             double crimeRisk = _baseRisk.QuickCrimeRisk(lat, lon);
@@ -105,15 +104,19 @@ namespace AccessCity.API.Services
         {
             double hazardRisk = _baseRisk.QuickRisk(lat, lon, hazards, radiusMetres);
             double timeRisk = ComputeTimeOfDayRisk(DateTime.UtcNow);
-            double weatherRisk = GetCachedWeatherRisk(lat, lon);
+            double weatherRisk = WeatherRiskEvaluator.GetCachedRisk(_cache, lat, lon);
             double crimeRisk = _baseRisk.QuickCrimeRisk(lat, lon);
             double infraRisk = _baseRisk.QuickInfrastructureRisk(lat, lon);
+            double lightingRisk = _baseRisk.QuickLightingCoverage(lat, lon);
+            double surveillanceRisk = _baseRisk.QuickSurveillanceCoverage(lat, lon);
 
             double z = W_Hazard * hazardRisk +
                        W_TimeOfDay * timeRisk +
                        W_Weather * weatherRisk +
                        W_Crime * crimeRisk +
-                       W_Infra * infraRisk;
+                       W_Infra * infraRisk +
+                       W_Lighting * lightingRisk +
+                       W_Surveillance * surveillanceRisk;
 
             return Math.Clamp(Sigmoid(z, k: 5.0, midpoint: 0.60), 0, 1);
         }
@@ -151,74 +154,6 @@ namespace AccessCity.API.Services
         /// Adverse conditions (rain, snow, ice, fog) increase pedestrian risk.
         /// Based on: Brodsky & Hakkert 1988, Eisenberg 2004 weather-crash studies.
         /// </summary>
-        private async Task<double> GetWeatherRiskAsync(double lat, double lon)
-        {
-            if (_weatherClient == null) return 0.1; // Default moderate baseline
-
-            string cacheKey = $"{WeatherCacheKey}{Math.Round(lat, 2):F2}:{Math.Round(lon, 2):F2}";
-
-            // Return cached value if available
-            if (_cache?.TryGetValue(cacheKey, out double cached) == true)
-                return cached;
-
-            try
-            {
-                var weather = await _weatherClient.GetCurrentWeatherAsync(lat, lon);
-                double risk = ComputeWeatherRisk(weather);
-
-                _cache?.Set(cacheKey, risk, WeatherCacheExpiry);
-                return risk;
-            }
-            catch
-            {
-                return 0.1;
-            }
-        }
-
-        private double GetCachedWeatherRisk(double lat, double lon)
-        {
-            string cacheKey = $"{WeatherCacheKey}{Math.Round(lat, 2):F2}:{Math.Round(lon, 2):F2}";
-            if (_cache?.TryGetValue(cacheKey, out double cached) == true)
-                return cached;
-            return 0.1; // Default if no cache
-        }
-
-        private static double ComputeWeatherRisk(Models.External.WeatherResponse? weather)
-        {
-            if (weather == null) return 0.1;
-
-            double risk = 0.0;
-
-            // Weather condition codes (OpenWeatherMap):
-            // 2xx = Thunderstorm, 3xx = Drizzle, 5xx = Rain, 6xx = Snow, 7xx = Atmosphere (fog)
-            foreach (var condition in weather.Weather)
-            {
-                risk = Math.Max(risk, condition.Id switch
-                {
-                    >= 200 and < 300 => 0.85, // Thunderstorm — extreme risk
-                    >= 300 and < 400 => 0.25, // Drizzle — moderate
-                    >= 500 and < 505 => 0.40, // Light-moderate rain
-                    >= 505 and < 600 => 0.65, // Heavy rain
-                    >= 600 and < 612 => 0.60, // Snow
-                    >= 612 and < 700 => 0.75, // Heavy snow / sleet
-                    >= 700 and < 770 => 0.50, // Fog / mist / haze
-                    771              => 0.70, // Squalls
-                    781              => 0.95, // Tornado
-                    _ => 0.0
-                });
-            }
-
-            // Wind speed penalty (m/s): high wind = harder to walk safely
-            if (weather.Wind.Speed > 15) risk = Math.Max(risk, 0.55);
-            else if (weather.Wind.Speed > 10) risk = Math.Max(risk, 0.30);
-
-            // Temperature extremes
-            if (weather.Main.Temp < 0) risk = Math.Max(risk, 0.45); // Ice risk
-            if (weather.Main.Temp < -5) risk = Math.Max(risk, 0.65); // Severe cold
-
-            return Math.Clamp(risk, 0, 1);
-        }
-
         // Crime and infrastructure risk are now delegated to RiskScoringService
         // which uses real cached UK Police data and PostGIS infrastructure queries.
 

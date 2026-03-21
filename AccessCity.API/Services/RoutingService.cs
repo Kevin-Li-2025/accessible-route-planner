@@ -68,40 +68,11 @@ public class RoutingService
         // ── Tier 1: OSRM with alternatives + PostGIS obstacle scoring ──
         var alternatives = await _osrmClient.GetAlternativeRoutesAsync(request.Start, request.End);
 
-        if (alternatives != null && alternatives.Count > 0)
+        if (alternatives != null && alternatives.Count > 0
+            && !IsOsrmDetourExcessive(request.Start, request.End, alternatives))
         {
-            // Load real obstacle data from PostGIS for this area
-            RouteGraphData? graphData = null;
-            try
-            {
-                graphData = await _graphRepo.LoadGraphAsync(request.Start, request.End);
-            }
-            catch { /* PostGIS unavailable — score without obstacle data */ }
-
-            var scoredRoutes = alternatives.Select(r => new
-            {
-                Route = r,
-                Cost = ScoreRoute(r, hazardList, request.SafetyWeight, request.Profile, graphData)
-            })
-            .OrderBy(x => x.Cost)
-            .ToList();
-
-            var bestRoute = scoredRoutes.First().Route;
-
-            // If the best OSRM route still has severe hazards, try waypoint-based avoidance
-            var severeHazards = FindHazardsNearRoute(bestRoute.Coordinates, hazardList);
-            if (severeHazards.Count > 0 && request.SafetyWeight > 0.3)
-            {
-                var rerouted = await AttemptWaypointRerouteAsync(request, bestRoute, severeHazards, hazardList);
-                if (rerouted != null)
-                {
-                    double rerouteCost = ScoreRoute(rerouted, hazardList, request.SafetyWeight, request.Profile, graphData);
-                    if (rerouteCost < scoredRoutes.First().Cost)
-                        bestRoute = rerouted;
-                }
-            }
-
-            return BuildOsrmResponse(bestRoute, hazardList, request, graphData);
+            var graphData = await TryLoadRouteGraphAsync(request);
+            return await BuildBestOsrmRouteResponseAsync(request, hazardList, alternatives, graphData);
         }
 
         // ── Tier 2: Real imported OSM graph (PostGIS) ──
@@ -117,6 +88,139 @@ public class RoutingService
 
         // ── Tier 3: Synthetic grid fallback ──
         return FindSafePathFallback(request, hazardList);
+    }
+
+    /// <summary>
+    /// User-weighted recommendation (same as <see cref="FindSafePathAsync"/> when OSRM succeeds) plus labelled OSRM
+    /// alternatives: shortest distance, lowest composite risk (safetyWeight=1), and fastest estimated walk time.
+    /// When OSRM returns only one geometry or all collapse to the same path, <see cref="SafePathOptionsResponse.Variants"/> may be empty.
+    /// </summary>
+    public async Task<SafePathOptionsResponse> FindSafePathWithVariantsAsync(
+        RouteRequest request,
+        IEnumerable<HazardReport> allHazards)
+    {
+        var hazardList = allHazards
+            .Where(h => h.Status == HazardStatus.Reported || h.Status == HazardStatus.UnderReview)
+            .ToList();
+
+        var alternatives = await _osrmClient.GetAlternativeRoutesAsync(request.Start, request.End);
+        if (alternatives == null || alternatives.Count == 0
+            || IsOsrmDetourExcessive(request.Start, request.End, alternatives))
+        {
+            var rec = await FindSafePathAsync(request, hazardList);
+            return new SafePathOptionsResponse { Recommended = rec, Variants = new List<RoutedOptionVariant>() };
+        }
+
+        var graphData = await TryLoadRouteGraphAsync(request);
+        var recommended = await BuildBestOsrmRouteResponseAsync(request, hazardList, alternatives, graphData);
+
+        var shortestRaw = alternatives.OrderBy(a => a.DistanceMetres).First();
+        var safestRaw = alternatives
+            .OrderBy(a => ScoreRoute(a, hazardList, 1.0, request.Profile, graphData))
+            .First();
+        var fastestRaw = alternatives.OrderBy(a => a.DurationSeconds).First();
+
+        var candidateVariants = new List<RoutedOptionVariant>
+        {
+            new()
+            {
+                Kind = "shortest_distance",
+                Description =
+                    "Shortest walking distance among OSRM alternatives; may trade off safety or obstacle avoidance.",
+                Route = BuildOsrmResponse(shortestRaw, hazardList, request, graphData)
+            },
+            new()
+            {
+                Kind = "lowest_composite_risk",
+                Description =
+                    "Lowest composite risk and obstacle penalty (full safety weight) among OSRM alternatives.",
+                Route = BuildOsrmResponse(safestRaw, hazardList, request, graphData)
+            },
+            new()
+            {
+                Kind = "fastest_time",
+                Description = "Shortest OSRM estimated walk time among alternatives.",
+                Route = BuildOsrmResponse(fastestRaw, hazardList, request, graphData)
+            }
+        };
+
+        var variants = candidateVariants
+            .Where(v => v.Route.Path != null && v.Route.Distance > 0)
+            .Where(v => !RoutesNearlyEquivalent(recommended, v.Route, 12.0))
+            .ToList();
+
+        variants = DedupeVariantsBySimilarity(variants, 10.0);
+
+        return new SafePathOptionsResponse { Recommended = recommended, Variants = variants };
+    }
+
+    private async Task<RouteGraphData?> TryLoadRouteGraphAsync(RouteRequest request)
+    {
+        try
+        {
+            return await _graphRepo.LoadGraphAsync(request.Start, request.End);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task<RouteResponse> BuildBestOsrmRouteResponseAsync(
+        RouteRequest request,
+        List<HazardReport> hazardList,
+        List<OsrmRouteResult> alternatives,
+        RouteGraphData? graphData)
+    {
+        var scoredRoutes = alternatives
+            .Select(r => new
+            {
+                Route = r,
+                Cost = ScoreRoute(r, hazardList, request.SafetyWeight, request.Profile, graphData)
+            })
+            .OrderBy(x => x.Cost)
+            .ToList();
+
+        var bestRoute = scoredRoutes.First().Route;
+        var severeHazards = FindHazardsNearRoute(bestRoute.Coordinates, hazardList);
+        if (severeHazards.Count > 0 && request.SafetyWeight > 0.3)
+        {
+            var rerouted = await AttemptWaypointRerouteAsync(request, bestRoute, severeHazards, hazardList);
+            if (rerouted != null)
+            {
+                double rerouteCost = ScoreRoute(rerouted, hazardList, request.SafetyWeight, request.Profile, graphData);
+                if (rerouteCost < scoredRoutes.First().Cost)
+                    bestRoute = rerouted;
+            }
+        }
+
+        return BuildOsrmResponse(bestRoute, hazardList, request, graphData);
+    }
+
+    private static bool RoutesNearlyEquivalent(RouteResponse a, RouteResponse b, double distanceToleranceMetres)
+    {
+        if (a.Path == null || b.Path == null) return false;
+        return Math.Abs(a.Distance - b.Distance) < distanceToleranceMetres
+               && Math.Abs(a.SafetyScore - b.SafetyScore) < 0.04
+               && Math.Abs(a.EstimatedTime - b.EstimatedTime) < 8.0;
+    }
+
+    private static List<RoutedOptionVariant> DedupeVariantsBySimilarity(
+        List<RoutedOptionVariant> variants,
+        double distanceToleranceMetres)
+    {
+        var result = new List<RoutedOptionVariant>();
+        foreach (var v in variants)
+        {
+            if (v.Route.Path == null) continue;
+            bool duplicate = result.Any(r =>
+                Math.Abs(r.Route.Distance - v.Route.Distance) < distanceToleranceMetres
+                && Math.Abs(r.Route.SafetyScore - v.Route.SafetyScore) < 0.03);
+            if (!duplicate)
+                result.Add(v);
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -263,7 +367,7 @@ public class RoutingService
         {
             Path = new LineString(allCoordinates.ToArray()),
             Distance = Math.Round(totalDist, 1),
-            EstimatedTime = Math.Round(totalDist / WalkingSpeed, 0),
+            EstimatedTime = CalculateEstimatedMinutes(totalDist, null),
             SafetyScore = Math.Round(Math.Clamp(avgSafety, 0, 1), 3),
             Warnings = warnings.Distinct().ToList(),
             Steps = steps
@@ -637,11 +741,45 @@ public class RoutingService
         {
             Path = lineString,
             Distance = Math.Round(totalDist, 1),
-            EstimatedTime = Math.Round(osrmRoute.DurationSeconds, 0),
+            EstimatedTime = CalculateEstimatedMinutes(totalDist, osrmRoute.DurationSeconds),
             SafetyScore = Math.Round(Math.Clamp(avgSafety, 0, 1), 3),
             Warnings = warnings.Distinct().ToList(),
             Steps = steps
         };
+    }
+
+    /// <summary>
+    /// Calculated estimated walking time in minutes.
+    /// Uses OSRM duration if realistic, otherwise falls back to a standard 1.3 m/s walking speed.
+    /// </summary>
+    private static double CalculateEstimatedMinutes(double distanceMetres, double? osrmDurationSeconds)
+    {
+        // 1.3 m/s is the standard crosswalk design speed (3 mph).
+        double standardSeconds = distanceMetres / WalkingSpeed;
+        
+        // If OSRM says we can walk it at > 4 m/s (14.4 km/h), it's probably using 
+        // a bike profile or has bad metadata. We clamp it to the standard speed.
+        double finalSeconds = osrmDurationSeconds.HasValue && osrmDurationSeconds.Value > (standardSeconds * 0.3)
+            ? osrmDurationSeconds.Value
+            : standardSeconds;
+
+        return Math.Round(finalSeconds / 60.0, 1);
+    }
+
+    /// <summary>
+    /// Detect when OSRM returns unrealistic detours. Compares every alternative's
+    /// distance against the straight-line (Haversine) distance. If ALL alternatives
+    /// exceed 3x the crow-flies distance, OSRM is likely routing around a
+    /// pedestrianised zone or tunnel and should be bypassed.
+    /// </summary>
+    private static bool IsOsrmDetourExcessive(Coordinate start, Coordinate end, List<OsrmRouteResult> alternatives)
+    {
+        const double MaxDetourRatio = 3.0;
+
+        double straightLine = RiskScoringService.HaversineDistance(start.Y, start.X, end.Y, end.X);
+        if (straightLine < 50) return false; // Too short to judge
+
+        return alternatives.All(a => a.DistanceMetres / straightLine > MaxDetourRatio);
     }
 
     /// <summary>
@@ -1011,7 +1149,7 @@ public class RoutingService
         {
             Path = lineString,
             Distance = Math.Round(totalDist, 1),
-            EstimatedTime = Math.Round(totalDist / WalkingSpeed, 0),
+            EstimatedTime = CalculateEstimatedMinutes(totalDist, null),
             SafetyScore = Math.Round(Math.Clamp(avgSafety, 0, 1), 3),
             Warnings = warnings.Distinct().ToList(),
             Steps = steps

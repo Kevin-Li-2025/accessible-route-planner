@@ -4,6 +4,7 @@ using AccessCity.API.Models.External;
 using AccessCity.API.Services.External;
 using AccessCity.API.Data;
 using Microsoft.EntityFrameworkCore;
+using System.Globalization;
 using Microsoft.Extensions.Caching.Memory;
 
 namespace AccessCity.API.Services
@@ -19,11 +20,15 @@ namespace AccessCity.API.Services
     public class RiskScoringService
     {
         private readonly IUkPoliceDataClient? _ukPolice;
+        private readonly ILiveHazardClient? _weatherClient;
+        private readonly IEnvironmentalDataClient? _envClient;
         private readonly IMemoryCache? _cache;
         private readonly AppDbContext _dbContext;
 
         private const string CrimeCacheKeyPrefix = "ukcrime:";
+        private const string EnvCacheKeyPrefix = "env:";
         private static readonly TimeSpan CrimeCacheExpiry = TimeSpan.FromHours(24);
+        private static readonly TimeSpan EnvCacheExpiry = TimeSpan.FromHours(1);
 
         private static readonly Dictionary<string, double> HazardSeverity = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -45,18 +50,28 @@ namespace AccessCity.API.Services
 
         private const double DefaultSeverity = 0.5;
 
-        private const double W_Proximity       = 0.40;
-        private const double W_Density         = 0.25;
-        private const double W_Infrastructure  = 0.20;
-        private const double W_Crime           = 0.15;
+        // Rebalanced to include lighting and surveillance coverage.
+        private const double W_Proximity       = 0.35;
+        private const double W_Density         = 0.20;
+        private const double W_Infrastructure  = 0.15;
+        private const double W_Crime           = 0.12;
+        private const double W_Lighting        = 0.10;
+        private const double W_Surveillance    = 0.08;
 
         private const double DecayLambda = 150.0;
 
-        public RiskScoringService(AppDbContext dbContext, IUkPoliceDataClient? ukPolice = null, IMemoryCache? cache = null)
+        public RiskScoringService(
+            AppDbContext dbContext,
+            IUkPoliceDataClient? ukPolice = null,
+            ILiveHazardClient? weatherClient = null,
+            IMemoryCache? cache = null,
+            IEnvironmentalDataClient? envClient = null)
         {
             _dbContext = dbContext;
             _ukPolice = ukPolice;
+            _weatherClient = weatherClient;
             _cache = cache;
+            _envClient = envClient;
         }
 
         /// <summary>
@@ -115,11 +130,16 @@ namespace AccessCity.API.Services
                 crimeRisk = Sigmoid(crimeCount / 12.0, k: 2.0);
             }
 
+            double lightingRisk = await GetCachedLightingRiskAsync(latitude, longitude, radiusMetres);
+            double surveillanceRisk = await GetCachedSurveillanceRiskAsync(latitude, longitude, radiusMetres);
+
             double overall = Clamp01(
                 W_Proximity      * hazardProximity +
                 W_Density        * hazardDensity   +
                 W_Infrastructure * infrastructureRisk +
-                W_Crime          * crimeRisk);
+                W_Crime          * crimeRisk +
+                W_Lighting       * lightingRisk +
+                W_Surveillance   * surveillanceRisk);
 
             return new RiskScoreResponse
             {
@@ -128,6 +148,8 @@ namespace AccessCity.API.Services
                 HazardDensityRisk   = Math.Round(hazardDensity,    4),
                 InfrastructureRisk = Math.Round(infrastructureRisk,4),
                 CrimeRisk           = Math.Round(crimeRisk,        4),
+                LightingRisk        = Math.Round(lightingRisk,     4),
+                SurveillanceRisk    = Math.Round(surveillanceRisk,  4),
                 CrimeCount          = crimeCount,
                 NearbyHazardCount   = nearbyHazards.Count,
                 NearbyHazards       = nearbyHazards
@@ -151,13 +173,14 @@ namespace AccessCity.API.Services
             if (now.Hours >= 22 || now.Hours < 5) timeFactor = 0.8; // Night risk
             else if (now.Hours >= 6 && now.Hours < 9) timeFactor = 0.4; // Morning rush
 
-            // 2. Weather Factor (placeholder)
-            double weatherFactor = 0.3; 
+            // 2. Weather — same OpenWeather mapping as PredictiveRiskModel (shared cache key).
+            double weatherFactor = await WeatherRiskEvaluator.GetRiskAsync(_weatherClient, _cache, latitude, longitude);
 
             var factors = new List<string>();
             if (baseRisk.HazardDensityRisk > 0.6) factors.Add("High density of reported hazards in this sector.");
             if (baseRisk.CrimeRisk > 0.5) factors.Add("Historical crime data indicates elevated risk.");
             if (timeFactor > 0.7) factors.Add("Increased risk due to late-night hours.");
+            if (weatherFactor > 0.35) factors.Add("Weather conditions may increase slip or visibility risk.");
             if (baseRisk.InfrastructureRisk > 0.6) factors.Add("Infrastructure indicators suggest poor accessibility.");
 
             if (factors.Count == 0) factors.Add("Generally safe area with no major risk indicators.");
@@ -282,6 +305,52 @@ namespace AccessCity.API.Services
 
             // No cache — just return baseline instead of random
             return 0.25;
+        }
+
+        /// <summary>Lighting coverage risk [0,1]. 0 = well-lit, 1 = no lamps.</summary>
+        public double QuickLightingCoverage(double lat, double lng)
+        {
+            if (_cache == null) return 0.30;
+            var key = $"{EnvCacheKeyPrefix}lamp:{lat.ToString("F3", CultureInfo.InvariantCulture)}:{lng.ToString("F3", CultureInfo.InvariantCulture)}";
+            return _cache.TryGetValue(key, out double cached) ? cached : 0.30;
+        }
+
+        /// <summary>Surveillance coverage risk [0,1]. 0 = high CCTV, 1 = none.</summary>
+        public double QuickSurveillanceCoverage(double lat, double lng)
+        {
+            if (_cache == null) return 0.40;
+            var key = $"{EnvCacheKeyPrefix}cam:{lat.ToString("F3", CultureInfo.InvariantCulture)}:{lng.ToString("F3", CultureInfo.InvariantCulture)}";
+            return _cache.TryGetValue(key, out double cached) ? cached : 0.40;
+        }
+
+        private async Task<double> GetCachedLightingRiskAsync(double lat, double lng, double radiusMetres)
+        {
+            if (_envClient == null || _cache == null) return 0.30;
+            var key = $"{EnvCacheKeyPrefix}lamp:{Math.Round(lat, 3):F3}:{Math.Round(lng, 3):F3}";
+            if (_cache.TryGetValue(key, out double cached)) return cached;
+
+            var summary = await _envClient.GetNearbyInfrastructureAsync(lat, lng, Math.Min(radiusMetres, 300));
+            // 10+ lamps within radius = well-lit, 0 = dark.
+            double risk = Math.Clamp(1.0 - (summary.StreetLampCount / 10.0), 0, 1);
+            _cache.Set(key, risk, EnvCacheExpiry);
+
+            // Also cache surveillance while we have it.
+            var camKey = $"{EnvCacheKeyPrefix}cam:{Math.Round(lat, 3):F3}:{Math.Round(lng, 3):F3}";
+            double camRisk = Math.Clamp(1.0 - (summary.SurveillanceCameraCount / 3.0), 0, 1);
+            _cache.Set(camKey, camRisk, EnvCacheExpiry);
+
+            return risk;
+        }
+
+        private async Task<double> GetCachedSurveillanceRiskAsync(double lat, double lng, double radiusMetres)
+        {
+            if (_envClient == null || _cache == null) return 0.40;
+            var key = $"{EnvCacheKeyPrefix}cam:{Math.Round(lat, 3):F3}:{Math.Round(lng, 3):F3}";
+            if (_cache.TryGetValue(key, out double cached)) return cached;
+
+            // Fetch and cache both at once.
+            await GetCachedLightingRiskAsync(lat, lng, radiusMetres);
+            return _cache.TryGetValue(key, out cached) ? cached : 0.40;
         }
 
         /// <summary>

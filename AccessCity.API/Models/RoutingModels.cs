@@ -38,6 +38,30 @@ namespace AccessCity.API.Models
         public List<RouteStep> Steps         { get; set; } = new();
     }
 
+    /// <summary>
+    /// Multi-objective-style response: user-weighted recommendation plus distinct OSRM alternatives
+    /// (shortest distance, lowest composite risk, fastest time) when the public router returns multiple geometries.
+    /// </summary>
+    public class SafePathOptionsResponse
+    {
+        public RouteResponse Recommended { get; set; } = null!;
+
+        /// <summary>Non-duplicate alternatives vs <see cref="Recommended"/> (may be empty if only one geometry).</summary>
+        public List<RoutedOptionVariant> Variants { get; set; } = new();
+    }
+
+    /// <summary>One labelled alternative route for client choice (Pareto-style trade-offs).</summary>
+    public class RoutedOptionVariant
+    {
+        /// <summary>Machine-readable: shortest_distance, lowest_composite_risk, fastest_time.</summary>
+        public string Kind { get; set; } = string.Empty;
+
+        /// <summary>Human-readable explanation for the UI.</summary>
+        public string Description { get; set; } = string.Empty;
+
+        public RouteResponse Route { get; set; } = null!;
+    }
+
     /// <summary>One leg / turn-by-turn instruction.</summary>
     public class RouteStep
     {
@@ -76,6 +100,12 @@ namespace AccessCity.API.Models
         /// <summary>Risk from UK Police open data (recent street crime at location).</summary>
         public double CrimeRisk               { get; set; }
 
+        /// <summary>Risk from lack of street lamp coverage (OSM data).</summary>
+        public double LightingRisk            { get; set; }
+
+        /// <summary>Risk from lack of CCTV/surveillance coverage (OSM data).</summary>
+        public double SurveillanceRisk        { get; set; }
+
         /// <summary>Number of active hazards within the search radius.</summary>
         public int    NearbyHazardCount     { get; set; }
 
@@ -94,6 +124,8 @@ namespace AccessCity.API.Models
         public double WeatherRisk { get; set; }
         public double CrimeRisk { get; set; }
         public double InfrastructureRisk { get; set; }
+        public double LightingRisk { get; set; }
+        public double SurveillanceRisk { get; set; }
         public List<string> RiskFactors { get; set; } = new();
     }
 

@@ -198,4 +198,37 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
         Assert.NotNull(result);
         Assert.NotNull(result.Path);
     }
+
+    [Fact]
+    public async Task SafePathOptions_Returns_Recommended_And_Optional_Variants()
+    {
+        var client = await _factory.CreateAuthenticatedClientAsync();
+        var request = new
+        {
+            Start = new { X = -1.8985, Y = 52.4814 },
+            End = new { X = -1.9300, Y = 52.4510 },
+            Preferences = new List<string>(),
+            SafetyWeight = 0.5,
+            Profile = "standard"
+        };
+
+        var response = await client.PostAsJsonAsync("/api/v1/routing/safe-path/options", request, JsonOptions);
+        if (response.StatusCode == HttpStatusCode.ServiceUnavailable) return;
+        response.EnsureSuccessStatusCode();
+
+        var envelope = await response.Content.ReadFromJsonAsync<SafePathOptionsResponse>(JsonOptions);
+        Assert.NotNull(envelope);
+        Assert.NotNull(envelope!.Recommended);
+        Assert.NotNull(envelope.Recommended.Path);
+        Assert.True(envelope.Recommended.Distance > 0);
+
+        Assert.NotNull(envelope.Variants);
+        foreach (var v in envelope.Variants)
+        {
+            Assert.False(string.IsNullOrWhiteSpace(v.Kind));
+            Assert.False(string.IsNullOrWhiteSpace(v.Description));
+            Assert.NotNull(v.Route.Path);
+            Assert.True(v.Route.Distance > 0);
+        }
+    }
 }
