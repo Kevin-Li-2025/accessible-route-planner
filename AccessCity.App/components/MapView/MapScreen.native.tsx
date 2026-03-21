@@ -5,7 +5,7 @@ import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 
-import SearchBar from './SearchBar';
+import SearchBar, { type SearchSuggestion } from './SearchBar';
 import RouteInfoCard from './RouteInfoCard';
 import HazardPreviewCard from './HazardPreviewCard';
 import HazardDetailsModal from './HazardDetailsModal';
@@ -43,15 +43,30 @@ async function fetchHazardsApi() {
 }
 
 export default function MapScreen() {
+  type GeocodingResult = {
+    place_id?: number | string;
+    lat?: string | number;
+    lon?: string | number;
+    display_name?: string;
+    name?: string;
+  };
+
+  type AutocompleteSuggestion = SearchSuggestion & {
+    result: GeocodingResult;
+  };
+
   const mapRef = useRef<MapView | null>(null);
   const locationSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
   const navigationModeRef = useRef(false);
   const routeStepsRef = useRef<VoiceStep[]>([]);
   const lastSpokenStepRef = useRef(-1);
+  const suggestionRequestIdRef = useRef(0);
+  const skipNextSuggestionFetchRef = useRef(false);
 
   const [currentLocation, setCurrentLocation] = useState<Coordinate | null>(null);
   const [destinationText, setDestinationText] = useState('');
   const [destination, setDestination] = useState<Coordinate | null>(null);
+  const [searchSuggestions, setSearchSuggestions] = useState<AutocompleteSuggestion[]>([]);
   const [routeCoordinates, setRouteCoordinates] = useState<Coordinate[]>([]);
   const [routeSteps, setRouteSteps] = useState<VoiceStep[]>([]);
   const [travelTime, setTravelTime] = useState('');
@@ -217,6 +232,7 @@ export default function MapScreen() {
 
   function handleClearSearch() {
     resetRouteState(true);
+    setSearchSuggestions([]);
   }
 
   function handleOpenReportPage() {
@@ -327,9 +343,74 @@ export default function MapScreen() {
     };
   }, []);
 
-  async function searchLocation(query: string) {
+  function parseGeocodingResult(result: GeocodingResult) {
+    const lat = parseFloat(String(result.lat));
+    const lon = parseFloat(String(result.lon));
+
+    if (Number.isNaN(lat) || Number.isNaN(lon)) {
+      return null;
+    }
+
+    const displayName = String(result.display_name ?? result.name ?? '').trim();
+    const displayParts = displayName
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    return {
+      id: String(result.place_id ?? displayName ?? `${lat},${lon}`),
+      latitude: lat,
+      longitude: lon,
+      title: displayParts[0] || displayName || 'Selected destination',
+      subtitle:
+        displayParts.length > 1
+          ? displayParts.slice(1).join(', ')
+          : undefined,
+      displayName: displayName || 'Selected destination',
+    };
+  }
+
+  function applyDestinationSelection(selectedResult: GeocodingResult) {
+    const parsedResult = parseGeocodingResult(selectedResult);
+
+    if (!parsedResult) {
+      Alert.alert('Search error', 'Invalid coordinates returned from geocoding.');
+      return;
+    }
+
+    setNavigationMode(false);
+    navigationModeRef.current = false;
+    setRouteInfoVisible(false);
+    setRouteCoordinates([]);
+    setRouteSteps([]);
+    setTravelTime('');
+    setDistance('');
+    setSafetyScore('');
+    setSearchSuggestions([]);
+    stopVoiceGuidance();
+    lastSpokenStepRef.current = -1;
+
+    skipNextSuggestionFetchRef.current = true;
+    setDestinationText(parsedResult.displayName);
+    setDestination({
+      latitude: parsedResult.latitude,
+      longitude: parsedResult.longitude,
+    });
+
+    mapRef.current?.animateToRegion(
+      {
+        latitude: parsedResult.latitude,
+        longitude: parsedResult.longitude,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      },
+      700
+    );
+  }
+
+  async function searchLocation(query: string, showErrorAlert = true) {
     try {
-      const results = await api.get<any[]>(
+      const results = await api.get<GeocodingResult[]>(
         `/geocoding/search?query=${encodeURIComponent(query)}`,
         {
           // TODO: Change skipAuth to false if geocoding later becomes a protected endpoint.
@@ -343,10 +424,58 @@ export default function MapScreen() {
       return Array.isArray(results) ? results : [];
     } catch (error) {
       console.error('Geocoding error:', error);
-      Alert.alert('Search error', 'Could not search for this location.');
+      if (showErrorAlert) {
+        Alert.alert('Search error', 'Could not search for this location.');
+      }
       return [];
     }
   }
+
+  useEffect(() => {
+    const trimmedText = destinationText.trim();
+
+    if (!trimmedText) {
+      setSearchSuggestions([]);
+      return;
+    }
+
+    if (skipNextSuggestionFetchRef.current) {
+      skipNextSuggestionFetchRef.current = false;
+      setSearchSuggestions([]);
+      return;
+    }
+
+    const timeoutId = setTimeout(async () => {
+      const requestId = suggestionRequestIdRef.current + 1;
+      suggestionRequestIdRef.current = requestId;
+
+      const results = await searchLocation(trimmedText, false);
+
+      if (suggestionRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      const suggestions = results
+        .map((result) => {
+          const parsedResult = parseGeocodingResult(result);
+          if (!parsedResult) return null;
+
+          const suggestion: AutocompleteSuggestion = {
+            id: parsedResult.id,
+            title: parsedResult.title,
+            subtitle: parsedResult.subtitle,
+            result,
+          };
+
+          return suggestion;
+        })
+        .filter((item) => item !== null);
+
+      setSearchSuggestions(suggestions);
+    }, 350);
+
+    return () => clearTimeout(timeoutId);
+  }, [destinationText]);
 
   async function handleSetDestination() {
     const trimmedText = destinationText.trim();
@@ -363,41 +492,22 @@ export default function MapScreen() {
       return;
     }
 
-    const firstResult = results[0];
-
-    // TODO: Confirm the exact field names returned by the geocoding API.
-    // Some backends may return latitude/longitude instead of lat/lon.
-    const lat = parseFloat(String(firstResult.lat));
-    const lon = parseFloat(String(firstResult.lon));
-
-    if (Number.isNaN(lat) || Number.isNaN(lon)) {
-      Alert.alert('Search error', 'Invalid coordinates returned from geocoding.');
+    if (!results[0]) {
+      Alert.alert('No results', 'No matching location was found.');
       return;
     }
 
-    setNavigationMode(false);
-    navigationModeRef.current = false;
-    setRouteInfoVisible(false);
-    setRouteCoordinates([]);
-    setRouteSteps([]);
-    setTravelTime('');
-    setDistance('');
-    setSafetyScore('');
+    applyDestinationSelection(results[0]);
+  }
 
-    setDestination({
-      latitude: lat,
-      longitude: lon,
-    });
+  function handleSuggestionPress(suggestion: SearchSuggestion) {
+    const matchingSuggestion = searchSuggestions.find((item) => item.id === suggestion.id);
 
-    mapRef.current?.animateToRegion(
-      {
-        latitude: lat,
-        longitude: lon,
-        latitudeDelta: 0.02,
-        longitudeDelta: 0.02,
-      },
-      700
-    );
+    if (!matchingSuggestion) {
+      return;
+    }
+
+    applyDestinationSelection(matchingSuggestion.result);
   }
 
   async function fetchRouteFromBackend() {
@@ -702,6 +812,8 @@ export default function MapScreen() {
             onChangeText={setDestinationText}
             onSubmitEditing={handleSetDestination}
             onClear={handleClearSearch}
+            suggestions={searchSuggestions}
+            onSuggestionPress={handleSuggestionPress}
           />
 
           <TouchableOpacity
