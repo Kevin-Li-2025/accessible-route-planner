@@ -184,6 +184,7 @@ namespace AccessCity.API.Data
             return value switch
             {
                 HazardStatus.Reported => DatabaseHazardStatus.Reported,
+                HazardStatus.Acknowledged => DatabaseHazardStatus.Verified,
                 HazardStatus.UnderReview => DatabaseHazardStatus.UnderReview,
                 HazardStatus.Resolved => DatabaseHazardStatus.Resolved,
                 HazardStatus.Dismissed => DatabaseHazardStatus.Rejected,
@@ -197,7 +198,7 @@ namespace AccessCity.API.Data
             {
                 DatabaseHazardStatus.Reported => HazardStatus.Reported,
                 DatabaseHazardStatus.UnderReview => HazardStatus.UnderReview,
-                DatabaseHazardStatus.Verified => HazardStatus.UnderReview,
+                DatabaseHazardStatus.Verified => HazardStatus.Acknowledged,
                 DatabaseHazardStatus.ActionPlanned => HazardStatus.UnderReview,
                 DatabaseHazardStatus.InProgress => HazardStatus.UnderReview,
                 DatabaseHazardStatus.Resolved => HazardStatus.Resolved,

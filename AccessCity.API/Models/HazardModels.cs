@@ -6,6 +6,7 @@ namespace AccessCity.API.Models
     public enum HazardStatus
     {
         Reported,
+        Acknowledged,
         UnderReview,
         Resolved,
         Dismissed
