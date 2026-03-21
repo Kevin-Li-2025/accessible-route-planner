@@ -88,7 +88,7 @@ export default function Hazard() {
   async function loadHazards() {
     try {
       setIsLoading(true);
-      const data = await hazardsService.getHazards();
+      const data = await hazardsService.getHazards(selectedFilter);
       const mapped = data
         .map<HazardItem | null>((hazard) => {
           const status = hazard.status === 'UnderReview'
@@ -129,12 +129,7 @@ export default function Hazard() {
   useFocusEffect(
     React.useCallback(() => {
       void loadHazards();
-    }, [])
-  );
-
-  const filteredHazards = useMemo(
-    () => hazards.filter((hazard) => hazard.status === selectedFilter),
-    [hazards, selectedFilter]
+    }, [selectedFilter])
   );
 
   return (
@@ -178,13 +173,13 @@ export default function Hazard() {
           </View>
         ) : null}
 
-        {!isLoading && !filteredHazards.length ? (
+        {!isLoading && !hazards.length ? (
           <View style={styles.stateCard}>
             <Text style={styles.stateText}>No hazards found for this status.</Text>
           </View>
         ) : null}
 
-        {filteredHazards.map((hazard) => (
+        {hazards.map((hazard) => (
           <View key={hazard.id} style={styles.card}>
             <View style={styles.cardHeader}>
               <View style={styles.iconWrap}>

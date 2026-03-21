@@ -28,11 +28,18 @@ import {
 } from './MapTypes';
 
 async function fetchHazardsApi() {
-  // TODO: Update this endpoint if the backend later separates
-  // public map hazards from user-submitted hazard reports.
-  // Example future change:
-  // /hazards/approved or /hazards/map-visible
-  return api.get<any[]>('/hazards', { skipAuth: true });
+  try {
+    const [reported, acknowledged] = await Promise.all([
+      api.get<any[]>('/hazards?status=Reported', { skipAuth: true }),
+      api.get<any[]>('/hazards?status=Acknowledged', { skipAuth: true })
+    ]);
+    const arr1 = Array.isArray(reported) ? reported : [];
+    const arr2 = Array.isArray(acknowledged) ? acknowledged : [];
+    return [...arr1, ...arr2];
+  } catch (error) {
+    console.error('Failed to fetch map hazards:', error);
+    return [];
+  }
 }
 
 export default function MapScreen() {

@@ -16,7 +16,7 @@ namespace AccessCity.API.Services;
 public interface IRealHazardDataService
 {
     /// <summary>Returns hazards from OSM in the given bbox. Uses default UK (Birmingham) bbox if null.</summary>
-    Task<List<HazardReport>> GetActiveHazardsAsync(double? minLat = null, double? minLng = null, double? maxLat = null, double? maxLng = null);
+    Task<List<HazardReport>> GetActiveHazardsAsync(double? minLat = null, double? minLng = null, double? maxLat = null, double? maxLng = null, HazardStatus? status = null);
 }
 
 public class RealHazardDataService : IRealHazardDataService
@@ -41,7 +41,7 @@ public class RealHazardDataService : IRealHazardDataService
         _dbContext = dbContext;
     }
 
-    public async Task<List<HazardReport>> GetActiveHazardsAsync(double? minLat = null, double? minLng = null, double? maxLat = null, double? maxLng = null)
+    public async Task<List<HazardReport>> GetActiveHazardsAsync(double? minLat = null, double? minLng = null, double? maxLat = null, double? maxLng = null, HazardStatus? status = null)
     {
         var minLatVal = minLat ?? DefaultMinLat;
         var minLngVal = minLng ?? DefaultMinLng;
@@ -57,21 +57,31 @@ public class RealHazardDataService : IRealHazardDataService
         if (minLngVal > maxLngVal)
             throw new ArgumentException("minLng must be less than or equal to maxLng.");
 
-        var cacheKey = $"{CacheKeyPrefix}{minLatVal:F4}_{minLngVal:F4}_{maxLatVal:F4}_{maxLngVal:F4}";
+        var cacheKey = $"{CacheKeyPrefix}{minLatVal:F4}_{minLngVal:F4}_{maxLatVal:F4}_{maxLngVal:F4}_{status?.ToString() ?? "all"}";
 
         if (_cache.TryGetValue(cacheKey, out List<HazardReport>? cached))
             return cached ?? new List<HazardReport>();
 
-        // 1. Fetch from External OSM
-        var list = await FetchAndMapHazardsAsync(minLatVal, minLngVal, maxLatVal, maxLngVal);
+        // 1. Fetch from External OSM (only if filtering by Reported or no filter)
+        var list = new List<HazardReport>();
+        if (status == null || status == HazardStatus.Reported)
+        {
+            list = await FetchAndMapHazardsAsync(minLatVal, minLngVal, maxLatVal, maxLngVal);
+        }
 
         // 2. Fetch from Local Database
         try 
         {
-            var dbHazards = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.ToListAsync(
-                _dbContext.Hazards.Where(h => 
+            var dbQuery = _dbContext.Hazards.Where(h => 
                     h.Location.X >= minLngVal && h.Location.X <= maxLngVal && 
-                    h.Location.Y >= minLatVal && h.Location.Y <= maxLatVal));
+                    h.Location.Y >= minLatVal && h.Location.Y <= maxLatVal);
+
+            if (status.HasValue)
+            {
+                dbQuery = dbQuery.Where(h => h.Status == status.Value);
+            }
+
+            var dbHazards = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.ToListAsync(dbQuery);
             
             list.AddRange(dbHazards);
         }

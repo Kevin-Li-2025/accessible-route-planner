@@ -30,9 +30,10 @@ public class HazardsController : ControllerBase
         [FromQuery] double? minLat,
         [FromQuery] double? minLng,
         [FromQuery] double? maxLat,
-        [FromQuery] double? maxLng)
+        [FromQuery] double? maxLng,
+        [FromQuery] HazardStatus? status)
     {
-        var hazards = await _realHazardData.GetActiveHazardsAsync(minLat, minLng, maxLat, maxLng);
+        var hazards = await _realHazardData.GetActiveHazardsAsync(minLat, minLng, maxLat, maxLng, status);
         return Ok(hazards);
     }
 
