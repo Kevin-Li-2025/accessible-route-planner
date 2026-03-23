@@ -41,7 +41,7 @@ export default function SearchBar({
 
         <TextInput
           style={styles.input}
-          placeholder="Search destination..."
+          placeholder="Search destination in Birmingham…"
           placeholderTextColor="#9CA3AF"
           value={value}
           onChangeText={onChangeText}

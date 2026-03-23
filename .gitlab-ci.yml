@@ -3,7 +3,7 @@
 # quality (gates before heavier jobs):
 #   - Frontend static analysis: ESLint (expo lint)
 #   - Supply chain: npm audit (high+), NuGet vulnerable packages
-#   - TypeScript: tsc --noEmit (allow_failure until app types are clean)
+#   - TypeScript: tsc --noEmit (must pass)
 # test:
 #   - Backend: xUnit + WebApplicationFactory, PostGIS + Redis
 #   - Frontend: Jest (jest-expo)
@@ -54,7 +54,6 @@ quality:frontend-typecheck:
   stage: quality
   image: node:20-bookworm
   timeout: 15m
-  allow_failure: true
   cache:
     key:
       files:
@@ -133,6 +132,83 @@ backend:test:
   rules:
     - exists:
         - CodeConquerors.sln
+
+# ─── API smoke: live process + scripts/probe_api_endpoints.py ───────────────
+# Uses AccessCity.Tests/Fixtures/test-network.osm (no repo-root *.osm required).
+# Depends on outbound HTTPS (Nominatim, OSRM, etc.); failures there are environmental.
+api:probe:
+  stage: test
+  image: mcr.microsoft.com/dotnet/sdk:9.0
+  services:
+    - name: postgis/postgis:16-3.4
+      alias: postgres
+    - name: redis:7-alpine
+      alias: redis
+  timeout: 45m
+  before_script:
+    - apt-get update
+    - DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 netcat-openbsd curl
+    - |
+      echo "Waiting for PostgreSQL..."
+      for i in $(seq 1 90); do
+        if nc -z postgres 5432 2>/dev/null; then echo "Postgres port open."; break; fi
+        sleep 2
+      done
+      nc -z postgres 5432 || { echo "PostgreSQL not reachable"; exit 1; }
+    - |
+      echo "Waiting for Redis..."
+      for i in $(seq 1 30); do
+        if nc -z redis 6379 2>/dev/null; then echo "Redis port open."; break; fi
+        sleep 1
+      done
+      nc -z redis 6379 || { echo "Redis not reachable"; exit 1; }
+  script:
+    - dotnet restore CodeConquerors.sln
+    - dotnet build AccessCity.API/AccessCity.API.csproj -c Release --no-restore
+    - cp AccessCity.Tests/Fixtures/test-network.osm /tmp/accesscity-probe.osm
+    - |
+      export OsmImport__FilePath=/tmp/accesscity-probe.osm
+      export OsmImport__ImportOnStartup=false
+      export OsmImport__ReplaceExisting=true
+      export ASPNETCORE_URLS=http://0.0.0.0:8080
+      dotnet run --project AccessCity.API/AccessCity.API.csproj -c Release --no-build --no-launch-profile &
+      echo $! > /tmp/accesscity-api.pid
+    - |
+      echo "Waiting for API /health/ready..."
+      ok=0
+      for i in $(seq 1 60); do
+        if curl -sf http://127.0.0.1:8080/health/ready >/dev/null; then ok=1; break; fi
+        sleep 2
+      done
+      if [ "$ok" != "1" ]; then
+        echo "API did not become ready in time"
+        kill $(cat /tmp/accesscity-api.pid) 2>/dev/null || true
+        exit 1
+      fi
+    - python3 scripts/probe_api_endpoints.py http://127.0.0.1:8080
+    - kill $(cat /tmp/accesscity-api.pid) 2>/dev/null || true
+  rules:
+    - exists:
+        - scripts/probe_api_endpoints.py
+
+# Same as api:probe but forces in-process cache (no Redis). Overrides global ConnectionStrings__Redis.
+api:probe:noredis:
+  extends: api:probe
+  variables:
+    ConnectionStrings__Redis: ""
+  services:
+    - name: postgis/postgis:16-3.4
+      alias: postgres
+  before_script:
+    - apt-get update
+    - DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 netcat-openbsd curl
+    - |
+      echo "Waiting for PostgreSQL..."
+      for i in $(seq 1 90); do
+        if nc -z postgres 5432 2>/dev/null; then echo "Postgres port open."; break; fi
+        sleep 2
+      done
+      nc -z postgres 5432 || { echo "PostgreSQL not reachable"; exit 1; }
 
 # ─── Frontend (Jest + jest-expo) ─────────────────────────────────────────────
 frontend:test:

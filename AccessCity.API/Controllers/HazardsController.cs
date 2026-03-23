@@ -82,7 +82,13 @@ public class HazardsController : ControllerBase
     public async Task<ActionResult<HazardReport>> GetHazardById(Guid id)
     {
         var hazard = await _dbContext.Hazards.AsNoTracking().SingleOrDefaultAsync(h => h.Id == id);
-        return hazard is null ? NotFound() : Ok(hazard);
+        if (hazard is not null)
+            return Ok(hazard);
+
+        // OSM-backed rows use deterministic GUIDs and are not persisted; same merge as GET list (default bbox).
+        var merged = await _realHazardData.GetActiveHazardsAsync(null, null, null, null, null);
+        var synthetic = merged.FirstOrDefault(h => h.Id == id);
+        return synthetic is null ? NotFound() : Ok(synthetic);
     }
 
     [HttpPatch("{id:guid}")]

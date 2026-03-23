@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, View, Text, TouchableOpacity } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, type DimensionValue } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 type RouteInfoCardProps = {
@@ -106,9 +106,7 @@ export default function RouteInfoCard({
           <View
             style={[
               styles.progressFill,
-              {
-                width: 100,
-              },
+              { width: progressWidth as DimensionValue },
             ]}
           />
         </View>

@@ -11,8 +11,16 @@ services:
       Jwt__Key: ${JWT_SECRET:-AccessCity_Secret_Key_For_Dev_2026_Placeholder}
       Jwt__Issuer: AccessCity.API
       Jwt__Audience: AccessCity.App
+      # Default false (avoids OOM on large extracts). Override when starting compose, e.g.:
+      #   OsmImport__ImportOnStartup=true docker compose up -d --force-recreate api
+      OsmImport__ImportOnStartup: ${OsmImport__ImportOnStartup:-false}
+      # HybridCache L2 (route cache, etc.). Empty = use in-process memory only (see DependencyInjection).
+      # Enable Redis: put `REDIS_CONNECTION=redis:6379` in a `.env` next to this file, then recreate api.
+      ConnectionStrings__Redis: ${REDIS_CONNECTION:-}
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     mem_limit: 4g
     volumes:
@@ -34,6 +42,17 @@ services:
       test: ["CMD-SHELL", "pg_isready -d accesscitydb -U accesscity"]
       interval: 10s
       timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: accesscity_dev_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
       retries: 5
 
 volumes:

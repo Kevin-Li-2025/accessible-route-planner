@@ -109,6 +109,8 @@ namespace AccessCity.API.Data
                     .WithMany(p => p.RefreshTokens)
                     .HasForeignKey(d => d.UserId)
                     .OnDelete(DeleteBehavior.Cascade);
+
+                entity.HasIndex(e => e.Token).HasDatabaseName("IX_refresh_token_token");
             });
 
             builder.Entity<InfrastructureAsset>(entity =>

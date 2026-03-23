@@ -1,6 +1,13 @@
 import { Platform } from 'react-native';
-import * as SecureStore from 'expo-secure-store';
 import { resolveApiUrls } from './apiConfig';
+import {
+  TOKEN_KEY,
+  REFRESH_TOKEN_KEY,
+  USER_KEY,
+  deleteItemAsync,
+  getItemAsync,
+  setItemAsync,
+} from './sessionStorage';
 
 const { apiUrl: API_URL, baseUrl: API_BASE_URL } = resolveApiUrls({
   expoPublicApiUrl: process.env.EXPO_PUBLIC_API_URL,
@@ -10,10 +17,6 @@ const { apiUrl: API_URL, baseUrl: API_BASE_URL } = resolveApiUrls({
 });
 
 export { API_URL, API_BASE_URL };
-
-const TOKEN_KEY = 'ac_access_token';
-const REFRESH_TOKEN_KEY = 'ac_refresh_token';
-const USER_KEY = 'ac_user_data';
 
 interface RequestOptions extends RequestInit {
   skipAuth?: boolean;
@@ -31,9 +34,9 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 async function clearStoredSession() {
-  await SecureStore.deleteItemAsync(TOKEN_KEY);
-  await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
-  await SecureStore.deleteItemAsync(USER_KEY);
+  await deleteItemAsync(TOKEN_KEY);
+  await deleteItemAsync(REFRESH_TOKEN_KEY);
+  await deleteItemAsync(USER_KEY);
 }
 
 export const api = {
@@ -46,7 +49,7 @@ export const api = {
     }
 
     if (!options.skipAuth) {
-      const token = await SecureStore.getItemAsync(TOKEN_KEY);
+      const token = await getItemAsync(TOKEN_KEY);
       console.log('REQUEST TOKEN:', token);
 
       if (isNonEmptyString(token)) {
@@ -157,13 +160,13 @@ export const api = {
   },
   async refreshToken(): Promise<boolean> {
   try {
-    const storedRefreshToken = await SecureStore.getItemAsync(REFRESH_TOKEN_KEY);
+    const storedRefreshToken = await getItemAsync(REFRESH_TOKEN_KEY);
     console.log('REFRESH TOKEN FROM STORE:', storedRefreshToken);
 
     if (!storedRefreshToken || storedRefreshToken.trim() === '') {
       console.log('NO VALID REFRESH TOKEN FOUND');
-      await SecureStore.deleteItemAsync(TOKEN_KEY);
-      await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
+      await deleteItemAsync(TOKEN_KEY);
+      await deleteItemAsync(REFRESH_TOKEN_KEY);
       return false;
     }
 
@@ -203,8 +206,8 @@ export const api = {
       const errorText = await response.text().catch(() => '');
       console.log('REFRESH ERROR TEXT:', errorText);
 
-      await SecureStore.deleteItemAsync(TOKEN_KEY);
-      await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
+      await deleteItemAsync(TOKEN_KEY);
+      await deleteItemAsync(REFRESH_TOKEN_KEY);
       return false;
     }
 
@@ -213,20 +216,20 @@ export const api = {
 
     if (!data.token || !data.refreshToken) {
       console.log('REFRESH RESPONSE MISSING TOKEN FIELDS');
-      await SecureStore.deleteItemAsync(TOKEN_KEY);
-      await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
+      await deleteItemAsync(TOKEN_KEY);
+      await deleteItemAsync(REFRESH_TOKEN_KEY);
       return false;
     }
 
-    await SecureStore.setItemAsync(TOKEN_KEY, data.token);
-    await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, data.refreshToken);
+    await setItemAsync(TOKEN_KEY, data.token);
+    await setItemAsync(REFRESH_TOKEN_KEY, data.refreshToken);
 
     console.log('TOKEN REFRESH SUCCESS');
     return true;
   } catch (e) {
     console.error('TOKEN REFRESH FAILED:', e);
-    await SecureStore.deleteItemAsync(TOKEN_KEY);
-    await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
+    await deleteItemAsync(TOKEN_KEY);
+    await deleteItemAsync(REFRESH_TOKEN_KEY);
     return false;
   }
 }

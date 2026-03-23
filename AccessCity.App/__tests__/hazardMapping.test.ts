@@ -33,7 +33,8 @@ describe('mapBackendHazardToApp', () => {
     expect(
       mapBackendHazardToApp({
         id: '1',
-        location: { coordinates: [-1.89] },
+        // Intentionally invalid GeoJSON (single coordinate) — runtime rejects; cast satisfies tuple type in tests.
+        location: { coordinates: [-1.89] as unknown as [number, number] },
       }),
     ).toBeNull();
   });

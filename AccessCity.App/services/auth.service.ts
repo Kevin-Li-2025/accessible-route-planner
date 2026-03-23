@@ -1,15 +1,18 @@
-import * as SecureStore from 'expo-secure-store';
 import { api } from './api';
+import {
+  TOKEN_KEY,
+  REFRESH_TOKEN_KEY,
+  USER_KEY,
+  deleteItemAsync,
+  getItemAsync,
+  setItemAsync,
+} from './sessionStorage';
 import {
   LoginRequest,
   RegisterRequest,
   AuthResponse,
   ResetPasswordRequest,
 } from '../models/auth';
-
-const TOKEN_KEY = 'ac_access_token';
-const REFRESH_TOKEN_KEY = 'ac_refresh_token';
-const USER_KEY = 'ac_user_data';
 
 type StoredUser = {
   email?: string;
@@ -54,19 +57,19 @@ export const authService = {
       throw new Error('Missing refresh token in auth response');
     }
 
-    await SecureStore.setItemAsync(TOKEN_KEY, data.token);
-    await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, data.refreshToken);
+    await setItemAsync(TOKEN_KEY, data.token);
+    await setItemAsync(REFRESH_TOKEN_KEY, data.refreshToken);
 
     const userData: StoredUser = {
       email: data.email,
       fullName: data.fullName,
     };
 
-    await SecureStore.setItemAsync(USER_KEY, JSON.stringify(userData));
+    await setItemAsync(USER_KEY, JSON.stringify(userData));
 
-    const savedToken = await SecureStore.getItemAsync(TOKEN_KEY);
-    const savedRefreshToken = await SecureStore.getItemAsync(REFRESH_TOKEN_KEY);
-    const savedUser = await SecureStore.getItemAsync(USER_KEY);
+    const savedToken = await getItemAsync(TOKEN_KEY);
+    const savedRefreshToken = await getItemAsync(REFRESH_TOKEN_KEY);
+    const savedUser = await getItemAsync(USER_KEY);
 
     console.log('SAVED TOKEN:', savedToken);
     console.log('SAVED REFRESH TOKEN:', savedRefreshToken);
@@ -74,9 +77,9 @@ export const authService = {
   },
 
   async getSession() {
-    const token = await SecureStore.getItemAsync(TOKEN_KEY);
-    const refreshToken = await SecureStore.getItemAsync(REFRESH_TOKEN_KEY);
-    const userJson = await SecureStore.getItemAsync(USER_KEY);
+    const token = await getItemAsync(TOKEN_KEY);
+    const refreshToken = await getItemAsync(REFRESH_TOKEN_KEY);
+    const userJson = await getItemAsync(USER_KEY);
 
     console.log('GET SESSION TOKEN:', token);
     console.log('GET SESSION REFRESH TOKEN:', refreshToken);
@@ -105,15 +108,15 @@ export const authService = {
   },
 
   async clearSession() {
-    await SecureStore.deleteItemAsync(TOKEN_KEY);
-    await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
-    await SecureStore.deleteItemAsync(USER_KEY);
+    await deleteItemAsync(TOKEN_KEY);
+    await deleteItemAsync(REFRESH_TOKEN_KEY);
+    await deleteItemAsync(USER_KEY);
 
     console.log('SESSION CLEARED');
   },
 
   async logout() {
-    const refreshToken = await SecureStore.getItemAsync(REFRESH_TOKEN_KEY);
+    const refreshToken = await getItemAsync(REFRESH_TOKEN_KEY);
 
     console.log('LOGOUT REFRESH TOKEN:', refreshToken);
 

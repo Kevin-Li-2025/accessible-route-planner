@@ -6,6 +6,7 @@ using Microsoft.Extensions.Caching.Memory;
 using NetTopologySuite.Geometries;
 using System.Linq;
 using Microsoft.EntityFrameworkCore;
+using System.Threading;
 
 namespace AccessCity.API.Services;
 
@@ -25,9 +26,20 @@ public class RealHazardDataService : IRealHazardDataService
     private readonly IOpenStreetMapClient _openStreetMapClient;
     private readonly IMemoryCache _cache;
     private readonly Data.AppDbContext _dbContext;
+    private readonly ILogger<RealHazardDataService> _logger;
 
     private const string CacheKeyPrefix = "real_hazards:";
-    private static readonly TimeSpan CacheExpiration = TimeSpan.FromMinutes(2);
+    /// <summary>Overpass is slow; longer cache reduces cold-cache storms on /hazards.</summary>
+    private static readonly TimeSpan CacheExpiration = TimeSpan.FromMinutes(15);
+
+    /// <summary>Hard cap on OSM-derived rows merged into one response (serialization + mobile memory).</summary>
+    private const int MaxOsmHazardsPerResponse = 2500;
+
+    /// <summary>Safety valve for DB rows in bbox (misconfigured client or huge imports).</summary>
+    private const int MaxDbHazardsPerResponse = 5000;
+
+    /// <summary>Wall clock for the Overpass HTTP call + JSON read; on timeout we degrade to DB-only.</summary>
+    private static readonly TimeSpan OsmFetchBudget = TimeSpan.FromSeconds(12);
 
     // Default bbox: Birmingham area (so we always have a fallback if no bbox provided)
     private const double DefaultMinLat = 52.45;
@@ -35,11 +47,16 @@ public class RealHazardDataService : IRealHazardDataService
     private const double DefaultMaxLat = 52.52;
     private const double DefaultMaxLng = -1.88;
 
-    public RealHazardDataService(IOpenStreetMapClient openStreetMapClient, IMemoryCache cache, Data.AppDbContext dbContext)
+    public RealHazardDataService(
+        IOpenStreetMapClient openStreetMapClient,
+        IMemoryCache cache,
+        Data.AppDbContext dbContext,
+        ILogger<RealHazardDataService> logger)
     {
         _openStreetMapClient = openStreetMapClient;
         _cache = cache;
         _dbContext = dbContext;
+        _logger = logger;
     }
 
     public async Task<List<HazardReport>> GetActiveHazardsAsync(double? minLat = null, double? minLng = null, double? maxLat = null, double? maxLng = null, HazardStatus? status = null)
@@ -63,50 +80,92 @@ public class RealHazardDataService : IRealHazardDataService
         if (_cache.TryGetValue(cacheKey, out List<HazardReport>? cached))
             return cached ?? new List<HazardReport>();
 
-        // 1. Fetch from External OSM (only if filtering by Reported or no filter)
+        var includeOsm = status == null || status == HazardStatus.Reported;
+        var osmTask = includeOsm
+            ? FetchAndMapHazardsAsync(minLatVal, minLngVal, maxLatVal, maxLngVal, DateTime.UtcNow)
+            : Task.FromResult(new List<HazardReport>());
+
+        var dbTask = FetchDbHazardsInBBoxAsync(minLatVal, minLngVal, maxLatVal, maxLngVal, status);
+
+        await Task.WhenAll(osmTask, dbTask).ConfigureAwait(false);
+
         var list = new List<HazardReport>();
-        if (status == null || status == HazardStatus.Reported)
-        {
-            list = await FetchAndMapHazardsAsync(minLatVal, minLngVal, maxLatVal, maxLngVal, DateTime.UtcNow);
-        }
+        list.AddRange(await osmTask.ConfigureAwait(false));
+        list.AddRange(await dbTask.ConfigureAwait(false));
 
-        // 2. Fetch from Local Database
-        try 
-        {
-            var dbQuery = _dbContext.Hazards.Where(h => 
-                    h.Location.X >= minLngVal && h.Location.X <= maxLngVal && 
-                    h.Location.Y >= minLatVal && h.Location.Y <= maxLatVal);
-
-            if (status.HasValue)
-            {
-                dbQuery = dbQuery.Where(h => h.Status == status.Value);
-            }
-
-            var dbHazards = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.ToListAsync(dbQuery);
-            
-            list.AddRange(dbHazards);
-        }
-        catch (Exception ex)
-        {
-            // Fail gracefully if DB is down, still return OSM data
-            Console.WriteLine($"[DB ERROR] Failed to fetch hazards: {ex.Message}");
-        }
         _cache.Set(cacheKey, list, CacheExpiration);
 
         return list;
+    }
+
+    private async Task<List<HazardReport>> FetchDbHazardsInBBoxAsync(
+        double minLatVal,
+        double minLngVal,
+        double maxLatVal,
+        double maxLngVal,
+        HazardStatus? status)
+    {
+        try
+        {
+            var dbQuery = _dbContext.Hazards.AsNoTracking().Where(h =>
+                h.Location.X >= minLngVal && h.Location.X <= maxLngVal &&
+                h.Location.Y >= minLatVal && h.Location.Y <= maxLatVal);
+
+            if (status.HasValue)
+                dbQuery = dbQuery.Where(h => h.Status == status.Value);
+
+            return await dbQuery
+                .Take(MaxDbHazardsPerResponse)
+                .ToListAsync()
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB ERROR] Failed to fetch hazards: {ex.Message}");
+            return new List<HazardReport>();
+        }
     }
 
     private async Task<List<HazardReport>> FetchAndMapHazardsAsync(
         double minLatVal, double minLngVal, double maxLatVal, double maxLngVal,
         DateTime snapshotUtc)
     {
-        var elements = await _openStreetMapClient.GetHazardLikeDataAsync(minLatVal, minLngVal, maxLatVal, maxLngVal);
+        using var budget = new CancellationTokenSource(OsmFetchBudget);
+        List<OverpassElement>? elements;
+        try
+        {
+            elements = await _openStreetMapClient
+                .GetHazardLikeDataAsync(minLatVal, minLngVal, maxLatVal, maxLngVal, budget.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex)
+        {
+            _logger.LogWarning(ex,
+                "Overpass hazard fetch timed out after {Budget}s; returning DB hazards only for bbox.",
+                OsmFetchBudget.TotalSeconds);
+            return new List<HazardReport>();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Overpass hazard fetch failed; returning DB hazards only for bbox.");
+            return new List<HazardReport>();
+        }
+
         if (elements == null || elements.Count == 0)
             return new List<HazardReport>();
 
-        var list = new List<HazardReport>();
+        var list = new List<HazardReport>(Math.Min(elements.Count, MaxOsmHazardsPerResponse));
         foreach (var el in elements)
         {
+            if (list.Count >= MaxOsmHazardsPerResponse)
+            {
+                _logger.LogWarning(
+                    "OSM hazard merge truncated at {Cap} elements for bbox ({MinLat},{MinLng})-({MaxLat},{MaxLng}).",
+                    MaxOsmHazardsPerResponse, minLatVal, minLngVal, maxLatVal, maxLngVal);
+                break;
+            }
+
             if (!TryGetCoordinate(el, out var lon, out var lat))
                 continue;
 

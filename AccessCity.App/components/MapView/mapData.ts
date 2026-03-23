@@ -1,3 +1,4 @@
+import { DEFAULT_CITY_NAME } from '../../constants/defaultMapRegion';
 import { Hazard, ReportHazardOption, ReportHazardType } from './MapTypes';
 
 export const hazards: Hazard[] = [
@@ -9,7 +10,7 @@ export const hazards: Hazard[] = [
     longitude: -1.891,
     description: 'There is a broken street light. The street is dimly-lit.',
     status: 'Acknowledged',
-    locationText: 'Hazard located in Birmingham',
+    locationText: `Hazard located in ${DEFAULT_CITY_NAME}`,
     reportedTime: '2 minutes ago',
   },
   {

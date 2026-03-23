@@ -33,7 +33,11 @@ describe('HapticTab', () => {
     process.env.EXPO_OS = 'ios';
 
     const onPressIn = jest.fn();
-    const { getByTestId } = render(<HapticTab testID="haptic-tab" onPressIn={onPressIn} />);
+    const { getByTestId } = render(
+      <HapticTab testID="haptic-tab" onPressIn={onPressIn}>
+        {null}
+      </HapticTab>
+    );
 
     fireEvent(getByTestId('haptic-tab'), 'pressIn');
     expect(Haptics.impactAsync).toHaveBeenCalledWith(Haptics.ImpactFeedbackStyle.Light);

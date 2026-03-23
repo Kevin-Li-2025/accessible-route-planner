@@ -129,13 +129,13 @@ public class AuthController : ControllerBase
         [HttpPost("revoke-token")]
         public async Task<IActionResult> RevokeToken([FromQuery] string token)
         {
-            var user = await _userManager.Users
-                .Include(u => u.RefreshTokens)
-                .SingleOrDefaultAsync(u => u.RefreshTokens.Any(t => t.Token == token));
+            if (string.IsNullOrWhiteSpace(token))
+                return BadRequest("Token is required.");
 
-            if (user == null) return NotFound("Token not found.");
+            var refreshToken = await _context.RefreshTokens
+                .FirstOrDefaultAsync(t => t.Token == token);
 
-            var refreshToken = user.RefreshTokens.Single(x => x.Token == token);
+            if (refreshToken == null) return NotFound("Token not found.");
 
             if (!refreshToken.IsActive) return BadRequest("Token is already inactive.");
 
@@ -143,7 +143,7 @@ public class AuthController : ControllerBase
             refreshToken.RevokedByIp = GetIpAddress();
             refreshToken.ReasonRevoked = "Revoked by user";
 
-            await _userManager.UpdateAsync(user);
+            await _context.SaveChangesAsync();
 
             return Ok(new { message = "Token revoked" });
         }

@@ -59,9 +59,12 @@ public class AccessCityApiFactory : WebApplicationFactory<Program>
         });
     }
 
-    public async Task<HttpClient> CreateAuthenticatedClientAsync(WebApplicationFactoryClientOptions? options = null)
+    public async Task<HttpClient> CreateAuthenticatedClientAsync(
+        WebApplicationFactoryClientOptions? options = null,
+        Action<HttpClient>? configureClient = null)
     {
         var client = options is null ? CreateClient() : CreateClient(options);
+        configureClient?.Invoke(client);
         var registerRequest = new RegisterRequest(
             $"integration-{Guid.NewGuid():N}@example.com",
             "P@ssword123!",

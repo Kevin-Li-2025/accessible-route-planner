@@ -10,13 +10,16 @@ namespace AccessCity.API.Validators
             RuleFor(x => x.Location)
                 .NotNull().WithMessage("Location is required.");
 
-            RuleFor(x => x.Location.X)
-                .InclusiveBetween(-180, 180)
-                .WithMessage("Longitude must be between -180 and 180.");
+            When(x => x.Location != null, () =>
+            {
+                RuleFor(x => x.Location!.X)
+                    .InclusiveBetween(-180, 180)
+                    .WithMessage("Longitude must be between -180 and 180.");
 
-            RuleFor(x => x.Location.Y)
-                .InclusiveBetween(-90, 90)
-                .WithMessage("Latitude must be between -90 and 90.");
+                RuleFor(x => x.Location!.Y)
+                    .InclusiveBetween(-90, 90)
+                    .WithMessage("Latitude must be between -90 and 90.");
+            });
 
             RuleFor(x => x.Type)
                 .NotEmpty().WithMessage("Type is required.")

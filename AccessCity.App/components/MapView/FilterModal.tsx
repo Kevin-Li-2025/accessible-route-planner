@@ -34,6 +34,7 @@ export default function FilterModal({
             <View style={styles.dragHandle} />
 
             <Text style={styles.filterTitle}>Filter by:</Text>
+            <Text style={styles.pilotHint}>Pilot area: Birmingham, UK — routing uses OpenStreetMap + local hazards.</Text>
             <View style={styles.sheetDivider} />
 
             <Text style={styles.filterSectionHeading}>Accessibility Preferences</Text>
@@ -43,7 +44,7 @@ export default function FilterModal({
 
               {[
                 ['avoidSteepHills', 'Avoid steep hills'],
-                ['wheelchairAccessible', 'Wheelchair accessibility'],
+                ['wheelchairAccessible', 'Step-free / manual wheelchair routing'],
                 ['avoidReportedHazards', 'Avoid reported hazards'],
                 ['preferWellLitStreets', 'Well-lit streets'],
               ].map(([key, label]) => {
@@ -185,6 +186,12 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '500',
     color: '#4B5563',
+    marginBottom: 4,
+  },
+  pilotHint: {
+    fontSize: 13,
+    color: '#6B7280',
+    lineHeight: 18,
     marginBottom: 4,
   },
   sheetDivider: {

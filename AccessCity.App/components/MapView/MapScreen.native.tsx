@@ -9,6 +9,10 @@ import SearchBar, { type SearchSuggestion } from './SearchBar';
 import RouteInfoCard from './RouteInfoCard';
 import HazardPreviewCard from './HazardPreviewCard';
 import HazardDetailsModal from './HazardDetailsModal';
+import {
+  DEFAULT_MAP_CENTER,
+  DEFAULT_MAP_DELTA,
+} from '../../constants/defaultMapRegion';
 import FilterModal from './FilterModal';
 import MapCanvas from './MapCanvas';
 import {
@@ -76,6 +80,11 @@ export default function MapScreen() {
     place_id?: number | string;
     lat?: string | number;
     lon?: string | number;
+    latitude?: string | number;
+    longitude?: string | number;
+    lng?: string | number;
+    x?: string | number;
+    y?: string | number;
     display_name?: string;
     name?: string;
   };
@@ -83,6 +92,11 @@ export default function MapScreen() {
   type AutocompleteSuggestion = SearchSuggestion & {
     result: GeocodingResult;
   };
+
+  /** Geocoding search may return a bare array or a wrapped payload depending on the API. */
+  type GeocodingSearchResponse =
+    | GeocodingResult[]
+    | { data?: GeocodingResult[]; results?: GeocodingResult[] };
 
   const mapRef = useRef<MapView | null>(null);
   const locationSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
@@ -398,10 +412,6 @@ export default function MapScreen() {
     setSearchSuggestions([]);
   }
 
-  function handleOpenReportPage() {
-    router.push('/report/reportpage');
-  }
-
   useEffect(() => {
     let isMounted = true;
 
@@ -513,11 +523,16 @@ export default function MapScreen() {
       locationSubscriptionRef.current?.remove();
       locationSubscriptionRef.current = null;
     };
+    // Intentionally run once on mount: re-subscribing GPS on every render would leak / thrash; callbacks use refs where needed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function parseGeocodingResult(result: GeocodingResult) {
-    const lat = parseFloat(String(result.lat));
-    const lon = parseFloat(String(result.lon));
+    const latRaw = result.lat ?? result.latitude ?? result.y;
+    const lonRaw = result.lon ?? result.lng ?? result.longitude ?? result.x;
+
+    const lat = parseFloat(String(latRaw));
+    const lon = parseFloat(String(lonRaw));
 
     if (Number.isNaN(lat) || Number.isNaN(lon)) {
       return null;
@@ -580,9 +595,12 @@ export default function MapScreen() {
     );
   }
 
-  async function searchLocation(query: string, showErrorAlert = true) {
+  async function searchLocation(
+    query: string,
+    showErrorAlert = true
+  ): Promise<GeocodingResult[]> {
     try {
-      const results = await api.get<GeocodingResult[]>(
+      const raw = await api.get<GeocodingSearchResponse>(
         `/geocoding/search?query=${encodeURIComponent(query)}`,
         {
           // TODO: Change skipAuth to false if geocoding later becomes a protected endpoint.
@@ -590,11 +608,11 @@ export default function MapScreen() {
         }
       );
 
-      console.log('Geocoding results:', results);
+      console.log('Geocoding results:', raw);
 
-      if (Array.isArray(results)) return results;
-      if (Array.isArray(results?.data)) return results.data;
-      if (Array.isArray(results?.results)) return results.results;
+      if (Array.isArray(raw)) return raw;
+      if (Array.isArray(raw.data)) return raw.data;
+      if (Array.isArray(raw.results)) return raw.results;
 
       return [];
     } catch (error) {
@@ -631,7 +649,7 @@ export default function MapScreen() {
       }
 
       const suggestions = results
-        .map((result) => {
+        .map((result: GeocodingResult) => {
           const parsedResult = parseGeocodingResult(result);
           if (!parsedResult) return null;
 
@@ -644,12 +662,14 @@ export default function MapScreen() {
 
           return suggestion;
         })
-        .filter((item) => item !== null);
+        .filter((item): item is AutocompleteSuggestion => item !== null);
 
       setSearchSuggestions(suggestions);
     }, 350);
 
     return () => clearTimeout(timeoutId);
+    // Only destinationText should retrigger debounced fetch; helpers are stable enough for this screen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [destinationText]);
 
   async function handleSetDestination() {
@@ -667,33 +687,18 @@ export default function MapScreen() {
       return;
     }
 
-    if (!results[0]) {
-      Alert.alert('No results', 'No matching location was found.');
-      return;
-    }
     const firstResult = results[0];
-
-    // TODO: Confirm the exact field names returned by the geocoding API.
-    // This fallback supports multiple possible backend formats.
-    const lat = Number(
-      firstResult?.lat ??
-      firstResult?.latitude ??
-      firstResult?.y
-    );
-
-    const lon = Number(
-      firstResult?.lon ??
-      firstResult?.lng ??
-      firstResult?.longitude ??
-      firstResult?.x
-    );
-
-    if (Number.isNaN(lat) || Number.isNaN(lon)) {
-      Alert.alert('Search error', 'Invalid coordinates returned from geocoding.');
+    if (!firstResult || !parseGeocodingResult(firstResult)) {
+      Alert.alert(
+        firstResult ? 'Search error' : 'No results',
+        firstResult
+          ? 'Invalid coordinates returned from geocoding.'
+          : 'No matching location was found.'
+      );
       return;
     }
 
-    applyDestinationSelection(results[0]);
+    applyDestinationSelection(firstResult);
   }
 
   function handleSuggestionPress(suggestion: SearchSuggestion) {
@@ -728,13 +733,9 @@ export default function MapScreen() {
             x: destination.longitude,
             y: destination.latitude,
           },
-          safetyWeight: routeFilters.minSafetyScore / 100,
-          profile: routeFilters.wheelchairAccessible ? "manual-wheelchair" : "standard",
-          preferences: [
-            ...(routeFilters.avoidSteepHills ? ["avoid-steep-hills"] : []),
-            ...(routeFilters.avoidReportedHazards ? ["avoid-reported-hazards"] : []),
-            ...(routeFilters.preferWellLitStreets ? ["prefer-well-lit-streets"] : []),
-          ],
+          safetyWeight,
+          profile,
+          preferences,
         },
         {
           skipAuth: false,
@@ -1002,10 +1003,10 @@ export default function MapScreen() {
         longitudeDelta: navigationMode ? 0.01 : 0.02,
       }
     : {
-        latitude: 52.4862,
-        longitude: -1.8904,
-        latitudeDelta: 0.05,
-        longitudeDelta: 0.05,
+        latitude: DEFAULT_MAP_CENTER.latitude,
+        longitude: DEFAULT_MAP_CENTER.longitude,
+        latitudeDelta: DEFAULT_MAP_DELTA.latitudeDelta,
+        longitudeDelta: DEFAULT_MAP_DELTA.longitudeDelta,
       };
 
   return (

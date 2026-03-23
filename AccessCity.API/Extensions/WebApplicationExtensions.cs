@@ -4,8 +4,11 @@ using AccessCity.API.Hubs;
 using AccessCity.API.Models;
 using AccessCity.API.Services;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Scalar.AspNetCore;
 using Serilog;
 
@@ -34,11 +37,12 @@ public static class WebApplicationExtensions
         app.MapControllers();
         app.MapHub<HazardAlertHub>("/hubs/hazard-alerts");
         
-        app.MapHealthChecks("/health");
-        app.MapHealthChecks("/health/ready", new HealthCheckOptions 
-        { 
-            Predicate = check => check.Tags.Contains("ready") 
-        });
+        app.MapHealthChecks("/health").DisableRateLimiting();
+        app.MapHealthChecks("/health/ready", new HealthCheckOptions
+            {
+                Predicate = check => check.Tags.Contains("ready")
+            })
+            .DisableRateLimiting();
 
         return app;
     }
@@ -73,19 +77,47 @@ public static class WebApplicationExtensions
         await dbContext.Database.MigrateAsync();
     }
 
-    private static async Task RunOptionalOsmImportAsync(WebApplication app)
+    /// <summary>
+    /// Schedules OSM import after the host is running. Publishing <see cref="AccessCity.API.Messaging.OsmImportStartedEvent"/>
+    /// during <see cref="InitializeDatabaseAsync"/> runs before <see cref="Services.Background.OsmImportBackgroundService"/>
+    /// subscribes, so the in-memory bus drops the event and import never starts.
+    /// </summary>
+    private static Task RunOptionalOsmImportAsync(WebApplication app)
     {
         using var scope = app.Services.CreateScope();
         var osmOptions = scope.ServiceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<OsmImportOptions>>();
         if (!osmOptions.Value.ImportOnStartup)
         {
-            return;
+            return Task.CompletedTask;
         }
 
-        var messageBus = scope.ServiceProvider.GetRequiredService<AccessCity.API.Messaging.IMessageBus>();
-        var filePath = osmOptions.Value.FilePath ?? "default.osm";
-        
-        await messageBus.PublishAsync(new AccessCity.API.Messaging.OsmImportStartedEvent(filePath, "Startup Import"));
+        var lifetime = scope.ServiceProvider.GetRequiredService<IHostApplicationLifetime>();
+        var loggerFactory = scope.ServiceProvider.GetRequiredService<ILoggerFactory>();
+
+        lifetime.ApplicationStarted.Register(() =>
+        {
+            _ = RunStartupOsmImportAsync(app, loggerFactory);
+        });
+
+        return Task.CompletedTask;
+    }
+
+    private static async Task RunStartupOsmImportAsync(WebApplication app, ILoggerFactory loggerFactory)
+    {
+        var logger = loggerFactory.CreateLogger("OsmImportStartup");
+        try
+        {
+            await Task.Delay(500).ConfigureAwait(false);
+            await using var asyncScope = app.Services.CreateAsyncScope();
+            var import = asyncScope.ServiceProvider.GetRequiredService<IOsmImportService>();
+            logger.LogInformation("Running configured OSM import (ImportOnStartup)");
+            await import.ImportConfiguredAsync(CancellationToken.None).ConfigureAwait(false);
+            logger.LogInformation("ImportOnStartup OSM import finished");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "ImportOnStartup OSM import failed");
+        }
     }
 
     private static async Task NormalizeSchemaAsync(WebApplication app)

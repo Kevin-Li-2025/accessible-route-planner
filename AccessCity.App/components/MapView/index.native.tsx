@@ -1,6 +1,7 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
+import { DEFAULT_MAP_CENTER_LNG_LAT } from '../../constants/defaultMapRegion';
 import { Hazard } from '../../models/spatial';
 
 interface MapViewProps {
@@ -13,7 +14,7 @@ interface MapViewProps {
 }
 
 export default function NativeMapView({
-  centerCoordinate = [-1.8904, 52.4862],
+  centerCoordinate = DEFAULT_MAP_CENTER_LNG_LAT,
   markers = [],
   routeGeoJSON,
   onMarkerPress,

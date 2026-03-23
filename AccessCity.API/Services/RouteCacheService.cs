@@ -18,7 +18,8 @@ public interface IRouteCacheService
 public class RouteCacheService : IRouteCacheService
 {
     private readonly HybridCache _cache;
-    private static readonly TimeSpan RouteTtl = TimeSpan.FromMinutes(10);
+    /// <summary>Repeat identical safe-path requests avoid OSRM within this window (see also RoutingService).</summary>
+    private static readonly TimeSpan RouteTtl = TimeSpan.FromMinutes(15);
 
     public RouteCacheService(HybridCache cache)
     {

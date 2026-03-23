@@ -18,6 +18,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Caching.Hybrid;
 using Microsoft.IdentityModel.Tokens;
+using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 
@@ -97,10 +98,19 @@ public static class DependencyInjection
         services.Configure<PostgresOptions>(configuration.GetSection(PostgresOptions.SectionName));
         services.Configure<OsmImportOptions>(configuration.GetSection(OsmImportOptions.SectionName));
 
-        services.AddStackExchangeRedisCache(options =>
+        var redisConnection = configuration.GetConnectionString("Redis");
+        if (!string.IsNullOrWhiteSpace(redisConnection))
         {
-            options.Configuration = configuration.GetConnectionString("Redis") ?? "localhost:6379";
-        });
+            services.AddStackExchangeRedisCache(options =>
+            {
+                options.Configuration = redisConnection;
+            });
+        }
+        else
+        {
+            // Docker / local dev without Redis: HybridCache L2 uses in-process IDistributedCache.
+            services.AddDistributedMemoryCache();
+        }
 
         services.AddHttpClient();
         services.AddMemoryCache();
@@ -140,16 +150,17 @@ public static class DependencyInjection
         services.AddHttpClient<Services.External.IOsrmClient, Services.External.OsrmClient>()
             .AddStandardResilienceHandler();
 
+        // Overpass: no Polly retries — retries multiply tail latency (30s × N) and block /hazards merge.
         services.AddHttpClient<Services.External.IOpenStreetMapClient, Services.External.OverpassApiClient>()
-            .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30))
-            .AddStandardResilienceHandler();
+            .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(14));
 
+        // Geocoding implements its own short retry in the controller; avoid Polly × retry tail latency.
         services.AddHttpClient("Nominatim", c =>
         {
             c.BaseAddress = new Uri("https://nominatim.openstreetmap.org/");
             c.DefaultRequestHeaders.Add("User-Agent", "AccessCity-App/1.0");
-            c.Timeout = TimeSpan.FromSeconds(10);
-        }).AddStandardResilienceHandler();
+            c.Timeout = TimeSpan.FromSeconds(12);
+        });
 
         services.AddHttpClient<Services.External.IUkPoliceDataClient, Services.External.UkPoliceDataClient>()
             .AddStandardResilienceHandler();
@@ -265,12 +276,17 @@ public static class DependencyInjection
     public static IServiceCollection AddObservability(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddOpenTelemetry()
+            .ConfigureResource(rb => rb.AddService("AccessCity.API"))
             .WithTracing(tracing => tracing
                 .AddSource("AccessCity.API")
-                .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService("AccessCity.API"))
                 .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
                 .AddEntityFrameworkCoreInstrumentation()
+                .AddOtlpExporter())
+            .WithMetrics(metrics => metrics
+                .AddAspNetCoreInstrumentation()
+                .AddHttpClientInstrumentation()
+                .AddRuntimeInstrumentation()
                 .AddOtlpExporter());
 
         services.AddHealthChecks()

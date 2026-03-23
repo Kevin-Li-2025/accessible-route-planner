@@ -536,6 +536,10 @@ public class ApiIntegrationTests : IClassFixture<AccessCityApiFactory>
         var getAfter = await client.GetAsync($"/api/v1/hazards/{id}");
         getAfter.EnsureSuccessStatusCode();
         var afterBody = await getAfter.Content.ReadAsStringAsync();
-        Assert.True(afterBody.Contains("\"status\":2") || afterBody.Contains("Resolved", StringComparison.OrdinalIgnoreCase));
+        // HazardStatus: Reported=0, Acknowledged=1, UnderReview=2, Resolved=3 (default System.Text.Json enum as int)
+        Assert.True(
+            afterBody.Contains("\"status\":3", StringComparison.Ordinal)
+            || afterBody.Contains("Resolved", StringComparison.OrdinalIgnoreCase),
+            $"Expected Resolved (3) in body: {afterBody[..Math.Min(200, afterBody.Length)]}");
     }
 }

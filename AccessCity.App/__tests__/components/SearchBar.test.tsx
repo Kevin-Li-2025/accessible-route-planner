@@ -16,10 +16,10 @@ describe('SearchBar', () => {
       />,
     );
 
-    fireEvent.changeText(getByPlaceholderText('Search destination...'), 'Birmingham');
+    fireEvent.changeText(getByPlaceholderText('Search destination in Birmingham…'), 'Birmingham');
     expect(onChangeText).toHaveBeenCalledWith('Birmingham');
 
-    fireEvent(getByPlaceholderText('Search destination...'), 'submitEditing');
+    fireEvent(getByPlaceholderText('Search destination in Birmingham…'), 'submitEditing');
     expect(onSubmitEditing).toHaveBeenCalled();
   });
 

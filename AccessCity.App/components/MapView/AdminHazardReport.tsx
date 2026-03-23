@@ -121,8 +121,6 @@ function formatDateTime(dateString: string) {
  */
 
 function mapPendingReport(item: any): PendingHazardItem {
-  const rawStatus = String(item.status ?? '').toLowerCase();
-
   return {
     id: String(item.id),
     category: item.type ?? item.category ?? 'Unknown',

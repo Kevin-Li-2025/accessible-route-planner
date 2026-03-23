@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -62,6 +62,7 @@ function HazardIcon({ item }: { item: HazardItem }) {
 export default function Hazard() {
   const [hazards, setHazards] = useState<HazardItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const loadGenerationRef = useRef(0);
   const [selectedFilter, setSelectedFilter] = useState<HazardStatus>('Reported');
 
   const [selectedHazardDetail, setSelectedHazardDetail] = useState<HazardType | null>(null);
@@ -85,10 +86,14 @@ export default function Hazard() {
     }
   }
 
-  async function loadHazards() {
+  const loadHazards = React.useCallback(async () => {
+    const generation = ++loadGenerationRef.current;
     try {
       setIsLoading(true);
       const data = await hazardsService.getHazards(selectedFilter);
+      if (generation !== loadGenerationRef.current) {
+        return;
+      }
       const mapped = data
         .slice(0, 100) // limit to 100 items to prevent out-of-memory on massive OSM datasets
         .map<HazardItem | null>((hazard) => {
@@ -121,16 +126,20 @@ export default function Hazard() {
       setHazards(mapped);
     } catch (error) {
       console.error('Failed to load hazards:', error);
-      setHazards([]);
+      if (generation === loadGenerationRef.current) {
+        setHazards([]);
+      }
     } finally {
-      setIsLoading(false);
+      if (generation === loadGenerationRef.current) {
+        setIsLoading(false);
+      }
     }
-  }
+  }, [selectedFilter]);
 
   useFocusEffect(
     React.useCallback(() => {
       void loadHazards();
-    }, [selectedFilter])
+    }, [loadHazards])
   );
 
   return (
@@ -172,10 +181,17 @@ export default function Hazard() {
               })}
             </View>
 
-            {isLoading ? (
+            {isLoading && hazards.length === 0 ? (
               <View style={styles.stateCard}>
                 <ActivityIndicator color="#174C8E" />
                 <Text style={styles.stateText}>Loading hazards...</Text>
+              </View>
+            ) : null}
+
+            {isLoading && hazards.length > 0 ? (
+              <View style={styles.refreshRow}>
+                <ActivityIndicator size="small" color="#174C8E" />
+                <Text style={styles.refreshText}>Updating list…</Text>
               </View>
             ) : null}
 
@@ -314,6 +330,18 @@ const styles = StyleSheet.create({
     color: '#475569',
     fontSize: 15,
     fontWeight: '600',
+  },
+  refreshRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 8,
+  },
+  refreshText: {
+    color: '#64748B',
+    fontSize: 14,
+    fontWeight: '500',
   },
   filterButtonActive: {
     backgroundColor: '#2F2F2F',

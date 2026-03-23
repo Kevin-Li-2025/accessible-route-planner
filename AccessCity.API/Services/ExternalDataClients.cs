@@ -1,9 +1,11 @@
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AccessCity.API.Exceptions;
 using AccessCity.API.Models.External;
 using Microsoft.Extensions.Configuration;
+using System.Threading;
 
 namespace AccessCity.API.Services.External
 {
@@ -14,12 +16,24 @@ namespace AccessCity.API.Services.External
     public interface IOpenStreetMapClient
     {
         /// <summary>Fetches real OSM features that represent hazards/barriers: barriers, steps, poor surface.</summary>
-        Task<List<OverpassElement>?> GetHazardLikeDataAsync(double minLat, double minLng, double maxLat, double maxLng);
+        Task<List<OverpassElement>?> GetHazardLikeDataAsync(
+            double minLat,
+            double minLng,
+            double maxLat,
+            double maxLng,
+            CancellationToken cancellationToken = default);
     }
 
     public class OverpassApiClient : IOpenStreetMapClient
     {
         private const string DefaultOverpassEndpoint = "https://overpass-api.de/api/interpreter";
+
+        /// <summary>
+        /// Huge Overpass JSON can take tens of seconds to download/parse and spikes /hazards tail latency.
+        /// Fail fast so the hazard merge path can degrade to DB-only.
+        /// </summary>
+        private const int MaxHazardJsonBytes = 8 * 1024 * 1024;
+
         private readonly HttpClient _httpClient;
         private readonly ILogger<OverpassApiClient> _logger;
         private readonly string _overpassEndpoint;
@@ -55,11 +69,17 @@ namespace AccessCity.API.Services.External
             return data?.Elements;
         }
 
-        public async Task<List<OverpassElement>?> GetHazardLikeDataAsync(double minLat, double minLng, double maxLat, double maxLng)
+        public async Task<List<OverpassElement>?> GetHazardLikeDataAsync(
+            double minLat,
+            double minLng,
+            double maxLat,
+            double maxLng,
+            CancellationToken cancellationToken = default)
         {
             var bbox = $"[{minLat:F4},{minLng:F4},{maxLat:F4},{maxLng:F4}]";
+            // Server-side cap must stay below HttpClient.Timeout so we fail fast instead of tail latency in minutes.
             var overpassQuery = $@"
-                [out:json][timeout:30];
+                [out:json][timeout:12];
                 (
                   node[""barrier""]({minLat},{minLng},{maxLat},{maxLng});
                   way[""highway""=""steps""]({minLat},{minLng},{maxLat},{maxLng});
@@ -73,19 +93,36 @@ namespace AccessCity.API.Services.External
             {
                 var response = await _httpClient.PostAsync(
                     _overpassEndpoint,
-                    new StringContent(overpassQuery));
+                    new StringContent(overpassQuery),
+                    cancellationToken).ConfigureAwait(false);
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    var errBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
                     _logger.LogError(
                         "Overpass API returned non-success. Endpoint: {Endpoint}, Bbox: {Bbox}, StatusCode: {StatusCode}, ResponseBody: {ResponseBody}",
-                        _overpassEndpoint, bbox, (int)response.StatusCode, body.Length > 500 ? body[..500] + "..." : body);
+                        _overpassEndpoint, bbox, (int)response.StatusCode, errBody.Length > 500 ? errBody[..500] + "..." : errBody);
                     throw new OverpassServiceException(
                         $"Overpass returned {(int)response.StatusCode} ({response.StatusCode}). Bbox: {bbox}.");
                 }
 
-                var data = await response.Content.ReadFromJsonAsync<OverpassResponse>().ConfigureAwait(false);
+                var body = await ReadResponseBodyWithByteCapAsync(
+                        response.Content,
+                        MaxHazardJsonBytes,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                OverpassResponse? data;
+                try
+                {
+                    data = JsonSerializer.Deserialize<OverpassResponse>(body);
+                }
+                catch (JsonException jx)
+                {
+                    throw new OverpassServiceException(
+                        $"Overpass returned unparsable JSON (length {body.Length}). Bbox: {bbox}.", jx);
+                }
+
                 return data?.Elements;
             }
             catch (OverpassServiceException)
@@ -100,6 +137,42 @@ namespace AccessCity.API.Services.External
                 throw new OverpassServiceException(
                     $"Overpass request failed: {ex.GetType().Name} - {ex.Message}. Bbox: {bbox}.", ex);
             }
+        }
+
+        private static async Task<string> ReadResponseBodyWithByteCapAsync(
+            HttpContent content,
+            int maxBytes,
+            CancellationToken cancellationToken)
+        {
+            var len = content.Headers.ContentLength;
+            if (len.HasValue && len.Value > maxBytes)
+            {
+                throw new OverpassServiceException(
+                    $"Overpass response too large (Content-Length {len.Value} bytes, cap {maxBytes}).");
+            }
+
+            await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            var initialCap = len is long l && l > 0 && l <= maxBytes ? (int)l : 65536;
+            using var ms = new MemoryStream(initialCap);
+            var buffer = new byte[8192];
+            var total = 0;
+            while (true)
+            {
+                var read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)
+                    .ConfigureAwait(false);
+                if (read == 0)
+                    break;
+                total += read;
+                if (total > maxBytes)
+                {
+                    throw new OverpassServiceException(
+                        $"Overpass response exceeded {maxBytes} bytes while reading (truncation guard).");
+                }
+
+                ms.Write(buffer, 0, read);
+            }
+
+            return Encoding.UTF8.GetString(ms.ToArray());
         }
     }
 

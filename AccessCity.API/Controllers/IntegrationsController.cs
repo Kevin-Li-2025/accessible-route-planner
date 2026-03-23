@@ -1,6 +1,8 @@
 using Asp.Versioning;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace AccessCity.API.Controllers;
 
@@ -9,32 +11,45 @@ namespace AccessCity.API.Controllers;
 [ApiController]
 [ApiVersion("1.0")]
 [Route("api/v{version:apiVersion}/integrations")]
+[DisableRateLimiting]
 public class IntegrationsController : ControllerBase
 {
-    private readonly IConfiguration _configuration;
+    private const string StatusCacheKey = "integrations:status:v1";
+    private static readonly TimeSpan StatusCacheTtl = TimeSpan.FromSeconds(60);
 
-    public IntegrationsController(IConfiguration configuration)
+    private readonly IConfiguration _configuration;
+    private readonly IMemoryCache _memoryCache;
+
+    public IntegrationsController(IConfiguration configuration, IMemoryCache memoryCache)
     {
         _configuration = configuration;
+        _memoryCache = memoryCache;
     }
 
     [HttpGet("status")]
     public ActionResult<IntegrationStatusDto> GetStatus()
     {
-        var overpass = _configuration["Overpass:Endpoint"];
-        return Ok(new IntegrationStatusDto
+        var dto = _memoryCache.GetOrCreate(StatusCacheKey, entry =>
         {
-            OpenWeatherApiKeyConfigured = !string.IsNullOrWhiteSpace(_configuration["OpenWeather:ApiKey"]),
-            GooglePlacesApiKeyConfigured = !string.IsNullOrWhiteSpace(_configuration["GooglePlaces:ApiKey"]),
-            OverpassEndpoint = string.IsNullOrWhiteSpace(overpass) ? "https://overpass-api.de/api/interpreter (default)" : overpass!,
-            NominatimConfigured = true,
-            OsrmUsesPublicDemo = true,
-            UkPoliceDataPublicApi = true,
-            Notes =
-                "Weather and crime risk use conservative baselines when APIs fail or keys are missing. " +
-                "OSRM routing uses the bundled public demo host unless you replace IOsrmClient with a configurable base URL. " +
-                "Safe-path returns 404 when no graph/OSRM route exists."
+            entry.AbsoluteExpirationRelativeToNow = StatusCacheTtl;
+            var overpass = _configuration["Overpass:Endpoint"];
+            return new IntegrationStatusDto
+            {
+                OpenWeatherApiKeyConfigured = !string.IsNullOrWhiteSpace(_configuration["OpenWeather:ApiKey"]),
+                GooglePlacesApiKeyConfigured = !string.IsNullOrWhiteSpace(_configuration["GooglePlaces:ApiKey"]),
+                OverpassEndpoint = string.IsNullOrWhiteSpace(overpass)
+                    ? "https://overpass-api.de/api/interpreter (default)"
+                    : overpass!,
+                NominatimConfigured = true,
+                OsrmUsesPublicDemo = true,
+                UkPoliceDataPublicApi = true,
+                Notes =
+                    "Weather and crime risk use conservative baselines when APIs fail or keys are missing. " +
+                    "OSRM routing uses the bundled public demo host unless you replace IOsrmClient with a configurable base URL. " +
+                    "Safe-path returns 404 when no graph/OSRM route exists."
+            };
         });
+        return Ok(dto);
     }
 }
 

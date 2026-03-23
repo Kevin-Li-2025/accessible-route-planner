@@ -1,4 +1,10 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
+jest.mock('@sentry/react-native', () => ({
+  init: jest.fn(),
+  captureException: jest.fn(),
+  captureMessage: jest.fn(),
+}));
+
 jest.mock('react-native-reanimated', () => require('react-native-reanimated/mock'));
 
 jest.mock('expo-haptics', () => ({

@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { StyleSheet, View } from 'react-native';
 import MapLibreGL from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { DEFAULT_MAP_CENTER_LNG_LAT } from '../../constants/defaultMapRegion';
 import { Hazard } from '../../models/spatial';
 import { API_BASE_URL } from '../../services/api';
 
@@ -17,7 +18,7 @@ interface MapViewProps {
 }
 
 export default function WebMapView({
-  centerCoordinate = [-1.8904, 52.4862],
+  centerCoordinate = DEFAULT_MAP_CENTER_LNG_LAT,
   markers = [],
   routeGeoJSON,
   onMarkerPress,
