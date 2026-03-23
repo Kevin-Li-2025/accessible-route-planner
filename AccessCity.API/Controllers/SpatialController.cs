@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AccessCity.API.Common;
 using AccessCity.API.Data;
 using AccessCity.API.Models;
 using Asp.Versioning;
@@ -8,6 +9,9 @@ using NetTopologySuite.Geometries;
 
 namespace AccessCity.API.Controllers;
 
+/// <summary>
+/// Spatial queries: points of interest (PostGIS proximity) and themed map overlays.
+/// </summary>
 [ApiController]
 [ApiVersion("1.0")]
 [Route("api/v{version:apiVersion}/[controller]")]
@@ -20,20 +24,26 @@ public class SpatialController : ControllerBase
         _dbContext = dbContext;
     }
 
+    /// <summary>
+    /// Returns points of interest within a radius of the given coordinate, ordered by proximity.
+    /// </summary>
     [HttpGet("poi")]
+    [ProducesResponseType(typeof(IEnumerable<PointOfInterest>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiError), StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<IEnumerable<PointOfInterest>>> GetPointsOfInterest(
         [FromQuery] double lat,
         [FromQuery] double lng,
-        [FromQuery] double radius = 1000)
+        [FromQuery] double radius = 1000,
+        CancellationToken cancellationToken = default)
     {
         if (lat < -90 || lat > 90 || lng < -180 || lng > 180)
         {
-            return BadRequest(new { error = "Invalid coordinates." });
+            return BadRequest(new ApiError("Invalid coordinates."));
         }
 
         if (radius <= 0 || radius > 10000)
         {
-            return BadRequest(new { error = "Radius must be between 1 and 10000 metres." });
+            return BadRequest(new ApiError("Radius must be between 1 and 10000 metres."));
         }
 
         var assets = await _dbContext.InfrastructureAssets
@@ -50,7 +60,7 @@ public class SpatialController : ControllerBase
                 LIMIT 100
                 """)
             .AsNoTracking()
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         return Ok(assets.Select(asset =>
         {
@@ -66,8 +76,15 @@ public class SpatialController : ControllerBase
         }).ToList());
     }
 
+    /// <summary>
+    /// Returns a themed map overlay (hazards or infrastructure) as a list of spatial features.
+    /// </summary>
     [HttpGet("map-overlay")]
-    public async Task<IActionResult> GetMapOverlay([FromQuery] string layerName)
+    [ProducesResponseType(typeof(MapOverlayResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiError), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> GetMapOverlay(
+        [FromQuery] string layerName,
+        CancellationToken cancellationToken = default)
     {
         if (string.Equals(layerName, "hazards", StringComparison.OrdinalIgnoreCase))
         {
@@ -75,7 +92,7 @@ public class SpatialController : ControllerBase
                 .AsNoTracking()
                 .OrderByDescending(hazard => hazard.ReportedAt)
                 .Take(250)
-                .ToListAsync();
+                .ToListAsync(cancellationToken);
 
             return Ok(new MapOverlayResponse
             {
@@ -101,7 +118,7 @@ public class SpatialController : ControllerBase
                 .AsNoTracking()
                 .OrderByDescending(asset => asset.UpdatedAt)
                 .Take(250)
-                .ToListAsync();
+                .ToListAsync(cancellationToken);
 
             return Ok(new MapOverlayResponse
             {
@@ -121,7 +138,7 @@ public class SpatialController : ControllerBase
             });
         }
 
-        return BadRequest(new { error = "Supported layers: hazards, infrastructure." });
+        return BadRequest(new ApiError("Supported layers: hazards, infrastructure."));
     }
 
     private static Dictionary<string, string> ParseTags(JsonDocument json)

@@ -18,6 +18,9 @@ public static class WebApplicationExtensions
 {
     public static WebApplication ConfigurePipeline(this WebApplication app)
     {
+        // Must be first to catch all unhandled exceptions.
+        app.UseMiddleware<Filters.GlobalExceptionMiddleware>();
+
         if (app.Environment.IsDevelopment())
         {
             app.MapOpenApi();

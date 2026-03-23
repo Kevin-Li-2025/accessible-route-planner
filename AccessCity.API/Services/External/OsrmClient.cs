@@ -16,14 +16,16 @@ namespace AccessCity.API.Services.External
         Task<OsrmRouteResult?> GetRouteAsync(
             Coordinate start,
             Coordinate end,
-            List<Coordinate>? waypoints = null);
+            List<Coordinate>? waypoints = null,
+            CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Get up to 3 alternative routes between two points.
         /// </summary>
         Task<List<OsrmRouteResult>?> GetAlternativeRoutesAsync(
             Coordinate start,
-            Coordinate end);
+            Coordinate end,
+            CancellationToken cancellationToken = default);
     }
 
     /// <summary>
@@ -61,7 +63,8 @@ namespace AccessCity.API.Services.External
         public async Task<OsrmRouteResult?> GetRouteAsync(
             Coordinate start,
             Coordinate end,
-            List<Coordinate>? waypoints = null)
+            List<Coordinate>? waypoints = null,
+            CancellationToken cancellationToken = default)
         {
             var coords = new List<Coordinate> { start };
             if (waypoints != null)
@@ -75,36 +78,45 @@ namespace AccessCity.API.Services.External
 
             try
             {
-                var response = await _httpClient.GetFromJsonAsync<OsrmRouteResponse>(url);
+                var response = await _httpClient.GetFromJsonAsync<OsrmRouteResponse>(url, cancellationToken);
 
                 if (response == null || response.Code != "Ok" || response.Routes.Count == 0)
                     return null;
 
                 return ParseRoute(response.Routes[0]);
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
-                Console.WriteLine($"[OSRM ERROR] {ex.Message}");
-                if (ex.InnerException != null) Console.WriteLine($"[OSRM ERROR INNER] {ex.InnerException.Message}");
-                return null; // Fail gracefully — caller uses fallback
+                // Internal logging for diagnostics, but safe fallback for the user.
+                System.Diagnostics.Debug.WriteLine($"[OSRM ERROR] {ex.Message}");
+                return null;
             }
         }
 
         public async Task<List<OsrmRouteResult>?> GetAlternativeRoutesAsync(
             Coordinate start,
-            Coordinate end)
+            Coordinate end,
+            CancellationToken cancellationToken = default)
         {
             string coordString = $"{start.X:F6},{start.Y:F6};{end.X:F6},{end.Y:F6}";
             string url = $"{BaseUrl}{coordString}?overview=full&geometries=geojson&steps=true&alternatives=3";
 
             try
             {
-                var response = await _httpClient.GetFromJsonAsync<OsrmRouteResponse>(url);
+                var response = await _httpClient.GetFromJsonAsync<OsrmRouteResponse>(url, cancellationToken);
 
                 if (response == null || response.Code != "Ok" || response.Routes.Count == 0)
                     return null;
 
                 return response.Routes.Select(ParseRoute).ToList();
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception)
             {

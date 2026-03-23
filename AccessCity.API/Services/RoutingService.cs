@@ -65,7 +65,8 @@ public class RoutingService
     /// </summary>
     public async Task<RouteResponse> FindSafePathAsync(
         RouteRequest request,
-        IEnumerable<HazardReport> allHazards)
+        IEnumerable<HazardReport> allHazards,
+        CancellationToken cancellationToken = default)
     {
         // Route-level cache: return instantly for identical requests
         var cacheKey = _routeCache.BuildKey(
@@ -79,24 +80,25 @@ public class RoutingService
             .ToList();
 
         // ── Tier 1: OSRM with alternatives + PostGIS obstacle scoring ──
-        var alternatives = await _osrmClient.GetAlternativeRoutesAsync(request.Start, request.End);
+        var alternatives = await _osrmClient.GetAlternativeRoutesAsync(request.Start, request.End, cancellationToken);
 
         if (alternatives != null && alternatives.Count > 0
             && !IsOsrmDetourExcessive(request.Start, request.End, alternatives))
         {
-            var graphData = await TryLoadRouteGraphAsync(request);
-            return await BuildBestOsrmRouteResponseAsync(request, hazardList, alternatives, graphData);
+            var graphData = await TryLoadRouteGraphAsync(request, cancellationToken);
+            return await BuildBestOsrmRouteResponseAsync(request, hazardList, alternatives, graphData, cancellationToken);
         }
 
         // ── Tier 2: Real imported OSM graph (PostGIS) ──
         try
         {
-            var realGraph = await _graphRepo.LoadGraphAsync(request.Start, request.End);
+            var realGraph = await _graphRepo.LoadGraphAsync(request.Start, request.End, cancellationToken);
             if (realGraph.HasCoverage)
             {
                 return FindSafePathOnRealGraph(request, hazardList, realGraph);
             }
         }
+        catch (OperationCanceledException) { throw; }
         catch { /* PostGIS unavailable */ }
 
         // ── Tier 3: Synthetic grid fallback ──
@@ -110,22 +112,23 @@ public class RoutingService
     /// </summary>
     public async Task<SafePathOptionsResponse> FindSafePathWithVariantsAsync(
         RouteRequest request,
-        IEnumerable<HazardReport> allHazards)
+        IEnumerable<HazardReport> allHazards,
+        CancellationToken cancellationToken = default)
     {
         var hazardList = allHazards
             .Where(h => h.Status == HazardStatus.Reported || h.Status == HazardStatus.UnderReview)
             .ToList();
 
-        var alternatives = await _osrmClient.GetAlternativeRoutesAsync(request.Start, request.End);
+        var alternatives = await _osrmClient.GetAlternativeRoutesAsync(request.Start, request.End, cancellationToken);
         if (alternatives == null || alternatives.Count == 0
             || IsOsrmDetourExcessive(request.Start, request.End, alternatives))
         {
-            var rec = await FindSafePathAsync(request, hazardList);
+            var rec = await FindSafePathAsync(request, hazardList, cancellationToken);
             return new SafePathOptionsResponse { Recommended = rec, Variants = new List<RoutedOptionVariant>() };
         }
 
-        var graphData = await TryLoadRouteGraphAsync(request);
-        var recommended = await BuildBestOsrmRouteResponseAsync(request, hazardList, alternatives, graphData);
+        var graphData = await TryLoadRouteGraphAsync(request, cancellationToken);
+        var recommended = await BuildBestOsrmRouteResponseAsync(request, hazardList, alternatives, graphData, cancellationToken);
 
         var shortestRaw = alternatives.OrderBy(a => a.DistanceMetres).First();
         var safestRaw = alternatives
@@ -167,12 +170,13 @@ public class RoutingService
         return new SafePathOptionsResponse { Recommended = recommended, Variants = variants };
     }
 
-    private async Task<RouteGraphData?> TryLoadRouteGraphAsync(RouteRequest request)
+    private async Task<RouteGraphData?> TryLoadRouteGraphAsync(RouteRequest request, CancellationToken cancellationToken)
     {
         try
         {
-            return await _graphRepo.LoadGraphAsync(request.Start, request.End);
+            return await _graphRepo.LoadGraphAsync(request.Start, request.End, cancellationToken);
         }
+        catch (OperationCanceledException) { throw; }
         catch
         {
             return null;
@@ -183,7 +187,8 @@ public class RoutingService
         RouteRequest request,
         List<HazardReport> hazardList,
         List<OsrmRouteResult> alternatives,
-        RouteGraphData? graphData)
+        RouteGraphData? graphData,
+        CancellationToken cancellationToken)
     {
         var scoredRoutes = alternatives
             .Select(r => new
@@ -198,7 +203,7 @@ public class RoutingService
         var severeHazards = FindHazardsNearRoute(bestRoute.Coordinates, hazardList);
         if (severeHazards.Count > 0 && request.SafetyWeight > 0.3)
         {
-            var rerouted = await AttemptWaypointRerouteAsync(request, bestRoute, severeHazards, hazardList);
+            var rerouted = await AttemptWaypointRerouteAsync(request, bestRoute, severeHazards, hazardList, cancellationToken);
             if (rerouted != null)
             {
                 double rerouteCost = ScoreRoute(rerouted, hazardList, request.SafetyWeight, request.Profile, graphData);
@@ -454,12 +459,13 @@ public class RoutingService
         RouteRequest request,
         OsrmRouteResult primaryRoute,
         List<HazardReport> nearbyHazards,
-        List<HazardReport> allHazards)
+        List<HazardReport> allHazards,
+        CancellationToken cancellationToken)
     {
         var waypoints = ComputeAvoidanceWaypoints(primaryRoute.Coordinates, nearbyHazards);
         if (waypoints.Count > 0)
         {
-            var rerouted = await _osrmClient.GetRouteAsync(request.Start, request.End, waypoints);
+            var rerouted = await _osrmClient.GetRouteAsync(request.Start, request.End, waypoints, cancellationToken);
             if (rerouted != null && rerouted.Coordinates.Count >= 2)
             {
                 if (rerouted.DistanceMetres < primaryRoute.DistanceMetres * 2.0)

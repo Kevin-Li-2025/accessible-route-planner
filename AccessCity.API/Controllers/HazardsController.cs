@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using NetTopologySuite.Geometries;
 using Asp.Versioning;
+using AccessCity.API.Common;
 using AccessCity.API.Data;
 using AccessCity.API.Hubs;
 using AccessCity.API.Models;
@@ -11,6 +12,9 @@ using AccessCity.API.Services;
 
 namespace AccessCity.API.Controllers;
 
+/// <summary>
+/// CRUD operations for hazard reports with real-time SignalR broadcasting.
+/// </summary>
 [ApiController]
 [ApiVersion("1.0")]
 [Route("api/v{version:apiVersion}/[controller]")]
@@ -33,23 +37,34 @@ public class HazardsController : ControllerBase
         _alertHub = alertHub;
     }
 
+    /// <summary>
+    /// Lists hazard reports, optionally filtered by bounding box and status.
+    /// </summary>
     [HttpGet]
+    [ProducesResponseType(typeof(IEnumerable<HazardReport>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IEnumerable<HazardReport>>> GetHazards(
         [FromQuery] double? minLat,
         [FromQuery] double? minLng,
         [FromQuery] double? maxLat,
         [FromQuery] double? maxLng,
-        [FromQuery] HazardStatus? status)
+        [FromQuery] HazardStatus? status,
+        CancellationToken cancellationToken = default)
     {
+        _ = cancellationToken;
         var hazards = await _realHazardData.GetActiveHazardsAsync(minLat, minLng, maxLat, maxLng, status);
         return Ok(hazards);
     }
 
+    /// <summary>
+    /// Creates a new hazard report and broadcasts a real-time alert via SignalR.
+    /// </summary>
     [HttpPost]
-    public async Task<ActionResult<HazardReport>> ReportHazard([FromBody] CreateHazardRequest request)
+    [ProducesResponseType(typeof(HazardReport), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(ApiError), StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<HazardReport>> ReportHazard(
+        [FromBody] CreateHazardRequest request,
+        CancellationToken cancellationToken = default)
     {
-        // FluentValidation automatically returns 400 if CreateHazardRequest is invalid
-        
         var report = new HazardReport
         {
             Id = Guid.NewGuid(),
@@ -67,39 +82,48 @@ public class HazardsController : ControllerBase
         report.Location.SRID = 4326;
 
         _dbContext.Hazards.Add(report);
-        await _dbContext.SaveChangesAsync();
+        await _dbContext.SaveChangesAsync(cancellationToken);
         await _spatialCache.UpdateHazardCacheAsync(report);
 
         // Broadcast real-time alert to connected clients
         await _alertHub.Clients.All.SendAsync("HazardReported", new RouteAlert(
             report.Type, report.Description,
-            report.Location.Y, report.Location.X, report.ReportedAt));
+            report.Location.Y, report.Location.X, report.ReportedAt), cancellationToken);
 
         return CreatedAtAction(nameof(GetHazardById), new { id = report.Id }, report);
     }
 
+    /// <summary>
+    /// Retrieves a single hazard report by ID, falling back to OSM-backed synthetic hazards.
+    /// </summary>
     [HttpGet("{id:guid}")]
-    public async Task<ActionResult<HazardReport>> GetHazardById(Guid id)
+    [ProducesResponseType(typeof(HazardReport), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<HazardReport>> GetHazardById(Guid id, CancellationToken cancellationToken = default)
     {
-        var hazard = await _dbContext.Hazards.AsNoTracking().SingleOrDefaultAsync(h => h.Id == id);
+        var hazard = await _dbContext.Hazards.AsNoTracking().SingleOrDefaultAsync(h => h.Id == id, cancellationToken);
         if (hazard is not null)
             return Ok(hazard);
 
-        // OSM-backed rows use deterministic GUIDs and are not persisted; same merge as GET list (default bbox).
         var merged = await _realHazardData.GetActiveHazardsAsync(null, null, null, null, null);
         var synthetic = merged.FirstOrDefault(h => h.Id == id);
         return synthetic is null ? NotFound() : Ok(synthetic);
     }
 
+    /// <summary>
+    /// Updates the status of an existing hazard report.
+    /// </summary>
     [HttpPatch("{id:guid}")]
-    public async Task<IActionResult> UpdateHazardStatus(Guid id, [FromBody] HazardStatus status)
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UpdateHazardStatus(Guid id, [FromBody] HazardStatus status, CancellationToken cancellationToken = default)
     {
-        var hazard = await _dbContext.Hazards.SingleOrDefaultAsync(h => h.Id == id);
+        var hazard = await _dbContext.Hazards.SingleOrDefaultAsync(h => h.Id == id, cancellationToken);
         if (hazard is null)
             return NotFound();
 
         hazard.Status = status;
-        await _dbContext.SaveChangesAsync();
+        await _dbContext.SaveChangesAsync(cancellationToken);
         await _spatialCache.UpdateHazardCacheAsync(hazard);
 
         return NoContent();

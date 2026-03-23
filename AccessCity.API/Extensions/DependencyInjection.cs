@@ -135,6 +135,8 @@ public static class DependencyInjection
         // Singletons (thread-safe caches)
         services.AddSingleton<ISpatialCacheService, SpatialCacheService>();
         services.AddSingleton<IBloomFilterService, BloomFilterService>();
+        services.AddSingleton<IRouteCoalescingService, RouteCoalescingService>();
+        services.AddSingleton<IRouteJobService, RouteJobService>();
 
         // Scoped (per-request)
         services.AddScoped<IMapTileService, MapTileService>();
