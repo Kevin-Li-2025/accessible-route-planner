@@ -260,11 +260,11 @@ public static class DependencyInjection
                         ?? "unknown",
                     factory: _ => new SlidingWindowRateLimiterOptions
                     {
-                        PermitLimit = 100,
+                        PermitLimit = 10_000,
                         Window = TimeSpan.FromMinutes(1),
                         SegmentsPerWindow = 4,
                         QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                        QueueLimit = 10
+                        QueueLimit = 100
                     }));
         });
 
