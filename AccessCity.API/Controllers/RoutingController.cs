@@ -1,12 +1,15 @@
 using Asp.Versioning;
 using AccessCity.API.Common;
+using AccessCity.API.Configuration;
 using AccessCity.API.Data;
+using AccessCity.API.Exceptions;
 using AccessCity.API.Models;
 using AccessCity.API.Models.DTOs;
 using AccessCity.API.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace AccessCity.API.Controllers;
 
@@ -25,6 +28,8 @@ public class RoutingController : ControllerBase
     private readonly AppDbContext _dbContext;
     private readonly IRouteJobService _jobs;
     private readonly IRouteCoalescingService _coalescing;
+    private readonly IRouteComputationLimiter _routeLimiter;
+    private readonly RoutingOptions _routingOptions;
 
     private static readonly TimeSpan SafePathTimeout = TimeSpan.FromSeconds(30);
 
@@ -34,7 +39,9 @@ public class RoutingController : ControllerBase
         PredictiveRiskModel aiRisk,
         AppDbContext dbContext,
         IRouteJobService jobs,
-        IRouteCoalescingService coalescing)
+        IRouteCoalescingService coalescing,
+        IRouteComputationLimiter routeLimiter,
+        IOptions<RoutingOptions> routingOptions)
     {
         _routing = routing;
         _risk = risk;
@@ -42,6 +49,8 @@ public class RoutingController : ControllerBase
         _dbContext = dbContext;
         _jobs = jobs;
         _coalescing = coalescing;
+        _routeLimiter = routeLimiter;
+        _routingOptions = routingOptions.Value;
     }
 
     /// <summary>
@@ -53,22 +62,29 @@ public class RoutingController : ControllerBase
     [ProducesResponseType(typeof(RouteResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiError), StatusCodes.Status503ServiceUnavailable)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status504GatewayTimeout)]
     public async Task<ActionResult<RouteResponse>> GetSafePath(
         [FromBody] RouteRequest request,
         CancellationToken cancellationToken)
     {
-        var hazards = await LoadActiveHazardsAsync(cancellationToken);
-
         // Enforce a 30-second timeout to prevent indefinite blocking.
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(SafePathTimeout);
 
         try
         {
+            var queueTimeout = TimeSpan.FromSeconds(Math.Max(1, _routingOptions.ComputationQueueTimeoutSeconds));
             var result = await _coalescing.GetOrComputeAsync(
                 request,
-                async () => await _routing.FindSafePathAsync(request, hazards, timeoutCts.Token));
+                async () =>
+                {
+                    await using var lease = await _routeLimiter.TryAcquireAsync(queueTimeout, timeoutCts.Token)
+                        ?? throw new RouteCapacityExceededException();
+
+                    var hazards = await LoadHazardsForRouteAsync(request, timeoutCts.Token);
+                    return await _routing.FindSafePathAsync(request, hazards, timeoutCts.Token);
+                });
 
             if (result is null)
             {
@@ -78,6 +94,12 @@ public class RoutingController : ControllerBase
             }
 
             return Ok(result);
+        }
+        catch (RouteCapacityExceededException)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new ApiError(
+                "Route computation capacity is saturated.",
+                Detail: "Retry shortly or use the async job endpoint: POST /routing/safe-path/async."));
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
@@ -99,7 +121,7 @@ public class RoutingController : ControllerBase
         [FromBody] RouteRequest request,
         CancellationToken cancellationToken)
     {
-        var hazards = await LoadActiveHazardsAsync(cancellationToken);
+        var hazards = await LoadHazardsForRouteAsync(request, cancellationToken);
         var jobId = _jobs.Submit(request, hazards);
 
         return Accepted(new { jobId, status = "pending", pollUrl = $"/api/v1/routing/jobs/{jobId}" });
@@ -131,7 +153,16 @@ public class RoutingController : ControllerBase
         [FromBody] RouteRequest request,
         CancellationToken cancellationToken = default)
     {
-        var hazards = await LoadActiveHazardsAsync(cancellationToken);
+        var queueTimeout = TimeSpan.FromSeconds(Math.Max(1, _routingOptions.ComputationQueueTimeoutSeconds));
+        await using var lease = await _routeLimiter.TryAcquireAsync(queueTimeout, cancellationToken);
+        if (lease is null)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new ApiError(
+                "Route computation capacity is saturated.",
+                Detail: "Retry shortly or use the async job endpoint for the primary route."));
+        }
+
+        var hazards = await LoadHazardsForRouteAsync(request, cancellationToken);
         var result = await _routing.FindSafePathWithVariantsAsync(request, hazards, cancellationToken);
         return Ok(result);
     }
@@ -146,7 +177,7 @@ public class RoutingController : ControllerBase
         [FromQuery] RiskScoreRequestDto request,
         CancellationToken cancellationToken = default)
     {
-        var hazards = await LoadActiveHazardsAsync(cancellationToken);
+        var hazards = await LoadHazardsNearPointAsync(request.Lat, request.Lng, request.Radius, cancellationToken);
         var result = await _risk.EvaluateRiskAsync(request.Lat, request.Lng, request.Radius, hazards);
         return Ok(result);
     }
@@ -161,7 +192,7 @@ public class RoutingController : ControllerBase
         [FromQuery] RiskScoreRequestDto request,
         CancellationToken cancellationToken = default)
     {
-        var hazards = await LoadActiveHazardsAsync(cancellationToken);
+        var hazards = await LoadHazardsNearPointAsync(request.Lat, request.Lng, request.Radius, cancellationToken);
         var result = await _aiRisk.EvaluateSegmentRiskAsync(request.Lat, request.Lng, hazards, request.Radius);
         return Ok(result);
     }
@@ -177,9 +208,91 @@ public class RoutingController : ControllerBase
         [FromQuery] RiskScoreRequestDto request,
         CancellationToken cancellationToken = default)
     {
-        var hazards = await LoadActiveHazardsAsync(cancellationToken);
+        var hazards = await LoadHazardsNearPointAsync(request.Lat, request.Lng, request.Radius, cancellationToken);
         var result = await _risk.PredictRiskAsync(request.Lat, request.Lng, request.Radius, hazards);
         return Ok(result);
+    }
+
+    private async Task<List<HazardReport>> LoadHazardsForRouteAsync(
+        RouteRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (request.Start is null || request.End is null)
+        {
+            return await LoadActiveHazardsAsync(cancellationToken);
+        }
+
+        var paddingMetres = Math.Max(0, _routingOptions.HazardQueryPaddingMetres);
+        var latitudePadding = MetresToLatitudeDegrees(paddingMetres);
+        var centerLatitude = (request.Start.Y + request.End.Y) / 2.0;
+        var longitudePadding = MetresToLongitudeDegrees(paddingMetres, centerLatitude);
+
+        var minLon = Math.Min(request.Start.X, request.End.X) - longitudePadding;
+        var maxLon = Math.Max(request.Start.X, request.End.X) + longitudePadding;
+        var minLat = Math.Min(request.Start.Y, request.End.Y) - latitudePadding;
+        var maxLat = Math.Max(request.Start.Y, request.End.Y) + latitudePadding;
+        var limit = Math.Max(1, _routingOptions.MaxHazardsPerRequest);
+
+        if (_dbContext.Database.IsRelational())
+        {
+            return await _dbContext.Hazards
+                .FromSqlInterpolated($"""
+                    SELECT *
+                    FROM public.hazard_report
+                    WHERE status IN ('reported'::hazard_status, 'under_review'::hazard_status)
+                      AND geom && ST_MakeEnvelope({minLon}, {minLat}, {maxLon}, {maxLat}, 4326)
+                    ORDER BY reported_at DESC
+                    LIMIT {limit}
+                    """)
+                .AsNoTracking()
+                .ToListAsync(cancellationToken);
+        }
+
+        return (await LoadActiveHazardsAsync(cancellationToken))
+            .Where(h => h.Location is not null
+                        && h.Location.X >= minLon
+                        && h.Location.X <= maxLon
+                        && h.Location.Y >= minLat
+                        && h.Location.Y <= maxLat)
+            .Take(limit)
+            .ToList();
+    }
+
+    private async Task<List<HazardReport>> LoadHazardsNearPointAsync(
+        double latitude,
+        double longitude,
+        double radiusMetres,
+        CancellationToken cancellationToken)
+    {
+        var cappedRadius = Math.Min(
+            Math.Max(0, radiusMetres),
+            Math.Max(1, _routingOptions.MaxRiskQueryRadiusMetres));
+        var queryRadius = cappedRadius + Math.Max(0, _routingOptions.HazardQueryPaddingMetres);
+        var limit = Math.Max(1, _routingOptions.MaxHazardsPerRequest);
+
+        if (_dbContext.Database.IsRelational())
+        {
+            return await _dbContext.Hazards
+                .FromSqlInterpolated($"""
+                    SELECT *
+                    FROM public.hazard_report
+                    WHERE status IN ('reported'::hazard_status, 'under_review'::hazard_status)
+                      AND ST_DWithin(
+                          geom::geography,
+                          ST_SetSRID(ST_MakePoint({longitude}, {latitude}), 4326)::geography,
+                          {queryRadius})
+                    ORDER BY reported_at DESC
+                    LIMIT {limit}
+                    """)
+                .AsNoTracking()
+                .ToListAsync(cancellationToken);
+        }
+
+        return (await LoadActiveHazardsAsync(cancellationToken))
+            .Where(h => h.Location is not null
+                        && HaversineMetres(latitude, longitude, h.Location.Y, h.Location.X) <= queryRadius)
+            .Take(limit)
+            .ToList();
     }
 
     private async Task<List<HazardReport>> LoadActiveHazardsAsync(CancellationToken cancellationToken)
@@ -189,4 +302,27 @@ public class RoutingController : ControllerBase
             .AsNoTracking()
             .ToListAsync(cancellationToken);
     }
+
+    private static double MetresToLatitudeDegrees(double metres) => metres / 111_320.0;
+
+    private static double MetresToLongitudeDegrees(double metres, double latitude)
+    {
+        var radians = latitude * Math.PI / 180.0;
+        var metresPerDegree = 111_320.0 * Math.Max(0.1, Math.Cos(radians));
+        return metres / metresPerDegree;
+    }
+
+    private static double HaversineMetres(double lat1, double lon1, double lat2, double lon2)
+    {
+        const double earthRadius = 6_371_000.0;
+        var dLat = ToRadians(lat2 - lat1);
+        var dLon = ToRadians(lon2 - lon1);
+        var a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2)
+                + Math.Cos(ToRadians(lat1)) * Math.Cos(ToRadians(lat2))
+                * Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
+        var c = 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
+        return earthRadius * c;
+    }
+
+    private static double ToRadians(double degrees) => degrees * Math.PI / 180.0;
 }

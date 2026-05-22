@@ -14,4 +14,5 @@ public sealed class PostgresOptions
     public int? IdleInTransactionSessionTimeoutMs { get; set; }
     public int? MaxPoolSize { get; set; }
     public int? MinPoolSize { get; set; }
+    public int DbContextPoolSize { get; set; } = 128;
 }

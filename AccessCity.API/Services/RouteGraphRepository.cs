@@ -1,6 +1,8 @@
+using AccessCity.API.Configuration;
 using AccessCity.API.Data;
 using AccessCity.API.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using NetTopologySuite.Geometries;
 
 namespace AccessCity.API.Services;
@@ -13,10 +15,12 @@ public interface IRouteGraphRepository
 public sealed class RouteGraphRepository : IRouteGraphRepository
 {
     private readonly AppDbContext _dbContext;
+    private readonly RoutingOptions _options;
 
-    public RouteGraphRepository(AppDbContext dbContext)
+    public RouteGraphRepository(AppDbContext dbContext, IOptions<RoutingOptions> options)
     {
         _dbContext = dbContext;
+        _options = options.Value;
     }
 
     public async Task<RouteGraphData> LoadGraphAsync(
@@ -29,6 +33,7 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         var maxLon = Math.Max(start.X, end.X) + padding;
         var minLat = Math.Min(start.Y, end.Y) - padding;
         var maxLat = Math.Max(start.Y, end.Y) + padding;
+        var edgeLimit = Math.Max(100, _options.MaxRouteGraphEdges);
 
         var edges = await _dbContext.RouteEdges
             .FromSqlInterpolated($"""
@@ -37,6 +42,8 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
                 WHERE ST_Intersects(
                     "Geometry",
                     ST_MakeEnvelope({minLon}, {minLat}, {maxLon}, {maxLat}, 4326))
+                ORDER BY "Geometry" <-> ST_SetSRID(ST_MakePoint({start.X}, {start.Y}), 4326)
+                LIMIT {edgeLimit + 1}
                 """)
             .AsNoTracking()
             .ToListAsync(cancellationToken);
@@ -44,6 +51,12 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         if (edges.Count == 0)
         {
             return new RouteGraphData();
+        }
+
+        var isTruncated = edges.Count > edgeLimit;
+        if (isTruncated)
+        {
+            edges = edges.Take(edgeLimit).ToList();
         }
 
         var nodeIds = edges
@@ -93,7 +106,7 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
             };
         }
 
-        return new RouteGraphData { Nodes = graph };
+        return new RouteGraphData { Nodes = graph, IsTruncated = isTruncated };
     }
 
     private static double ComputePaddingDegrees(Coordinate start, Coordinate end)

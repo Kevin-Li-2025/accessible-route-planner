@@ -10,7 +10,9 @@ Date: 2026-05-22
 | Hazard overlays | `SpatialController.GetMapOverlay` | Ordered latest hazards require a sort as table grows. | `IX_hazard_report_status_reported_at` and existing reported-at index cover active/latest hazard reads. |
 | Vector tiles | `SpatialCacheService.GetHazardsInBoundsAsync` | DB fallback uses `ST_Intersects`; needed a GiST index on `hazard_report.geom`. | `IX_hazard_report_geom_gist`. |
 | POI search | `SpatialController.GetPointsOfInterest` | `ST_DWithin(...::geography)` cannot use a plain geometry GiST index efficiently. | Added expression index `IX_infrastructure_assets_geometry_geog_gist` and geometry index `IX_infrastructure_assets_geometry_gist`. |
-| Route graph load | `RouteGraphRepository.LoadGraphAsync` | `route_edges` bbox scan on imported OSM graph can grow quickly. | `IX_route_edges_geometry_gist` supports `ST_Intersects` graph loads. |
+| Route graph load | `RouteGraphRepository.LoadGraphAsync` | `route_edges` bbox scan on imported OSM graph can grow quickly. | `IX_route_edges_geometry_gist` supports `ST_Intersects`; runtime now caps `Routing__MaxRouteGraphEdges` and falls back instead of building an oversized A* graph. |
+| Route hazard load | `RoutingController.LoadHazardsForRouteAsync` | Loading all active hazards becomes the first DB bottleneck as reports grow. | Runtime now queries only hazards inside the route envelope and uses `IX_hazard_report_active_geom_gist`. |
+| Point risk hazard load | `RoutingController.LoadHazardsNearPointAsync` | Risk endpoints used to scan every active hazard. | Runtime now uses `ST_DWithin` around the requested point, caps per-request hazard rows, and uses `IX_hazard_report_active_geom_geog_gist`. |
 | Infrastructure risk | `RiskScoringService.EstimateInfrastructureRiskAsync` | EF `Distance` expression scanned and sorted nearby route edges. | Npgsql path now uses `ST_DWithin` plus GiST KNN ordering on `route_edges.Geometry`. |
 | Nearest route node / route node spatial reads | route import/routing support | Future nearest-node reads need spatial support. | `IX_route_nodes_location_gist`. |
 
@@ -19,6 +21,9 @@ Date: 2026-05-22
 Indexes are created idempotently during API startup after migrations and schema normalization:
 
 - `IX_hazard_report_geom_gist`
+- `IX_hazard_report_active_geom_gist`
+- `IX_hazard_report_active_geom_geog_gist`
+- `IX_hazard_report_active_reported_at`
 - `IX_hazard_report_status_reported_at`
 - `IX_infrastructure_assets_geometry_gist`
 - `IX_infrastructure_assets_geometry_geog_gist`
@@ -34,7 +39,7 @@ Indexes are created idempotently during API startup after migrations and schema 
 - Run `EXPLAIN (ANALYZE, BUFFERS)` against production-sized OSM extracts before launch.
 - Consider generated geography columns if POI radius queries dominate load.
 - Production runtime now supports `Postgres__StatementTimeoutMs`,
-  `Postgres__IdleInTransactionSessionTimeoutMs`, and pool sizing knobs.
+  `Postgres__IdleInTransactionSessionTimeoutMs`, EF Core context pooling, and pool sizing knobs.
   Startup session parameters are opt-in via `Postgres__UseStartupSessionParameters=true`;
   leave it `false` for managed pooled databases that reject `-c` startup options and enforce
   those limits with database role or parameter-group settings instead.

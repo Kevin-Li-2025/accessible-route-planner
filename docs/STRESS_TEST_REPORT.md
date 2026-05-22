@@ -6,6 +6,25 @@
 
 ---
 
+## 2026-05-22 Post-Scalability-Guard Regression
+
+After adding scoped PostGIS hazard reads, EF Core context pooling, external dependency bulkheads,
+and the shared route computation limiter, the Release test run passed:
+
+- Full regression: 172/172 tests passed.
+- Stress/benchmark subset: 9/9 tests passed.
+- Safe-path cold start: 631 ms.
+- Safe-path warm cache hit: 4 ms.
+- Mixed endpoint load: 25/25 success, p50 11.52 ms, p95 65.97 ms, p99 66.09 ms, 378.1 req/s wall-clock throughput.
+- Dashboard burst: 15/15 success, p50 116.58 ms, p95 119.55 ms.
+- Spatial POI burst: 20/20 success, p50 16.63 ms, p95 70.82 ms.
+- Hazards burst: 16/16 success, p50 0.76 ms, p95 1.13 ms.
+
+This is still local API/Postgres validation. Real horizontal-scaling validation should use the
+Kubernetes k6 job documented in `docs/DISTRIBUTED_LOAD_TESTING.md`.
+
+---
+
 ## Executive Summary
 
 Following the "Perfect Engineering Overhaul," the AccessCity API has been matured through architectural optimizations including **Request Coalescing**, **Asynchronous Job Queues**, and **Concurrency Gating**. Final stress testing (v1.2) demonstrates a **7.5x reduction** in safe-path latency and a **114% increase** in total throughput compared to the baseline. The system now maintains a **99.86% success rate** under a sustained 100-VU concurrent load.

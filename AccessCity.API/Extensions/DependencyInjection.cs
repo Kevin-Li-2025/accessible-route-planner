@@ -62,7 +62,10 @@ public static class DependencyInjection
 
     public static IServiceCollection AddDatabase(this IServiceCollection services, IConfiguration configuration, IWebHostEnvironment env)
     {
-        services.AddDbContext<AppDbContext>((serviceProvider, options) =>
+        var postgresOptions = configuration.GetSection(PostgresOptions.SectionName).Get<PostgresOptions>() ?? new PostgresOptions();
+        var dbContextPoolSize = Math.Max(1, postgresOptions.DbContextPoolSize);
+
+        services.AddDbContextPool<AppDbContext>((serviceProvider, options) =>
         {
             var config = serviceProvider.GetRequiredService<IConfiguration>();
             var connectionString = PostgresConnectionStringResolver.Resolve(config);
@@ -78,7 +81,7 @@ public static class DependencyInjection
             {
                 ConfigureNpgsql(options, config);
             }
-        });
+        }, dbContextPoolSize);
 
         return services;
     }
@@ -145,10 +148,14 @@ public static class DependencyInjection
 
     public static IServiceCollection AddApplicationServices(this IServiceCollection services, IConfiguration configuration)
     {
+        services.Configure<RoutingOptions>(configuration.GetSection(RoutingOptions.SectionName));
+
         // Singletons (thread-safe caches)
         services.AddSingleton<ISpatialCacheService, SpatialCacheService>();
         services.AddSingleton<IBloomFilterService, BloomFilterService>();
         services.AddSingleton<IRouteCoalescingService, RouteCoalescingService>();
+        services.AddSingleton<IRouteComputationLimiter, RouteComputationLimiter>();
+        services.AddSingleton<IExternalDependencyGuard, ExternalDependencyGuard>();
         services.AddSingleton<IRouteJobService, RouteJobService>();
 
         // Scoped (per-request)
@@ -161,22 +168,23 @@ public static class DependencyInjection
         services.AddScoped<ITokenService, TokenService>();
         services.AddScoped<IRealHazardDataService, RealHazardDataService>();
 
-        var osrmTimeout = TimeSpan.FromSeconds(configuration.GetValue("ExternalApis:Osrm:TimeoutSeconds", 8));
-        var policeTimeout = TimeSpan.FromSeconds(configuration.GetValue("ExternalApis:UkPolice:TimeoutSeconds", 6));
+        var osrmTimeout = TimeSpan.FromSeconds(configuration.GetValue("ExternalApis:Osrm:TimeoutSeconds", 3));
+        var overpassTimeout = TimeSpan.FromSeconds(configuration.GetValue("ExternalApis:Overpass:TimeoutSeconds", 5));
+        var policeTimeout = TimeSpan.FromSeconds(configuration.GetValue("ExternalApis:UkPolice:TimeoutSeconds", 2));
         var placesTimeout = TimeSpan.FromSeconds(configuration.GetValue("ExternalApis:GooglePlaces:TimeoutSeconds", 6));
         var weatherTimeout = TimeSpan.FromSeconds(configuration.GetValue("ExternalApis:OpenWeather:TimeoutSeconds", 5));
-        var environmentalTimeout = TimeSpan.FromSeconds(configuration.GetValue("ExternalApis:Environmental:TimeoutSeconds", 8));
+        var environmentalTimeout = TimeSpan.FromSeconds(configuration.GetValue("ExternalApis:Environmental:TimeoutSeconds", 3));
 
-        // Typed HTTP clients with bounded timeouts and resilience.
+        // Typed HTTP clients with bounded timeouts. Tail-sensitive dependencies use ExternalDependencyGuard
+        // instead of Polly retries so one slow upstream cannot multiply p95/p99 latency.
         services.AddHttpClient<Services.External.IOsrmClient, Services.External.OsrmClient>(client =>
             {
                 client.Timeout = osrmTimeout;
-            })
-            .AddStandardResilienceHandler();
+            });
 
-        // Overpass: no Polly retries — retries multiply tail latency (30s × N) and block /hazards merge.
+        // Overpass: no Polly retries; hazard merge degrades to DB-only through ExternalDependencyGuard.
         services.AddHttpClient<Services.External.IOpenStreetMapClient, Services.External.OverpassApiClient>()
-            .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(14));
+            .ConfigureHttpClient(c => c.Timeout = overpassTimeout);
 
         // Geocoding implements its own short retry in the controller; avoid Polly × retry tail latency.
         services.AddHttpClient("Nominatim", c =>
@@ -189,8 +197,7 @@ public static class DependencyInjection
         services.AddHttpClient<Services.External.IUkPoliceDataClient, Services.External.UkPoliceDataClient>(client =>
             {
                 client.Timeout = policeTimeout;
-            })
-            .AddStandardResilienceHandler();
+            });
 
         services.AddHttpClient<Services.External.ISafeHavenPlacesClient, Services.External.GooglePlacesClient>(client =>
             {
@@ -205,8 +212,7 @@ public static class DependencyInjection
             .AddStandardResilienceHandler();
 
         services.AddHttpClient<Services.External.IEnvironmentalDataClient, Services.External.EnvironmentalDataClient>()
-            .ConfigureHttpClient(c => c.Timeout = environmentalTimeout)
-            .AddStandardResilienceHandler();
+            .ConfigureHttpClient(c => c.Timeout = environmentalTimeout);
 
         // Background workers. In multi-instance deployments these can be disabled on API replicas
         // and enabled on a dedicated worker container consuming the same Kafka group.

@@ -1,5 +1,8 @@
 using System.Collections.Concurrent;
+using AccessCity.API.Configuration;
+using AccessCity.API.Exceptions;
 using AccessCity.API.Models;
+using Microsoft.Extensions.Options;
 
 namespace AccessCity.API.Services;
 
@@ -36,15 +39,21 @@ public sealed class RouteJobService : IRouteJobService
     private readonly ConcurrentDictionary<string, RouteJobResult> _jobs = new();
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IRouteCoalescingService _coalescing;
+    private readonly IRouteComputationLimiter _routeLimiter;
     private readonly ILogger<RouteJobService> _logger;
+    private readonly RoutingOptions _options;
 
-    // Limit concurrent A* computations to prevent DB pool exhaustion.
-    private readonly SemaphoreSlim _concurrencyGate = new(4, 4);
-
-    public RouteJobService(IServiceScopeFactory scopeFactory, IRouteCoalescingService coalescing, ILogger<RouteJobService> logger)
+    public RouteJobService(
+        IServiceScopeFactory scopeFactory,
+        IRouteCoalescingService coalescing,
+        IRouteComputationLimiter routeLimiter,
+        IOptions<RoutingOptions> options,
+        ILogger<RouteJobService> logger)
     {
         _scopeFactory = scopeFactory;
         _coalescing = coalescing;
+        _routeLimiter = routeLimiter;
+        _options = options.Value;
         _logger = logger;
     }
 
@@ -76,26 +85,31 @@ public sealed class RouteJobService : IRouteJobService
 
         try
         {
-            await _concurrencyGate.WaitAsync();
-            try
-            {
-                // Create a scoped DI container to resolve Scoped services (RoutingService, AppDbContext).
-                await using var scope = _scopeFactory.CreateAsyncScope();
-                var routing = scope.ServiceProvider.GetRequiredService<RoutingService>();
+            var waitTimeout = TimeSpan.FromSeconds(Math.Max(1, _options.JobComputationQueueTimeoutSeconds));
 
-                // Try the coalescing layer first — identical requests share a single computation.
-                var route = await _coalescing.GetOrComputeAsync(
-                    request,
-                    async () => await routing.FindSafePathAsync(request, hazards));
+            // Try the coalescing layer first; identical requests share a single computation and one limiter lease.
+            var route = await _coalescing.GetOrComputeAsync(
+                request,
+                async () =>
+                {
+                    await using var lease = await _routeLimiter.TryAcquireAsync(waitTimeout, CancellationToken.None)
+                        ?? throw new RouteCapacityExceededException();
 
-                result.Route = route;
-                result.Status = route is not null ? RouteJobStatus.Completed : RouteJobStatus.Failed;
-                result.Error = route is null ? "No route found." : null;
-            }
-            finally
-            {
-                _concurrencyGate.Release();
-            }
+                    // Create a scoped DI container to resolve Scoped services (RoutingService, AppDbContext).
+                    await using var scope = _scopeFactory.CreateAsyncScope();
+                    var routing = scope.ServiceProvider.GetRequiredService<RoutingService>();
+                    return await routing.FindSafePathAsync(request, hazards);
+                });
+
+            result.Route = route;
+            result.Status = route is not null ? RouteJobStatus.Completed : RouteJobStatus.Failed;
+            result.Error = route is null ? "No route found." : null;
+        }
+        catch (RouteCapacityExceededException ex)
+        {
+            _logger.LogWarning(ex, "Route job {JobId} exceeded route computation capacity", jobId);
+            result.Status = RouteJobStatus.Failed;
+            result.Error = "Route computation capacity is saturated. Retry later.";
         }
         catch (Exception ex)
         {

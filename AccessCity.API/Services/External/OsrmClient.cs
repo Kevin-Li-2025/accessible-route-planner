@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using AccessCity.API.Models.External;
+using AccessCity.API.Services;
 using NetTopologySuite.Geometries;
 
 namespace AccessCity.API.Services.External
@@ -52,11 +53,13 @@ namespace AccessCity.API.Services.External
     public class OsrmClient : IOsrmClient
     {
         private readonly HttpClient _httpClient;
+        private readonly IExternalDependencyGuard _guard;
         private const string BaseUrl = "http://router.project-osrm.org/route/v1/foot/";
 
-        public OsrmClient(HttpClient httpClient)
+        public OsrmClient(HttpClient httpClient, IExternalDependencyGuard guard)
         {
             _httpClient = httpClient;
+            _guard = guard;
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "AccessCity-UniversityProject/1.0");
         }
 
@@ -76,25 +79,19 @@ namespace AccessCity.API.Services.External
 
             string url = $"{BaseUrl}{coordString}?overview=full&geometries=geojson&steps=true";
 
-            try
-            {
-                var response = await _httpClient.GetFromJsonAsync<OsrmRouteResponse>(url, cancellationToken);
+            return await _guard.ExecuteAsync<OsrmRouteResult?>(
+                "Osrm",
+                async guardedToken =>
+                {
+                    var response = await _httpClient.GetFromJsonAsync<OsrmRouteResponse>(url, guardedToken);
 
-                if (response == null || response.Code != "Ok" || response.Routes.Count == 0)
-                    return null;
+                    if (response == null || response.Code != "Ok" || response.Routes.Count == 0)
+                        return null;
 
-                return ParseRoute(response.Routes[0]);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                // Internal logging for diagnostics, but safe fallback for the user.
-                System.Diagnostics.Debug.WriteLine($"[OSRM ERROR] {ex.Message}");
-                return null;
-            }
+                    return ParseRoute(response.Routes[0]);
+                },
+                () => null,
+                cancellationToken);
         }
 
         public async Task<List<OsrmRouteResult>?> GetAlternativeRoutesAsync(
@@ -105,23 +102,19 @@ namespace AccessCity.API.Services.External
             string coordString = $"{start.X:F6},{start.Y:F6};{end.X:F6},{end.Y:F6}";
             string url = $"{BaseUrl}{coordString}?overview=full&geometries=geojson&steps=true&alternatives=3";
 
-            try
-            {
-                var response = await _httpClient.GetFromJsonAsync<OsrmRouteResponse>(url, cancellationToken);
+            return await _guard.ExecuteAsync<List<OsrmRouteResult>?>(
+                "Osrm",
+                async guardedToken =>
+                {
+                    var response = await _httpClient.GetFromJsonAsync<OsrmRouteResponse>(url, guardedToken);
 
-                if (response == null || response.Code != "Ok" || response.Routes.Count == 0)
-                    return null;
+                    if (response == null || response.Code != "Ok" || response.Routes.Count == 0)
+                        return null;
 
-                return response.Routes.Select(ParseRoute).ToList();
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception)
-            {
-                return null;
-            }
+                    return response.Routes.Select(ParseRoute).ToList();
+                },
+                () => null,
+                cancellationToken);
         }
 
         private static OsrmRouteResult ParseRoute(OsrmRoute route)

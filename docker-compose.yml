@@ -22,6 +22,25 @@ services:
       Postgres__StatementTimeoutMs: ${Postgres__StatementTimeoutMs:-15000}
       Postgres__IdleInTransactionSessionTimeoutMs: ${Postgres__IdleInTransactionSessionTimeoutMs:-30000}
       Postgres__MaxPoolSize: ${Postgres__MaxPoolSize:-100}
+      Postgres__DbContextPoolSize: ${Postgres__DbContextPoolSize:-128}
+      Routing__MaxConcurrentComputations: ${Routing__MaxConcurrentComputations:-4}
+      Routing__ComputationQueueTimeoutSeconds: ${Routing__ComputationQueueTimeoutSeconds:-2}
+      Routing__JobComputationQueueTimeoutSeconds: ${Routing__JobComputationQueueTimeoutSeconds:-30}
+      Routing__HazardQueryPaddingMetres: ${Routing__HazardQueryPaddingMetres:-250}
+      Routing__MaxHazardsPerRequest: ${Routing__MaxHazardsPerRequest:-500}
+      Routing__MaxRiskQueryRadiusMetres: ${Routing__MaxRiskQueryRadiusMetres:-2500}
+      Routing__MaxRouteGraphEdges: ${Routing__MaxRouteGraphEdges:-20000}
+      ExternalApis__CircuitBreaker__FailureThreshold: ${ExternalApis__CircuitBreaker__FailureThreshold:-3}
+      ExternalApis__CircuitBreaker__BreakSeconds: ${ExternalApis__CircuitBreaker__BreakSeconds:-30}
+      ExternalApis__CircuitBreaker__QueueTimeoutMilliseconds: ${ExternalApis__CircuitBreaker__QueueTimeoutMilliseconds:-50}
+      ExternalApis__Osrm__TimeoutSeconds: ${ExternalApis__Osrm__TimeoutSeconds:-3}
+      ExternalApis__Osrm__MaxConcurrentRequests: ${ExternalApis__Osrm__MaxConcurrentRequests:-32}
+      ExternalApis__Overpass__TimeoutSeconds: ${ExternalApis__Overpass__TimeoutSeconds:-5}
+      ExternalApis__Overpass__MaxConcurrentRequests: ${ExternalApis__Overpass__MaxConcurrentRequests:-4}
+      ExternalApis__UkPolice__TimeoutSeconds: ${ExternalApis__UkPolice__TimeoutSeconds:-2}
+      ExternalApis__UkPolice__MaxConcurrentRequests: ${ExternalApis__UkPolice__MaxConcurrentRequests:-8}
+      ExternalApis__Environmental__TimeoutSeconds: ${ExternalApis__Environmental__TimeoutSeconds:-3}
+      ExternalApis__Environmental__MaxConcurrentRequests: ${ExternalApis__Environmental__MaxConcurrentRequests:-4}
       RateLimiting__Global__PermitLimit: ${RateLimiting__Global__PermitLimit:-100}
       RateLimiting__Global__QueueLimit: ${RateLimiting__Global__QueueLimit:-10}
       Workers__OsmImport__Enabled: ${API_OSM_WORKER_ENABLED:-true}
@@ -65,6 +84,9 @@ services:
       Postgres__StatementTimeoutMs: ${Postgres__StatementTimeoutMs:-15000}
       Postgres__IdleInTransactionSessionTimeoutMs: ${Postgres__IdleInTransactionSessionTimeoutMs:-30000}
       Postgres__MaxPoolSize: ${Postgres__MaxPoolSize:-100}
+      Postgres__DbContextPoolSize: ${Postgres__DbContextPoolSize:-64}
+      Routing__MaxConcurrentComputations: ${Routing__MaxConcurrentComputations:-2}
+      Routing__JobComputationQueueTimeoutSeconds: ${Routing__JobComputationQueueTimeoutSeconds:-60}
       OsmImport__ImportOnStartup: "false"
       ConnectionStrings__Redis: ${REDIS_CONNECTION:-redis:6379}
       Workers__OsmImport__Enabled: "true"

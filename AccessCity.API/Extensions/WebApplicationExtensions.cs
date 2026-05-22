@@ -555,6 +555,18 @@ public static class WebApplicationExtensions
             CREATE INDEX IF NOT EXISTS "IX_hazard_report_status_reported_at"
                 ON public.hazard_report (status, reported_at DESC);
 
+            CREATE INDEX IF NOT EXISTS "IX_hazard_report_active_geom_gist"
+                ON public.hazard_report USING GIST (geom)
+                WHERE status IN ('reported'::hazard_status, 'under_review'::hazard_status);
+
+            CREATE INDEX IF NOT EXISTS "IX_hazard_report_active_geom_geog_gist"
+                ON public.hazard_report USING GIST ((geom::geography))
+                WHERE status IN ('reported'::hazard_status, 'under_review'::hazard_status);
+
+            CREATE INDEX IF NOT EXISTS "IX_hazard_report_active_reported_at"
+                ON public.hazard_report (reported_at DESC)
+                WHERE status IN ('reported'::hazard_status, 'under_review'::hazard_status);
+
             CREATE INDEX IF NOT EXISTS "IX_infrastructure_assets_geometry_gist"
                 ON public.infrastructure_assets USING GIST ("Geometry");
 

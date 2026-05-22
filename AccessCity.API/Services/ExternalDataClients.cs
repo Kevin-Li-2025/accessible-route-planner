@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using AccessCity.API.Exceptions;
 using AccessCity.API.Models.External;
+using AccessCity.API.Services;
 using Microsoft.Extensions.Configuration;
 using System.Threading;
 
@@ -35,12 +36,18 @@ namespace AccessCity.API.Services.External
         private const int MaxHazardJsonBytes = 8 * 1024 * 1024;
 
         private readonly HttpClient _httpClient;
+        private readonly IExternalDependencyGuard _guard;
         private readonly ILogger<OverpassApiClient> _logger;
         private readonly string _overpassEndpoint;
 
-        public OverpassApiClient(HttpClient httpClient, ILogger<OverpassApiClient> logger, IConfiguration configuration)
+        public OverpassApiClient(
+            HttpClient httpClient,
+            IExternalDependencyGuard guard,
+            ILogger<OverpassApiClient> logger,
+            IConfiguration configuration)
         {
             _httpClient = httpClient;
+            _guard = guard;
             _logger = logger;
             _overpassEndpoint = configuration["Overpass:Endpoint"] ?? DefaultOverpassEndpoint;
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "AccessCity-UniversityProject/1.0");
@@ -49,7 +56,7 @@ namespace AccessCity.API.Services.External
         public async Task<List<OverpassElement>?> GetInfrastructureDataAsync(double minLat, double minLng, double maxLat, double maxLng)
         {
             var overpassQuery = $@"
-                [out:json][timeout:25];
+                [out:json][timeout:4];
                 (
                   way[""highway""=""footway""]({minLat},{minLng},{maxLat},{maxLng});
                   way[""highway""=""steps""]({minLat},{minLng},{maxLat},{maxLng});
@@ -59,14 +66,21 @@ namespace AccessCity.API.Services.External
                 out center;
             ";
 
-            var response = await _httpClient.PostAsync(
-                _overpassEndpoint,
-                new StringContent(overpassQuery));
+            return await _guard.ExecuteAsync<List<OverpassElement>?>(
+                "Overpass",
+                async guardedToken =>
+                {
+                    var response = await _httpClient.PostAsync(
+                        _overpassEndpoint,
+                        new StringContent(overpassQuery),
+                        guardedToken);
 
-            if (!response.IsSuccessStatusCode) return null;
+                    if (!response.IsSuccessStatusCode) return null;
 
-            var data = await response.Content.ReadFromJsonAsync<OverpassResponse>();
-            return data?.Elements;
+                    var data = await response.Content.ReadFromJsonAsync<OverpassResponse>(guardedToken);
+                    return data?.Elements;
+                },
+                () => new List<OverpassElement>());
         }
 
         public async Task<List<OverpassElement>?> GetHazardLikeDataAsync(
@@ -79,7 +93,7 @@ namespace AccessCity.API.Services.External
             var bbox = $"[{minLat:F4},{minLng:F4},{maxLat:F4},{maxLng:F4}]";
             // Server-side cap must stay below HttpClient.Timeout so we fail fast instead of tail latency in minutes.
             var overpassQuery = $@"
-                [out:json][timeout:12];
+                [out:json][timeout:4];
                 (
                   node[""barrier""]({minLat},{minLng},{maxLat},{maxLng});
                   way[""highway""=""steps""]({minLat},{minLng},{maxLat},{maxLng});
@@ -89,6 +103,18 @@ namespace AccessCity.API.Services.External
                 out center meta;
             ";
 
+            return await _guard.ExecuteAsync<List<OverpassElement>?>(
+                "Overpass",
+                guardedToken => GetHazardLikeDataCoreAsync(overpassQuery, bbox, guardedToken),
+                () => new List<OverpassElement>(),
+                cancellationToken);
+        }
+
+        private async Task<List<OverpassElement>?> GetHazardLikeDataCoreAsync(
+            string overpassQuery,
+            string bbox,
+            CancellationToken cancellationToken)
+        {
             try
             {
                 var response = await _httpClient.PostAsync(
@@ -188,24 +214,23 @@ namespace AccessCity.API.Services.External
     public class UkPoliceDataClient : IUkPoliceDataClient
     {
         private readonly HttpClient _httpClient;
+        private readonly IExternalDependencyGuard _guard;
 
-        public UkPoliceDataClient(HttpClient httpClient)
+        public UkPoliceDataClient(HttpClient httpClient, IExternalDependencyGuard guard)
         {
             _httpClient = httpClient;
+            _guard = guard;
             _httpClient.BaseAddress = new Uri("https://data.police.uk/api/");
         }
 
         public async Task<List<StreetCrimeRecord>?> GetRecentStreetCrimesAsync(double latitude, double longitude)
         {
-            try
-            {
-                return await _httpClient.GetFromJsonAsync<List<StreetCrimeRecord>>(
-                    $"crimes-street/all-crime?lat={latitude}&lng={longitude}");
-            }
-            catch
-            {
-                return new List<StreetCrimeRecord>(); // Fail silently for external API downtime
-            }
+            return await _guard.ExecuteAsync<List<StreetCrimeRecord>?>(
+                "UkPolice",
+                guardedToken => _httpClient.GetFromJsonAsync<List<StreetCrimeRecord>>(
+                    $"crimes-street/all-crime?lat={latitude}&lng={longitude}",
+                    guardedToken),
+                () => new List<StreetCrimeRecord>());
         }
     }
 
@@ -227,7 +252,7 @@ namespace AccessCity.API.Services.External
         {
             _httpClient = httpClient;
             _apiKey = config["GooglePlaces:ApiKey"];
-            
+
             _httpClient.DefaultRequestHeaders.Add("X-Goog-Api-Key", _apiKey ?? "");
             _httpClient.DefaultRequestHeaders.Add("X-Goog-FieldMask", "places.id,places.displayName,places.types,places.location,places.regularOpeningHours");
         }
@@ -251,7 +276,7 @@ namespace AccessCity.API.Services.External
             };
 
             var response = await _httpClient.PostAsJsonAsync("https://places.googleapis.com/v1/places:searchNearby", requestBody);
-            
+
             if (!response.IsSuccessStatusCode) return new List<Place>();
 
             var result = await response.Content.ReadFromJsonAsync<PlacesSearchResponse>();
@@ -314,12 +339,18 @@ namespace AccessCity.API.Services.External
     public class EnvironmentalDataClient : IEnvironmentalDataClient
     {
         private readonly HttpClient _httpClient;
+        private readonly IExternalDependencyGuard _guard;
         private readonly ILogger<EnvironmentalDataClient> _logger;
         private readonly string _endpoint;
 
-        public EnvironmentalDataClient(HttpClient httpClient, ILogger<EnvironmentalDataClient> logger, IConfiguration config)
+        public EnvironmentalDataClient(
+            HttpClient httpClient,
+            IExternalDependencyGuard guard,
+            ILogger<EnvironmentalDataClient> logger,
+            IConfiguration config)
         {
             _httpClient = httpClient;
+            _guard = guard;
             _logger = logger;
             _endpoint = config["Overpass:Endpoint"] ?? "https://overpass-api.de/api/interpreter";
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "AccessCity-UniversityProject/1.0");
@@ -327,39 +358,45 @@ namespace AccessCity.API.Services.External
 
         public async Task<EnvironmentalSummary> GetNearbyInfrastructureAsync(double lat, double lng, double radiusMetres)
         {
+            return await _guard.ExecuteAsync(
+                "Environmental",
+                guardedToken => QueryNearbyInfrastructureAsync(lat, lng, radiusMetres, guardedToken),
+                () => new EnvironmentalSummary());
+        }
+
+        private async Task<EnvironmentalSummary> QueryNearbyInfrastructureAsync(
+            double lat,
+            double lng,
+            double radiusMetres,
+            CancellationToken cancellationToken)
+        {
             var query = $@"
-                [out:json][timeout:10];
-                (
-                  node[""highway""=""street_lamp""](around:{radiusMetres},{lat},{lng});
-                  node[""man_made""=""surveillance""](around:{radiusMetres},{lat},{lng});
-                );
+                [out:json][timeout:3];
+                node[""highway""=""street_lamp""](around:{radiusMetres},{lat},{lng});
+                out count;
+                node[""man_made""=""surveillance""](around:{radiusMetres},{lat},{lng});
                 out count;
             ";
 
             try
             {
-                var response = await _httpClient.PostAsync(_endpoint, new StringContent(query));
+                var response = await _httpClient.PostAsync(_endpoint, new StringContent(query), cancellationToken);
                 if (!response.IsSuccessStatusCode)
                     return new EnvironmentalSummary();
 
-                var data = await response.Content.ReadFromJsonAsync<OverpassCountResponse>();
-                int total = data?.Elements?.FirstOrDefault()?.Tags?.Total ?? 0;
-
-                // Re-query with typed counts for split
-                var lampQuery = $@"[out:json][timeout:8];node[""highway""=""street_lamp""](around:{radiusMetres},{lat},{lng});out count;";
-                var lampResp = await _httpClient.PostAsync(_endpoint, new StringContent(lampQuery));
-                int lamps = 0;
-                if (lampResp.IsSuccessStatusCode)
-                {
-                    var lampData = await lampResp.Content.ReadFromJsonAsync<OverpassCountResponse>();
-                    lamps = lampData?.Elements?.FirstOrDefault()?.Tags?.Total ?? 0;
-                }
+                var data = await response.Content.ReadFromJsonAsync<OverpassCountResponse>(cancellationToken);
+                var lamps = data?.Elements?.ElementAtOrDefault(0)?.Tags?.Total ?? 0;
+                var cameras = data?.Elements?.ElementAtOrDefault(1)?.Tags?.Total ?? 0;
 
                 return new EnvironmentalSummary
                 {
                     StreetLampCount = lamps,
-                    SurveillanceCameraCount = Math.Max(0, total - lamps)
+                    SurveillanceCameraCount = cameras
                 };
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {

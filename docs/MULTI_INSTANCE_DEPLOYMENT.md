@@ -68,6 +68,10 @@ replicas racing on DDL.
 `Postgres__UseStartupSessionParameters` defaults to `false` because providers such as Neon reject
 `statement_timeout` startup options on pooled connections; use database-level settings there.
 
+Run the in-cluster k6 job in [DISTRIBUTED_LOAD_TESTING.md](DISTRIBUTED_LOAD_TESTING.md) before increasing traffic.
+It exercises the Kubernetes service path against API replicas, workers, Kafka, Redis, and Postgres instead of a
+single local process.
+
 ## Operational Notes
 
 - Keep `OsmImport__ImportOnStartup=false` on API replicas.

@@ -55,15 +55,27 @@ jobs:
           AccessCity.API/Extensions/DependencyInjection.cs
           AccessCity.API/Extensions/WebApplicationExtensions.cs
           AccessCity.API/Configuration/PostgresOptions.cs
+          AccessCity.API/Configuration/RoutingOptions.cs
           AccessCity.API/Configuration/PostgresConnectionStringResolver.cs
+          AccessCity.API/Controllers/RoutingController.cs
+          AccessCity.API/Data/Migrations/20260522190000_AddScalabilityGuardIndexes.cs
+          AccessCity.API/Exceptions/RouteCapacityExceededException.cs
           AccessCity.API/Messaging/IIntegrationMessageStore.cs
           AccessCity.API/Messaging/Kafka/KafkaMessageBus.cs
           AccessCity.API/Messaging/Kafka/KafkaOptions.cs
+          AccessCity.API/Models/RouteGraphModels.cs
           AccessCity.API/Models/OsmImportJob.cs
           AccessCity.API/Models/ProcessedIntegrationMessage.cs
           AccessCity.API/Models/DTOs/OsmImportJobResponse.cs
           AccessCity.API/Controllers/AdminOsmController.cs
           AccessCity.API/Services/AccessCityMetrics.cs
+          AccessCity.API/Services/External/OsrmClient.cs
+          AccessCity.API/Services/ExternalDataClients.cs
+          AccessCity.API/Services/ExternalDependencyGuard.cs
+          AccessCity.API/Services/RouteComputationLimiter.cs
+          AccessCity.API/Services/RouteGraphRepository.cs
+          AccessCity.API/Services/RouteJobService.cs
+          AccessCity.API/Services/RoutingService.cs
           AccessCity.API/Services/RiskScoringService.cs
           AccessCity.API/Services/Background/OsmImportBackgroundService.cs
           AccessCity.API/Services/Background/TileWarmingBackgroundService.cs

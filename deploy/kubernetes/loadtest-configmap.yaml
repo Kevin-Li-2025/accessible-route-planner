@@ -1,0 +1,74 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: accesscity-loadtest-script
+data:
+  accesscity-distributed.js: |
+    import http from 'k6/http';
+    import { check, sleep } from 'k6';
+    import exec from 'k6/execution';
+
+    const baseUrl = __ENV.BASE_URL || 'http://accesscity-api';
+
+    export const options = {
+      scenarios: {
+        mixed_api: {
+          executor: 'ramping-vus',
+          stages: [
+            { duration: '30s', target: 20 },
+            { duration: '2m', target: 20 },
+            { duration: '30s', target: 50 },
+            { duration: '2m', target: 50 },
+            { duration: '30s', target: 0 }
+          ],
+          gracefulRampDown: '15s'
+        }
+      },
+      thresholds: {
+        http_req_failed: ['rate<0.02'],
+        http_req_duration: ['p(95)<750', 'p(99)<2000'],
+        checks: ['rate>0.98'],
+        'http_req_duration{name:safe-path}': ['p(95)<2500'],
+        'http_req_duration{name:risk-score}': ['p(95)<250']
+      }
+    };
+
+    const jsonHeaders = { headers: { 'Content-Type': 'application/json' }, timeout: '5s' };
+
+    export default function () {
+      const iteration = exec.scenario.iterationInTest;
+      const offset = ((iteration % 21) - 10) * 0.00005;
+
+      check(http.get(`${baseUrl}/health`, { timeout: '2s', tags: { name: 'health' } }), {
+        'health ok': r => r.status === 200
+      });
+
+      check(http.get(`${baseUrl}/health/ready`, { timeout: '2s', tags: { name: 'ready' } }), {
+        'ready ok': r => r.status === 200
+      });
+
+      check(http.get(
+        `${baseUrl}/api/v1/routing/risk-score?lat=${52.4862 + offset}&lng=${-1.8904 + offset}&radius=500`,
+        { timeout: '3s', tags: { name: 'risk-score' } }
+      ), {
+        'risk-score bounded': r => r.status === 200
+      });
+
+      if (iteration % 4 === 0) {
+        const safePathBody = JSON.stringify({
+          start: { x: -1.8985 + offset, y: 52.4814 + offset },
+          end: { x: -1.9300 - offset, y: 52.4510 - offset },
+          preferences: [],
+          safetyWeight: 0.5
+        });
+
+        check(http.post(`${baseUrl}/api/v1/routing/safe-path`, safePathBody, {
+          ...jsonHeaders,
+          tags: { name: 'safe-path' }
+        }), {
+          'safe-path accepted': r => [200, 404, 503, 504].includes(r.status)
+        });
+      }
+
+      sleep(0.2);
+    }

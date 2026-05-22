@@ -93,7 +93,7 @@ public class RoutingService
         try
         {
             var realGraph = await _graphRepo.LoadGraphAsync(request.Start, request.End, cancellationToken);
-            if (realGraph.HasCoverage)
+            if (realGraph.HasCoverage && !realGraph.IsTruncated)
             {
                 return FindSafePathOnRealGraph(request, hazardList, realGraph);
             }
@@ -174,7 +174,8 @@ public class RoutingService
     {
         try
         {
-            return await _graphRepo.LoadGraphAsync(request.Start, request.End, cancellationToken);
+            var graphData = await _graphRepo.LoadGraphAsync(request.Start, request.End, cancellationToken);
+            return graphData.IsTruncated ? null : graphData;
         }
         catch (OperationCanceledException) { throw; }
         catch
@@ -775,7 +776,7 @@ public class RoutingService
     {
         // 1.3 m/s is the standard crosswalk design speed (3 mph).
         double standardSeconds = distanceMetres / WalkingSpeed;
-        
+
         // If OSRM says we can walk it at > 4 m/s (14.4 km/h), it's probably using 
         // a bike profile or has bad metadata. We clamp it to the standard speed.
         double finalSeconds = osrmDurationSeconds.HasValue && osrmDurationSeconds.Value > (standardSeconds * 0.3)
@@ -1122,8 +1123,8 @@ public class RoutingService
         double totalDist = 0;
         double safetySum = 0;
         var steps = new List<RouteStep>();
-        var warnings = new List<string> { 
-            "Real road data is unavailable for this area. An approximate mesh-based route is shown." 
+        var warnings = new List<string> {
+            "Real road data is unavailable for this area. An approximate mesh-based route is shown."
         };
 
         for (int i = 0; i < path.Count - 1; i++)
@@ -1374,14 +1375,14 @@ public class RoutingService
 
     private static string BearingToCardinal(double bearing) => bearing switch
     {
-        >= 337.5 or < 22.5   => "north",
-        >= 22.5  and < 67.5  => "northeast",
-        >= 67.5  and < 112.5 => "east",
+        >= 337.5 or < 22.5 => "north",
+        >= 22.5 and < 67.5 => "northeast",
+        >= 67.5 and < 112.5 => "east",
         >= 112.5 and < 157.5 => "southeast",
         >= 157.5 and < 202.5 => "south",
         >= 202.5 and < 247.5 => "southwest",
         >= 247.5 and < 292.5 => "west",
-        _                    => "northwest"
+        _ => "northwest"
     };
 
     private static double ToRad(double deg) => deg * Math.PI / 180.0;

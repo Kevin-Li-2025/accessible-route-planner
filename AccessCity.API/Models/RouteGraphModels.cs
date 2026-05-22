@@ -40,5 +40,6 @@ public class RouteEdge
 public sealed class RouteGraphData
 {
     public Dictionary<long, GraphNode> Nodes { get; init; } = new();
+    public bool IsTruncated { get; init; }
     public bool HasCoverage => Nodes.Count > 0;
 }
