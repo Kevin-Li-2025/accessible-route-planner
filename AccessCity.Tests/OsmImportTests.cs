@@ -26,6 +26,14 @@ public class OsmImportTests : IClassFixture<AccessCityApiFactory>
         Assert.NotNull(job);
         Assert.Equal("queued", job!.Status);
         Assert.NotEqual(Guid.Empty, job.JobId);
+
+        var statusResponse = await client.GetAsync($"/api/v1/admin/osm/import-jobs/{job.JobId}");
+        statusResponse.EnsureSuccessStatusCode();
+
+        var status = await statusResponse.Content.ReadFromJsonAsync<AccessCity.API.Models.DTOs.OsmImportJobResponse>();
+        Assert.NotNull(status);
+        Assert.Equal(job.JobId, status!.JobId);
+        Assert.Contains(status.Status, new[] { "queued", "running", "completed" });
     }
 
     [Fact]

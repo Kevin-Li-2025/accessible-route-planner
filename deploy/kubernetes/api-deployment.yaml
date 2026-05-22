@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: accesscity-api
+  labels:
+    app: accesscity-api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: accesscity-api
+  template:
+    metadata:
+      labels:
+        app: accesscity-api
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/kevin-li-2025/codeconquerors-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: accesscity-api-config
+            - secretRef:
+                name: accesscity-api-secrets
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"

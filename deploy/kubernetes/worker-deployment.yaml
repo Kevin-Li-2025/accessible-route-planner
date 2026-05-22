@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: accesscity-worker
+  labels:
+    app: accesscity-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: accesscity-worker
+  template:
+    metadata:
+      labels:
+        app: accesscity-worker
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/kevin-li-2025/codeconquerors-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: accesscity-worker-config
+            - secretRef:
+                name: accesscity-api-secrets
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"

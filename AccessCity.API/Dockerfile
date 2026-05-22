@@ -18,8 +18,6 @@ WORKDIR /app
 RUN adduser --disabled-password --gecos "" appuser
 
 COPY --from=build /app/publish .
-COPY --from=build /src/london.osm ./london.osm
-COPY --from=build /src/birmingham.osm ./birmingham.osm
 
 # Expose the HTTP port
 EXPOSE 8080

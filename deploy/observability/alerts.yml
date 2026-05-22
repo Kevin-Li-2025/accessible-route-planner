@@ -1,0 +1,24 @@
+groups:
+  - name: accesscity-scalability
+    rules:
+      - alert: AccessCityHighErrorRate
+        expr: sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[5m])) / clamp_min(sum(rate(http_server_request_duration_seconds_count[5m])), 1) > 0.01
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "AccessCity API 5xx rate is above 1%"
+      - alert: AccessCityKafkaDeadLetters
+        expr: increase(accesscity_kafka_messages_dead_lettered_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "AccessCity Kafka messages are being routed to DLQ"
+      - alert: AccessCityLowCacheHitRatio
+        expr: sum(rate(accesscity_cache_hit_total[15m])) / clamp_min(sum(rate(accesscity_cache_hit_total[15m])) + sum(rate(accesscity_cache_miss_total[15m])), 1) < 0.70
+        for: 20m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "AccessCity shared cache hit ratio below 70%"

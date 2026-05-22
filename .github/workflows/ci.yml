@@ -47,6 +47,30 @@ jobs:
           dotnet-version: "9.0.x"
       - run: dotnet restore CodeConquerors.sln
       - run: dotnet build CodeConquerors.sln --configuration Release --no-restore
+      - name: Backend format/lint
+        run: >
+          dotnet format CodeConquerors.sln --verify-no-changes --no-restore --verbosity minimal
+          --include
+          AccessCity.API/Program.cs
+          AccessCity.API/Extensions/DependencyInjection.cs
+          AccessCity.API/Extensions/WebApplicationExtensions.cs
+          AccessCity.API/Configuration/PostgresOptions.cs
+          AccessCity.API/Configuration/PostgresConnectionStringResolver.cs
+          AccessCity.API/Messaging/IIntegrationMessageStore.cs
+          AccessCity.API/Messaging/Kafka/KafkaMessageBus.cs
+          AccessCity.API/Messaging/Kafka/KafkaOptions.cs
+          AccessCity.API/Models/OsmImportJob.cs
+          AccessCity.API/Models/ProcessedIntegrationMessage.cs
+          AccessCity.API/Models/DTOs/OsmImportJobResponse.cs
+          AccessCity.API/Controllers/AdminOsmController.cs
+          AccessCity.API/Services/AccessCityMetrics.cs
+          AccessCity.API/Services/RiskScoringService.cs
+          AccessCity.API/Services/Background/OsmImportBackgroundService.cs
+          AccessCity.API/Services/Background/TileWarmingBackgroundService.cs
+          AccessCity.API/HealthChecks/DistributedCacheHealthCheck.cs
+          AccessCity.API/HealthChecks/KafkaHealthCheck.cs
+          AccessCity.Tests/OsmImportTests.cs
+          AccessCity.Tests/AccessCityApiFactory.cs
       - name: NuGet vulnerability scan
         run: |
           dotnet list CodeConquerors.sln package --vulnerable --include-transitive | tee /tmp/dotnet-vulnerable.txt
@@ -72,3 +96,18 @@ jobs:
       - run: npx tsc -p tsconfig.json --noEmit
       - run: npm audit --audit-level=high
       - run: npm test -- --ci --watchAll=false
+
+  container-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API image
+        run: docker build -t accesscity-api:ci ./AccessCity.API
+      - name: Trivy image vulnerability scan
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          image-ref: accesscity-api:ci
+          severity: CRITICAL,HIGH
+          scanners: vuln,misconfig
+          exit-code: "1"
+          ignore-unfixed: true

@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: accesscity-api-config
+data:
+  ASPNETCORE_ENVIRONMENT: "Production"
+  ASPNETCORE_URLS: "http://+:8080"
+  Messaging__UseKafka: "true"
+  Kafka__BootstrapServers: "kafka:9092"
+  Kafka__ConsumerGroupId: "accesscity-workers"
+  Kafka__TopicPrefix: "accesscity_"
+  Kafka__MaxProcessingAttempts: "3"
+  Kafka__RetryDelaySeconds: "5"
+  Workers__OsmImport__Enabled: "false"
+  Workers__TileWarming__Enabled: "false"
+  OsmImport__ImportOnStartup: "false"
+  Postgres__AutoMigrate: "false"
+  Postgres__AutoSchemaMaintenance: "false"
+  Postgres__CommandTimeoutSeconds: "30"
+  Postgres__UseStartupSessionParameters: "false"
+  Postgres__StatementTimeoutMs: "15000"
+  Postgres__IdleInTransactionSessionTimeoutMs: "30000"
+  Postgres__MaxPoolSize: "100"
+  RateLimiting__Global__PermitLimit: "100"
+  RateLimiting__Global__QueueLimit: "10"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+  OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: accesscity-worker-config
+data:
+  ASPNETCORE_ENVIRONMENT: "Production"
+  ASPNETCORE_URLS: "http://+:8080"
+  Messaging__UseKafka: "true"
+  Kafka__BootstrapServers: "kafka:9092"
+  Kafka__ConsumerGroupId: "accesscity-workers"
+  Kafka__TopicPrefix: "accesscity_"
+  Kafka__MaxProcessingAttempts: "3"
+  Kafka__RetryDelaySeconds: "5"
+  Workers__OsmImport__Enabled: "true"
+  Workers__TileWarming__Enabled: "true"
+  OsmImport__ImportOnStartup: "false"
+  Postgres__AutoMigrate: "false"
+  Postgres__AutoSchemaMaintenance: "false"
+  Postgres__CommandTimeoutSeconds: "60"
+  Postgres__UseStartupSessionParameters: "false"
+  Postgres__StatementTimeoutMs: "60000"
+  Postgres__IdleInTransactionSessionTimeoutMs: "60000"
+  Postgres__MaxPoolSize: "50"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+  OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"

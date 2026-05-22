@@ -140,6 +140,8 @@ public class AccessCityApiFactory : WebApplicationFactory<Program>
                         'infrastructure_assets',
                         'route_edges',
                         'route_nodes',
+                        'processed_integration_messages',
+                        'osm_import_jobs',
                         'feed_ingestion_runs',
                         'AspNetUsers'
                     ]

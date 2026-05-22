@@ -6,18 +6,28 @@ public static class PostgresConnectionStringResolver
 {
     public static string Resolve(IConfiguration configuration)
     {
+        return Resolve(configuration, configuration.GetSection(PostgresOptions.SectionName).Get<PostgresOptions>() ?? new PostgresOptions());
+    }
+
+    public static string Resolve(IConfiguration configuration, PostgresOptions options)
+    {
         var databaseUrl = configuration["DATABASE_URL"]
             ?? configuration[$"{PostgresOptions.SectionName}:DatabaseUrl"]
             ?? Environment.GetEnvironmentVariable("DATABASE_URL");
 
+        string connectionString;
         if (!string.IsNullOrWhiteSpace(databaseUrl))
         {
-            return FromDatabaseUrl(databaseUrl);
+            connectionString = FromDatabaseUrl(databaseUrl);
+        }
+        else
+        {
+            connectionString = configuration[$"{PostgresOptions.SectionName}:ConnectionString"]
+                ?? configuration.GetConnectionString("DefaultConnection")
+                ?? throw new InvalidOperationException("No PostgreSQL connection string or DATABASE_URL is configured.");
         }
 
-        return configuration[$"{PostgresOptions.SectionName}:ConnectionString"]
-            ?? configuration.GetConnectionString("DefaultConnection")
-            ?? throw new InvalidOperationException("No PostgreSQL connection string or DATABASE_URL is configured.");
+        return ApplyRuntimeOptions(connectionString, options);
     }
 
     public static string? GetPrimarySearchPath(string connectionString)
@@ -72,6 +82,51 @@ public static class PostgresConnectionStringResolver
                     break;
                 default:
                     break;
+            }
+        }
+
+        return builder.ConnectionString;
+    }
+
+    private static string ApplyRuntimeOptions(string connectionString, PostgresOptions options)
+    {
+        var builder = new NpgsqlConnectionStringBuilder(connectionString);
+        if (options.MaxPoolSize is > 0)
+        {
+            builder.MaxPoolSize = options.MaxPoolSize.Value;
+        }
+
+        if (options.MinPoolSize is >= 0)
+        {
+            builder.MinPoolSize = options.MinPoolSize.Value;
+        }
+
+        if (options.CommandTimeoutSeconds > 0)
+        {
+            builder.CommandTimeout = options.CommandTimeoutSeconds;
+        }
+
+        if (options.UseStartupSessionParameters)
+        {
+            var pgOptions = new List<string>();
+            if (!string.IsNullOrWhiteSpace(builder.Options))
+            {
+                pgOptions.Add(builder.Options);
+            }
+
+            if (options.StatementTimeoutMs is > 0)
+            {
+                pgOptions.Add($"-c statement_timeout={options.StatementTimeoutMs.Value}");
+            }
+
+            if (options.IdleInTransactionSessionTimeoutMs is > 0)
+            {
+                pgOptions.Add($"-c idle_in_transaction_session_timeout={options.IdleInTransactionSessionTimeoutMs.Value}");
+            }
+
+            if (pgOptions.Count > 0)
+            {
+                builder.Options = string.Join(' ', pgOptions);
             }
         }
 

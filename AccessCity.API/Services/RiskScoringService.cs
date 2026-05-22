@@ -5,6 +5,9 @@ using AccessCity.API.Services.External;
 using AccessCity.API.Data;
 using Microsoft.EntityFrameworkCore;
 using System.Globalization;
+using System.Diagnostics;
+using System.Text.Json;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
 
 namespace AccessCity.API.Services
@@ -23,6 +26,8 @@ namespace AccessCity.API.Services
         private readonly ILiveHazardClient? _weatherClient;
         private readonly IEnvironmentalDataClient? _envClient;
         private readonly IMemoryCache? _cache;
+        private readonly IDistributedCache? _distributedCache;
+        private readonly AccessCityMetrics? _metrics;
         private readonly AppDbContext _dbContext;
 
         private const string CrimeCacheKeyPrefix = "ukcrime:";
@@ -32,31 +37,31 @@ namespace AccessCity.API.Services
 
         private static readonly Dictionary<string, double> HazardSeverity = new(StringComparer.OrdinalIgnoreCase)
         {
-            ["pothole"]              = 0.6,
-            ["broken_pavement"]      = 0.5,
-            ["missing_curb_ramp"]    = 0.7,
-            ["obstruction"]          = 0.5,
-            ["poor_lighting"]        = 0.8,
-            ["construction"]         = 0.7,
-            ["flooding"]             = 0.9,
-            ["missing_tactile"]      = 0.6,
-            ["steep_gradient"]       = 0.5,
-            ["narrow_sidewalk"]      = 0.4,
-            ["uneven_surface"]       = 0.5,
-            ["missing_handrail"]     = 0.6,
-            ["traffic_hazard"]       = 0.8,
-            ["missing_crossing"]     = 0.7,
+            ["pothole"] = 0.6,
+            ["broken_pavement"] = 0.5,
+            ["missing_curb_ramp"] = 0.7,
+            ["obstruction"] = 0.5,
+            ["poor_lighting"] = 0.8,
+            ["construction"] = 0.7,
+            ["flooding"] = 0.9,
+            ["missing_tactile"] = 0.6,
+            ["steep_gradient"] = 0.5,
+            ["narrow_sidewalk"] = 0.4,
+            ["uneven_surface"] = 0.5,
+            ["missing_handrail"] = 0.6,
+            ["traffic_hazard"] = 0.8,
+            ["missing_crossing"] = 0.7,
         };
 
         private const double DefaultSeverity = 0.5;
 
         // Rebalanced to include lighting and surveillance coverage.
-        private const double W_Proximity       = 0.35;
-        private const double W_Density         = 0.20;
-        private const double W_Infrastructure  = 0.15;
-        private const double W_Crime           = 0.12;
-        private const double W_Lighting        = 0.10;
-        private const double W_Surveillance    = 0.08;
+        private const double W_Proximity = 0.35;
+        private const double W_Density = 0.20;
+        private const double W_Infrastructure = 0.15;
+        private const double W_Crime = 0.12;
+        private const double W_Lighting = 0.10;
+        private const double W_Surveillance = 0.08;
 
         private const double DecayLambda = 150.0;
 
@@ -65,13 +70,17 @@ namespace AccessCity.API.Services
             IUkPoliceDataClient? ukPolice = null,
             ILiveHazardClient? weatherClient = null,
             IMemoryCache? cache = null,
-            IEnvironmentalDataClient? envClient = null)
+            IEnvironmentalDataClient? envClient = null,
+            IDistributedCache? distributedCache = null,
+            AccessCityMetrics? metrics = null)
         {
             _dbContext = dbContext;
             _ukPolice = ukPolice;
             _weatherClient = weatherClient;
             _cache = cache;
             _envClient = envClient;
+            _distributedCache = distributedCache;
+            _metrics = metrics;
         }
 
         /// <summary>
@@ -107,18 +116,18 @@ namespace AccessCity.API.Services
 
                 nearbyHazards.Add(new NearbyHazard
                 {
-                    Id             = hazard.Id,
-                    Type           = hazard.Type,
+                    Id = hazard.Id,
+                    Type = hazard.Type,
                     DistanceMetres = Math.Round(distMetres, 1),
-                    RiskWeight     = Math.Round(weight, 4)
+                    RiskWeight = Math.Round(weight, 4)
                 });
             }
 
             double hazardProximity = Sigmoid(proximitySum, k: 3.0);
 
-            double areaKmSq        = Math.PI * Math.Pow(radiusMetres / 1000.0, 2);
-            double densityPerKmSq  = nearbyHazards.Count / Math.Max(areaKmSq, 0.001);
-            double hazardDensity   = Math.Min(densityPerKmSq / 50.0, 1.0);
+            double areaKmSq = Math.PI * Math.Pow(radiusMetres / 1000.0, 2);
+            double densityPerKmSq = nearbyHazards.Count / Math.Max(areaKmSq, 0.001);
+            double hazardDensity = Math.Min(densityPerKmSq / 50.0, 1.0);
 
             double infrastructureRisk = await EstimateInfrastructureRiskAsync(latitude, longitude, radiusMetres);
 
@@ -134,25 +143,25 @@ namespace AccessCity.API.Services
             double surveillanceRisk = await GetCachedSurveillanceRiskAsync(latitude, longitude, radiusMetres);
 
             double overall = Clamp01(
-                W_Proximity      * hazardProximity +
-                W_Density        * hazardDensity   +
+                W_Proximity * hazardProximity +
+                W_Density * hazardDensity +
                 W_Infrastructure * infrastructureRisk +
-                W_Crime          * crimeRisk +
-                W_Lighting       * lightingRisk +
-                W_Surveillance   * surveillanceRisk);
+                W_Crime * crimeRisk +
+                W_Lighting * lightingRisk +
+                W_Surveillance * surveillanceRisk);
 
             return new RiskScoreResponse
             {
-                OverallRisk         = Math.Round(overall,           4),
-                HazardProximityRisk = Math.Round(hazardProximity,  4),
-                HazardDensityRisk   = Math.Round(hazardDensity,    4),
-                InfrastructureRisk = Math.Round(infrastructureRisk,4),
-                CrimeRisk           = Math.Round(crimeRisk,        4),
-                LightingRisk        = Math.Round(lightingRisk,     4),
-                SurveillanceRisk    = Math.Round(surveillanceRisk,  4),
-                CrimeCount          = crimeCount,
-                NearbyHazardCount   = nearbyHazards.Count,
-                NearbyHazards       = nearbyHazards
+                OverallRisk = Math.Round(overall, 4),
+                HazardProximityRisk = Math.Round(hazardProximity, 4),
+                HazardDensityRisk = Math.Round(hazardDensity, 4),
+                InfrastructureRisk = Math.Round(infrastructureRisk, 4),
+                CrimeRisk = Math.Round(crimeRisk, 4),
+                LightingRisk = Math.Round(lightingRisk, 4),
+                SurveillanceRisk = Math.Round(surveillanceRisk, 4),
+                CrimeCount = crimeCount,
+                NearbyHazardCount = nearbyHazards.Count,
+                NearbyHazards = nearbyHazards
                     .OrderByDescending(h => h.RiskWeight)
                     .Take(20)
                     .ToList()
@@ -160,13 +169,13 @@ namespace AccessCity.API.Services
         }
 
         public async Task<PredictiveRiskResult> PredictRiskAsync(
-            double latitude, 
-            double longitude, 
-            double radiusMetres, 
+            double latitude,
+            double longitude,
+            double radiusMetres,
             IEnumerable<HazardReport> hazards)
         {
             var baseRisk = await EvaluateRiskAsync(latitude, longitude, radiusMetres, hazards);
-            
+
             // 1. Time-of-day Factor
             var now = DateTime.UtcNow.TimeOfDay;
             double timeFactor = 0.2; // default
@@ -186,8 +195,8 @@ namespace AccessCity.API.Services
             if (factors.Count == 0) factors.Add("Generally safe area with no major risk indicators.");
 
             double overallAiRisk = Clamp01(
-                baseRisk.OverallRisk * 0.6 + 
-                timeFactor * 0.2 + 
+                baseRisk.OverallRisk * 0.6 +
+                timeFactor * 0.2 +
                 weatherFactor * 0.2);
 
             return new PredictiveRiskResult
@@ -217,14 +226,18 @@ namespace AccessCity.API.Services
 
         private async Task<int> GetCachedCrimeCountAsync(double lat, double lng)
         {
-            if (_cache == null || _ukPolice == null) return 0;
+            if (_ukPolice == null) return 0;
 
             var key = $"{CrimeCacheKeyPrefix}{Math.Round(lat, 3):F3}:{Math.Round(lng, 3):F3}";
-            if (_cache.TryGetValue(key, out int cached)) return cached;
+            var cachedCrime = await TryGetCachedAsync<int>(key, "crime");
+            if (cachedCrime.Hit)
+            {
+                return cachedCrime.Value;
+            }
 
             var list = await _ukPolice.GetRecentStreetCrimesAsync(lat, lng);
             int count = list?.Count ?? 0;
-            _cache.Set(key, count, CrimeCacheExpiry);
+            await SetCachedAsync(key, count, CrimeCacheExpiry);
             return count;
         }
 
@@ -325,32 +338,87 @@ namespace AccessCity.API.Services
 
         private async Task<double> GetCachedLightingRiskAsync(double lat, double lng, double radiusMetres)
         {
-            if (_envClient == null || _cache == null) return 0.30;
+            if (_envClient == null) return 0.30;
             var key = $"{EnvCacheKeyPrefix}lamp:{Math.Round(lat, 3):F3}:{Math.Round(lng, 3):F3}";
-            if (_cache.TryGetValue(key, out double cached)) return cached;
+            var cachedLighting = await TryGetCachedAsync<double>(key, "environment");
+            if (cachedLighting.Hit)
+            {
+                return cachedLighting.Value;
+            }
 
             var summary = await _envClient.GetNearbyInfrastructureAsync(lat, lng, Math.Min(radiusMetres, 300));
             // 10+ lamps within radius = well-lit, 0 = dark.
             double risk = Math.Clamp(1.0 - (summary.StreetLampCount / 10.0), 0, 1);
-            _cache.Set(key, risk, EnvCacheExpiry);
+            await SetCachedAsync(key, risk, EnvCacheExpiry);
 
             // Also cache surveillance while we have it.
             var camKey = $"{EnvCacheKeyPrefix}cam:{Math.Round(lat, 3):F3}:{Math.Round(lng, 3):F3}";
             double camRisk = Math.Clamp(1.0 - (summary.SurveillanceCameraCount / 3.0), 0, 1);
-            _cache.Set(camKey, camRisk, EnvCacheExpiry);
+            await SetCachedAsync(camKey, camRisk, EnvCacheExpiry);
 
             return risk;
         }
 
         private async Task<double> GetCachedSurveillanceRiskAsync(double lat, double lng, double radiusMetres)
         {
-            if (_envClient == null || _cache == null) return 0.40;
+            if (_envClient == null) return 0.40;
             var key = $"{EnvCacheKeyPrefix}cam:{Math.Round(lat, 3):F3}:{Math.Round(lng, 3):F3}";
-            if (_cache.TryGetValue(key, out double cached)) return cached;
+            var cachedSurveillance = await TryGetCachedAsync<double>(key, "environment");
+            if (cachedSurveillance.Hit)
+            {
+                return cachedSurveillance.Value;
+            }
 
             // Fetch and cache both at once.
             await GetCachedLightingRiskAsync(lat, lng, radiusMetres);
-            return _cache.TryGetValue(key, out cached) ? cached : 0.40;
+            cachedSurveillance = await TryGetCachedAsync<double>(key, "environment");
+            return cachedSurveillance.Hit ? cachedSurveillance.Value : 0.40;
+        }
+
+        private async Task<(bool Hit, T Value)> TryGetCachedAsync<T>(string key, string cacheName)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            if (_cache != null && _cache.TryGetValue(key, out T? memoryValue) && memoryValue is not null)
+            {
+                stopwatch.Stop();
+                _metrics?.CacheLookup(cacheName, hit: true, stopwatch.Elapsed.TotalMilliseconds);
+                return (true, memoryValue);
+            }
+
+            if (_distributedCache != null)
+            {
+                var json = await _distributedCache.GetStringAsync(key);
+                if (!string.IsNullOrWhiteSpace(json))
+                {
+                    var distributedValue = JsonSerializer.Deserialize<T>(json);
+                    if (distributedValue is not null)
+                    {
+                        _cache?.Set(key, distributedValue, TimeSpan.FromMinutes(2));
+                        stopwatch.Stop();
+                        _metrics?.CacheLookup(cacheName, hit: true, stopwatch.Elapsed.TotalMilliseconds);
+                        return (true, distributedValue);
+                    }
+                }
+            }
+
+            stopwatch.Stop();
+            _metrics?.CacheLookup(cacheName, hit: false, stopwatch.Elapsed.TotalMilliseconds);
+            return (false, default!);
+        }
+
+        private async Task SetCachedAsync<T>(string key, T value, TimeSpan ttl)
+        {
+            _cache?.Set(key, value, ttl);
+            if (_distributedCache == null)
+            {
+                return;
+            }
+
+            var json = JsonSerializer.Serialize(value);
+            await _distributedCache.SetStringAsync(
+                key,
+                json,
+                new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = ttl });
         }
 
         /// <summary>
@@ -423,7 +491,7 @@ namespace AccessCity.API.Services
 
             // Invert lighting (high quality = low risk)
             double lightingRisk = 1.0 - lightingAvg;
-            
+
             // Stairs and high kerbs increase risk
             double mobilityRisk = (stairDensity * 0.7) + (Math.Min(kerbHeightAvg * 10.0, 1.0) * 0.3);
 

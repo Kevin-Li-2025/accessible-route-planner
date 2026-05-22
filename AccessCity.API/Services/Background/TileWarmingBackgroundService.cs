@@ -1,3 +1,7 @@
+using AccessCity.API.Data;
+using Microsoft.EntityFrameworkCore;
+using System.Data;
+
 namespace AccessCity.API.Services.Background;
 
 /// <summary>
@@ -36,12 +40,27 @@ public class TileWarmingBackgroundService : BackgroundService
             try
             {
                 await using var scope = _scopeFactory.CreateAsyncScope();
+                var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                if (!await TryAcquireDistributedLockAsync(dbContext, stoppingToken))
+                {
+                    _logger.LogInformation("Skipping risk tile warming; another worker owns the distributed lock.");
+                    await Task.Delay(Interval, stoppingToken);
+                    continue;
+                }
+
                 var tileCache = scope.ServiceProvider.GetRequiredService<IRiskTileCacheService>();
 
-                _logger.LogInformation("Starting risk tile warming cycle");
-                await tileCache.WarmTilesAsync(BhamMinLat, BhamMinLng, BhamMaxLat, BhamMaxLng);
-                await tileCache.WarmTilesAsync(LdnMinLat, LdnMinLng, LdnMaxLat, LdnMaxLng);
-                _logger.LogInformation("Risk tile warming cycle complete");
+                try
+                {
+                    _logger.LogInformation("Starting risk tile warming cycle");
+                    await tileCache.WarmTilesAsync(BhamMinLat, BhamMinLng, BhamMaxLat, BhamMaxLng);
+                    await tileCache.WarmTilesAsync(LdnMinLat, LdnMinLng, LdnMaxLat, LdnMaxLng);
+                    _logger.LogInformation("Risk tile warming cycle complete");
+                }
+                finally
+                {
+                    await ReleaseDistributedLockAsync(dbContext, stoppingToken);
+                }
             }
             catch (Exception ex)
             {
@@ -50,5 +69,42 @@ public class TileWarmingBackgroundService : BackgroundService
 
             await Task.Delay(Interval, stoppingToken);
         }
+    }
+
+    private static async Task<bool> TryAcquireDistributedLockAsync(AppDbContext dbContext, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(dbContext.Database.ProviderName, "Npgsql.EntityFrameworkCore.PostgreSQL", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var connection = dbContext.Database.GetDbConnection();
+        if (connection.State != ConnectionState.Open)
+        {
+            await connection.OpenAsync(cancellationToken);
+        }
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT pg_try_advisory_lock(70420001);";
+        var result = await command.ExecuteScalarAsync(cancellationToken);
+        return result is bool acquired && acquired;
+    }
+
+    private static async Task ReleaseDistributedLockAsync(AppDbContext dbContext, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(dbContext.Database.ProviderName, "Npgsql.EntityFrameworkCore.PostgreSQL", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var connection = dbContext.Database.GetDbConnection();
+        if (connection.State != ConnectionState.Open)
+        {
+            await connection.OpenAsync(cancellationToken);
+        }
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT pg_advisory_unlock(70420001);";
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 }

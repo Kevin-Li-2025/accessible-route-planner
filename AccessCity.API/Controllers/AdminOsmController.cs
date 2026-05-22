@@ -1,11 +1,13 @@
 using AccessCity.API.Models;
 using AccessCity.API.Models.DTOs;
 using AccessCity.API.Configuration;
+using AccessCity.API.Data;
 using AccessCity.API.Messaging;
 using AccessCity.API.Services;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace AccessCity.API.Controllers;
@@ -19,15 +21,18 @@ public class AdminOsmController : ControllerBase
     private readonly IOsmImportService _osmImportService;
     private readonly IMessageBus _messageBus;
     private readonly IOptions<OsmImportOptions> _osmOptions;
+    private readonly AppDbContext _dbContext;
 
     public AdminOsmController(
         IOsmImportService osmImportService,
         IMessageBus messageBus,
-        IOptions<OsmImportOptions> osmOptions)
+        IOptions<OsmImportOptions> osmOptions,
+        AppDbContext dbContext)
     {
         _osmImportService = osmImportService;
         _messageBus = messageBus;
         _osmOptions = osmOptions;
+        _dbContext = dbContext;
     }
 
     /// <summary>
@@ -58,10 +63,43 @@ public class AdminOsmController : ControllerBase
 
         var jobId = Guid.NewGuid();
         var queuedAt = DateTime.UtcNow;
+        _dbContext.OsmImportJobs.Add(new OsmImportJob
+        {
+            Id = jobId,
+            Status = "queued",
+            FilePath = filePath,
+            CityName = "configured",
+            QueuedAtUtc = queuedAt
+        });
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
         await _messageBus.PublishAsync(
             new OsmImportStartedEvent(jobId, filePath, "configured", queuedAt),
             cancellationToken);
 
         return Accepted(new OsmImportJobResponse(jobId, "queued", filePath, queuedAt));
+    }
+
+    [HttpGet("import-jobs/{jobId:guid}")]
+    [ProducesResponseType(typeof(OsmImportJobResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<OsmImportJobResponse>> GetImportJob(Guid jobId, CancellationToken cancellationToken)
+    {
+        var job = await _dbContext.OsmImportJobs.AsNoTracking().SingleOrDefaultAsync(j => j.Id == jobId, cancellationToken);
+        if (job is null)
+        {
+            return NotFound();
+        }
+
+        return Ok(new OsmImportJobResponse(
+            job.Id,
+            job.Status,
+            job.FilePath,
+            job.QueuedAtUtc,
+            job.StartedAtUtc,
+            job.FinishedAtUtc,
+            job.Attempts,
+            job.FeedIngestionRunId,
+            job.ErrorSummary));
     }
 }

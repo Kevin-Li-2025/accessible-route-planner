@@ -1,0 +1,26 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: accesscity-db-migrate
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: ghcr.io/kevin-li-2025/codeconquerors-api:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: Postgres__AutoMigrate
+              value: "true"
+            - name: Postgres__AutoSchemaMaintenance
+              value: "true"
+            - name: Workers__OsmImport__Enabled
+              value: "false"
+            - name: Workers__TileWarming__Enabled
+              value: "false"
+          envFrom:
+            - secretRef:
+                name: accesscity-api-secrets
+          command: ["dotnet", "AccessCity.API.dll"]

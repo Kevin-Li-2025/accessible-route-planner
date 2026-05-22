@@ -26,10 +26,18 @@ Indexes are created idempotently during API startup after migrations and schema 
 - `IX_route_edges_geometry_gist`
 - `IX_route_nodes_location_gist`
 - `IX_feed_ingestion_runs_source_status_started`
+- `IX_hazard_report_reported_at_brin`
+- `IX_feed_ingestion_runs_started_at_brin`
 
 ## Remaining Work
 
 - Run `EXPLAIN (ANALYZE, BUFFERS)` against production-sized OSM extracts before launch.
 - Consider generated geography columns if POI radius queries dominate load.
-- Add database statement timeout and slow-query logging in production Postgres.
+- Production runtime now supports `Postgres__StatementTimeoutMs`,
+  `Postgres__IdleInTransactionSessionTimeoutMs`, and pool sizing knobs.
+  Startup session parameters are opt-in via `Postgres__UseStartupSessionParameters=true`;
+  leave it `false` for managed pooled databases that reject `-c` startup options and enforce
+  those limits with database role or parameter-group settings instead.
 - Keep OSM imports off API replicas; use the Kafka-backed worker profile for large extracts.
+- For production-sized append-heavy tables, use `deploy/postgres/partitioning-readiness.sql` as the
+  partitioning cutover template after a backup and load rehearsal.

@@ -16,6 +16,14 @@ services:
       Kafka__BootstrapServers: kafka:9092
       Kafka__ConsumerGroupId: accesscity-workers
       Kafka__TopicPrefix: accesscity_
+      Kafka__MaxProcessingAttempts: ${Kafka__MaxProcessingAttempts:-3}
+      Kafka__RetryDelaySeconds: ${Kafka__RetryDelaySeconds:-5}
+      Postgres__UseStartupSessionParameters: ${Postgres__UseStartupSessionParameters:-false}
+      Postgres__StatementTimeoutMs: ${Postgres__StatementTimeoutMs:-15000}
+      Postgres__IdleInTransactionSessionTimeoutMs: ${Postgres__IdleInTransactionSessionTimeoutMs:-30000}
+      Postgres__MaxPoolSize: ${Postgres__MaxPoolSize:-100}
+      RateLimiting__Global__PermitLimit: ${RateLimiting__Global__PermitLimit:-100}
+      RateLimiting__Global__QueueLimit: ${RateLimiting__Global__QueueLimit:-10}
       Workers__OsmImport__Enabled: ${API_OSM_WORKER_ENABLED:-true}
       Workers__TileWarming__Enabled: ${API_TILE_WORKER_ENABLED:-true}
       # Default false (avoids OOM on large extracts). Override when starting compose, e.g.:
@@ -51,6 +59,12 @@ services:
       Kafka__BootstrapServers: kafka:9092
       Kafka__ConsumerGroupId: accesscity-workers
       Kafka__TopicPrefix: accesscity_
+      Kafka__MaxProcessingAttempts: ${Kafka__MaxProcessingAttempts:-3}
+      Kafka__RetryDelaySeconds: ${Kafka__RetryDelaySeconds:-5}
+      Postgres__UseStartupSessionParameters: ${Postgres__UseStartupSessionParameters:-false}
+      Postgres__StatementTimeoutMs: ${Postgres__StatementTimeoutMs:-15000}
+      Postgres__IdleInTransactionSessionTimeoutMs: ${Postgres__IdleInTransactionSessionTimeoutMs:-30000}
+      Postgres__MaxPoolSize: ${Postgres__MaxPoolSize:-100}
       OsmImport__ImportOnStartup: "false"
       ConnectionStrings__Redis: ${REDIS_CONNECTION:-redis:6379}
       Workers__OsmImport__Enabled: "true"

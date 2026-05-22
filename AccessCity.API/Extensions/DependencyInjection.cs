@@ -1,7 +1,9 @@
 using System.Text;
+using System.Security.Claims;
 using System.Threading.RateLimiting;
 using AccessCity.API.Configuration;
 using AccessCity.API.Data;
+using AccessCity.API.HealthChecks;
 using AccessCity.API.Messaging;
 using AccessCity.API.Messaging.Kafka;
 using AccessCity.API.Models;
@@ -13,6 +15,7 @@ using FluentValidation;
 using FluentValidation.AspNetCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -38,6 +41,9 @@ public static class DependencyInjection
 
     public static IServiceCollection AddMessaging(this IServiceCollection services, IConfiguration configuration)
     {
+        services.Configure<KafkaOptions>(configuration.GetSection(KafkaOptions.SectionName));
+        services.AddSingleton<IIntegrationMessageStore, EfIntegrationMessageStore>();
+
         bool useKafka = configuration.GetValue<bool>("Messaging:UseKafka");
 
         if (useKafka)
@@ -79,7 +85,8 @@ public static class DependencyInjection
 
     private static void ConfigureNpgsql(DbContextOptionsBuilder options, IConfiguration configuration)
     {
-        var connectionString = PostgresConnectionStringResolver.Resolve(configuration);
+        var postgresOptions = configuration.GetSection(PostgresOptions.SectionName).Get<PostgresOptions>() ?? new PostgresOptions();
+        var connectionString = PostgresConnectionStringResolver.Resolve(configuration, postgresOptions);
         var schema = PostgresConnectionStringResolver.GetPrimarySearchPath(connectionString);
 
         options.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
@@ -88,6 +95,7 @@ public static class DependencyInjection
         {
             npgsql.UseNetTopologySuite();
             npgsql.MapEnum<DatabaseHazardStatus>("hazard_status");
+            npgsql.CommandTimeout(Math.Max(1, postgresOptions.CommandTimeoutSeconds));
             if (!string.IsNullOrWhiteSpace(schema))
             {
                 npgsql.MigrationsHistoryTable("__EFMigrationsHistory", schema);
@@ -101,6 +109,7 @@ public static class DependencyInjection
     {
         services.Configure<PostgresOptions>(configuration.GetSection(PostgresOptions.SectionName));
         services.Configure<OsmImportOptions>(configuration.GetSection(OsmImportOptions.SectionName));
+        services.AddSingleton<AccessCityMetrics>();
 
         var redisConnection = configuration.GetConnectionString("Redis");
         if (!string.IsNullOrWhiteSpace(redisConnection))
@@ -152,8 +161,17 @@ public static class DependencyInjection
         services.AddScoped<ITokenService, TokenService>();
         services.AddScoped<IRealHazardDataService, RealHazardDataService>();
 
-        // Typed HTTP clients with resilience
-        services.AddHttpClient<Services.External.IOsrmClient, Services.External.OsrmClient>()
+        var osrmTimeout = TimeSpan.FromSeconds(configuration.GetValue("ExternalApis:Osrm:TimeoutSeconds", 8));
+        var policeTimeout = TimeSpan.FromSeconds(configuration.GetValue("ExternalApis:UkPolice:TimeoutSeconds", 6));
+        var placesTimeout = TimeSpan.FromSeconds(configuration.GetValue("ExternalApis:GooglePlaces:TimeoutSeconds", 6));
+        var weatherTimeout = TimeSpan.FromSeconds(configuration.GetValue("ExternalApis:OpenWeather:TimeoutSeconds", 5));
+        var environmentalTimeout = TimeSpan.FromSeconds(configuration.GetValue("ExternalApis:Environmental:TimeoutSeconds", 8));
+
+        // Typed HTTP clients with bounded timeouts and resilience.
+        services.AddHttpClient<Services.External.IOsrmClient, Services.External.OsrmClient>(client =>
+            {
+                client.Timeout = osrmTimeout;
+            })
             .AddStandardResilienceHandler();
 
         // Overpass: no Polly retries — retries multiply tail latency (30s × N) and block /hazards merge.
@@ -168,17 +186,26 @@ public static class DependencyInjection
             c.Timeout = TimeSpan.FromSeconds(12);
         });
 
-        services.AddHttpClient<Services.External.IUkPoliceDataClient, Services.External.UkPoliceDataClient>()
+        services.AddHttpClient<Services.External.IUkPoliceDataClient, Services.External.UkPoliceDataClient>(client =>
+            {
+                client.Timeout = policeTimeout;
+            })
             .AddStandardResilienceHandler();
 
-        services.AddHttpClient<Services.External.ISafeHavenPlacesClient, Services.External.GooglePlacesClient>()
+        services.AddHttpClient<Services.External.ISafeHavenPlacesClient, Services.External.GooglePlacesClient>(client =>
+            {
+                client.Timeout = placesTimeout;
+            })
             .AddStandardResilienceHandler();
 
-        services.AddHttpClient<Services.External.ILiveHazardClient, Services.External.OpenWeatherClient>()
+        services.AddHttpClient<Services.External.ILiveHazardClient, Services.External.OpenWeatherClient>(client =>
+            {
+                client.Timeout = weatherTimeout;
+            })
             .AddStandardResilienceHandler();
 
         services.AddHttpClient<Services.External.IEnvironmentalDataClient, Services.External.EnvironmentalDataClient>()
-            .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(15))
+            .ConfigureHttpClient(c => c.Timeout = environmentalTimeout)
             .AddStandardResilienceHandler();
 
         // Background workers. In multi-instance deployments these can be disabled on API replicas
@@ -267,22 +294,36 @@ public static class DependencyInjection
                 opt.QueueLimit = 0;
             });
 
+            var globalPermitLimit = configuration.GetValue("RateLimiting:Global:PermitLimit", 100);
+            var globalQueueLimit = configuration.GetValue("RateLimiting:Global:QueueLimit", 10);
+
             options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
                 RateLimitPartition.GetSlidingWindowLimiter(
-                    partitionKey: context.User.Identity?.Name
-                        ?? context.Connection.RemoteIpAddress?.ToString()
-                        ?? "unknown",
+                    partitionKey: ResolveRateLimitPartitionKey(context),
                     factory: _ => new SlidingWindowRateLimiterOptions
                     {
-                        PermitLimit = 100,
+                        PermitLimit = globalPermitLimit,
                         Window = TimeSpan.FromMinutes(1),
                         SegmentsPerWindow = 4,
                         QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                        QueueLimit = 10
+                        QueueLimit = globalQueueLimit
                     }));
         });
 
         return services;
+    }
+
+    private static string ResolveRateLimitPartitionKey(HttpContext context)
+    {
+        var subject = context.User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? context.User.FindFirstValue("sub")
+            ?? context.User.Identity?.Name;
+        if (!string.IsNullOrWhiteSpace(subject))
+        {
+            return "user:" + subject;
+        }
+
+        return "ip:" + (context.Connection.RemoteIpAddress?.ToString() ?? "unknown");
     }
 
     private static IReadOnlyList<SecurityKey> ResolveJwtSigningKeys(IConfiguration configuration, IWebHostEnvironment env)
@@ -335,20 +376,32 @@ public static class DependencyInjection
                 .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
                 .AddRuntimeInstrumentation()
-                .AddMeter("AccessCity.API")
+                .AddMeter(AccessCityMetrics.MeterName)
                 .AddMeter("Microsoft.EntityFrameworkCore")
                 .AddOtlpExporter());
 
         services.AddHealthChecks()
-            .AddDbContextCheck<AppDbContext>("db", tags: new[] { "ready" });
+            .AddDbContextCheck<AppDbContext>("db", tags: new[] { "ready" })
+            .AddCheck<DistributedCacheHealthCheck>("cache", tags: new[] { "ready" })
+            .AddCheck<KafkaHealthCheck>("kafka", tags: new[] { "ready" });
 
         return services;
     }
 
     // ───────────────────────────── Web / MVC ─────────────────────────────
 
-    public static IServiceCollection AddWebServices(this IServiceCollection services)
+    public static IServiceCollection AddWebServices(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        IWebHostEnvironment env)
     {
+        services.Configure<ForwardedHeadersOptions>(options =>
+        {
+            options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+            options.KnownNetworks.Clear();
+            options.KnownProxies.Clear();
+        });
+
         services.AddControllers(options =>
         {
             options.Filters.Add<Filters.OverpassExceptionFilter>();
@@ -370,7 +423,16 @@ public static class DependencyInjection
         {
             options.AddDefaultPolicy(policy =>
             {
-                policy.AllowAnyOrigin()
+                var allowedOrigins = configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
+                if (env.IsDevelopment() && allowedOrigins.Length == 0)
+                {
+                    policy.AllowAnyOrigin()
+                        .AllowAnyMethod()
+                        .AllowAnyHeader();
+                    return;
+                }
+
+                policy.WithOrigins(allowedOrigins)
                     .AllowAnyMethod()
                     .AllowAnyHeader();
             });
