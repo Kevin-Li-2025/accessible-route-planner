@@ -38,8 +38,8 @@ public static class WebApplicationExtensions
         app.UseCors();
         app.UseAuthentication();
         app.UseAuthorization();
-        app.UseRateLimiter();
         app.UseSerilogRequestLogging();
+        app.UseRateLimiter();
         app.MapControllers();
         app.MapHub<HazardAlertHub>("/hubs/hazard-alerts");
 

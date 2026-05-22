@@ -9,6 +9,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Configuration;
 
 namespace AccessCity.API.Services
 {
@@ -29,11 +30,16 @@ namespace AccessCity.API.Services
         private readonly IDistributedCache? _distributedCache;
         private readonly AccessCityMetrics? _metrics;
         private readonly AppDbContext _dbContext;
+        private readonly TimeSpan _externalSignalBudget;
 
         private const string CrimeCacheKeyPrefix = "ukcrime:";
         private const string EnvCacheKeyPrefix = "env:";
         private static readonly TimeSpan CrimeCacheExpiry = TimeSpan.FromHours(24);
         private static readonly TimeSpan EnvCacheExpiry = TimeSpan.FromHours(1);
+        private static readonly TimeSpan DefaultExternalSignalBudget = TimeSpan.FromMilliseconds(350);
+        private const double DefaultInfrastructureRisk = 0.35;
+        private const double DefaultLightingRisk = 0.30;
+        private const double DefaultSurveillanceRisk = 0.40;
 
         private static readonly Dictionary<string, double> HazardSeverity = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -72,7 +78,8 @@ namespace AccessCity.API.Services
             IMemoryCache? cache = null,
             IEnvironmentalDataClient? envClient = null,
             IDistributedCache? distributedCache = null,
-            AccessCityMetrics? metrics = null)
+            AccessCityMetrics? metrics = null,
+            IConfiguration? configuration = null)
         {
             _dbContext = dbContext;
             _ukPolice = ukPolice;
@@ -81,6 +88,9 @@ namespace AccessCity.API.Services
             _envClient = envClient;
             _distributedCache = distributedCache;
             _metrics = metrics;
+            var externalBudgetMs = configuration?.GetValue("RiskScoring:ExternalSignalBudgetMilliseconds", (int)DefaultExternalSignalBudget.TotalMilliseconds)
+                ?? (int)DefaultExternalSignalBudget.TotalMilliseconds;
+            _externalSignalBudget = TimeSpan.FromMilliseconds(Math.Max(50, externalBudgetMs));
         }
 
         /// <summary>
@@ -129,18 +139,20 @@ namespace AccessCity.API.Services
             double densityPerKmSq = nearbyHazards.Count / Math.Max(areaKmSq, 0.001);
             double hazardDensity = Math.Min(densityPerKmSq / 50.0, 1.0);
 
-            double infrastructureRisk = await EstimateInfrastructureRiskAsync(latitude, longitude, radiusMetres);
+            var infrastructureRiskTask = WithExternalSignalBudgetAsync(
+                EstimateInfrastructureRiskAsync(latitude, longitude, radiusMetres),
+                DefaultInfrastructureRisk);
+            var crimeCountTask = _ukPolice != null && _cache != null
+                ? WithExternalSignalBudgetAsync(GetCachedCrimeCountAsync(latitude, longitude), 0)
+                : Task.FromResult(0);
+            var environmentalRisksTask = WithExternalSignalBudgetAsync(
+                GetCachedEnvironmentalRisksAsync(latitude, longitude, radiusMetres),
+                (DefaultLightingRisk, DefaultSurveillanceRisk));
 
-            int crimeCount = 0;
-            double crimeRisk = 0.0;
-            if (_ukPolice != null && _cache != null)
-            {
-                crimeCount = await GetCachedCrimeCountAsync(latitude, longitude);
-                crimeRisk = Sigmoid(crimeCount / 12.0, k: 2.0);
-            }
-
-            double lightingRisk = await GetCachedLightingRiskAsync(latitude, longitude, radiusMetres);
-            double surveillanceRisk = await GetCachedSurveillanceRiskAsync(latitude, longitude, radiusMetres);
+            double infrastructureRisk = await infrastructureRiskTask;
+            int crimeCount = await crimeCountTask;
+            double crimeRisk = crimeCount > 0 ? Sigmoid(crimeCount / 12.0, k: 2.0) : 0.0;
+            var (lightingRisk, surveillanceRisk) = await environmentalRisksTask;
 
             double overall = Clamp01(
                 W_Proximity * hazardProximity +
@@ -336,43 +348,63 @@ namespace AccessCity.API.Services
             return _cache.TryGetValue(key, out double cached) ? cached : 0.40;
         }
 
-        private async Task<double> GetCachedLightingRiskAsync(double lat, double lng, double radiusMetres)
+        private async Task<(double LightingRisk, double SurveillanceRisk)> GetCachedEnvironmentalRisksAsync(
+            double lat,
+            double lng,
+            double radiusMetres)
         {
-            if (_envClient == null) return 0.30;
-            var key = $"{EnvCacheKeyPrefix}lamp:{Math.Round(lat, 3):F3}:{Math.Round(lng, 3):F3}";
-            var cachedLighting = await TryGetCachedAsync<double>(key, "environment");
-            if (cachedLighting.Hit)
+            if (_envClient == null) return (DefaultLightingRisk, DefaultSurveillanceRisk);
+
+            var lampKey = $"{EnvCacheKeyPrefix}lamp:{Math.Round(lat, 3):F3}:{Math.Round(lng, 3):F3}";
+            var camKey = $"{EnvCacheKeyPrefix}cam:{Math.Round(lat, 3):F3}:{Math.Round(lng, 3):F3}";
+            var cachedLighting = await TryGetCachedAsync<double>(lampKey, "environment");
+            var cachedSurveillance = await TryGetCachedAsync<double>(camKey, "environment");
+            if (cachedLighting.Hit && cachedSurveillance.Hit)
             {
-                return cachedLighting.Value;
+                return (cachedLighting.Value, cachedSurveillance.Value);
             }
 
             var summary = await _envClient.GetNearbyInfrastructureAsync(lat, lng, Math.Min(radiusMetres, 300));
-            // 10+ lamps within radius = well-lit, 0 = dark.
             double risk = Math.Clamp(1.0 - (summary.StreetLampCount / 10.0), 0, 1);
-            await SetCachedAsync(key, risk, EnvCacheExpiry);
-
-            // Also cache surveillance while we have it.
-            var camKey = $"{EnvCacheKeyPrefix}cam:{Math.Round(lat, 3):F3}:{Math.Round(lng, 3):F3}";
             double camRisk = Math.Clamp(1.0 - (summary.SurveillanceCameraCount / 3.0), 0, 1);
+            await SetCachedAsync(lampKey, risk, EnvCacheExpiry);
             await SetCachedAsync(camKey, camRisk, EnvCacheExpiry);
 
-            return risk;
+            return (risk, camRisk);
+        }
+
+        private async Task<double> GetCachedLightingRiskAsync(double lat, double lng, double radiusMetres)
+        {
+            var risks = await GetCachedEnvironmentalRisksAsync(lat, lng, radiusMetres);
+            return risks.LightingRisk;
         }
 
         private async Task<double> GetCachedSurveillanceRiskAsync(double lat, double lng, double radiusMetres)
         {
-            if (_envClient == null) return 0.40;
-            var key = $"{EnvCacheKeyPrefix}cam:{Math.Round(lat, 3):F3}:{Math.Round(lng, 3):F3}";
-            var cachedSurveillance = await TryGetCachedAsync<double>(key, "environment");
-            if (cachedSurveillance.Hit)
-            {
-                return cachedSurveillance.Value;
-            }
+            var risks = await GetCachedEnvironmentalRisksAsync(lat, lng, radiusMetres);
+            return risks.SurveillanceRisk;
+        }
 
-            // Fetch and cache both at once.
-            await GetCachedLightingRiskAsync(lat, lng, radiusMetres);
-            cachedSurveillance = await TryGetCachedAsync<double>(key, "environment");
-            return cachedSurveillance.Hit ? cachedSurveillance.Value : 0.40;
+        private async Task<T> WithExternalSignalBudgetAsync<T>(Task<T> task, T fallback)
+        {
+            _ = task.ContinueWith(
+                static completed => _ = completed.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+
+            try
+            {
+                return await task.WaitAsync(_externalSignalBudget);
+            }
+            catch (TimeoutException)
+            {
+                return fallback;
+            }
+            catch
+            {
+                return fallback;
+            }
         }
 
         private async Task<(bool Hit, T Value)> TryGetCachedAsync<T>(string key, string cacheName)

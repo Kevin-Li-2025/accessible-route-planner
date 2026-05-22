@@ -79,6 +79,8 @@ public class RoutingService
             .Where(h => h.Status == HazardStatus.Reported || h.Status == HazardStatus.UnderReview)
             .ToList();
 
+        RouteResponse response;
+
         // ── Tier 1: OSRM with alternatives + PostGIS obstacle scoring ──
         var alternatives = await _osrmClient.GetAlternativeRoutesAsync(request.Start, request.End, cancellationToken);
 
@@ -86,7 +88,9 @@ public class RoutingService
             && !IsOsrmDetourExcessive(request.Start, request.End, alternatives))
         {
             var graphData = await TryLoadRouteGraphAsync(request, cancellationToken);
-            return await BuildBestOsrmRouteResponseAsync(request, hazardList, alternatives, graphData, cancellationToken);
+            response = await BuildBestOsrmRouteResponseAsync(request, hazardList, alternatives, graphData, cancellationToken);
+            await CacheRouteAsync(cacheKey, response);
+            return response;
         }
 
         // ── Tier 2: Real imported OSM graph (PostGIS) ──
@@ -95,14 +99,30 @@ public class RoutingService
             var realGraph = await _graphRepo.LoadGraphAsync(request.Start, request.End, cancellationToken);
             if (realGraph.HasCoverage && !realGraph.IsTruncated)
             {
-                return FindSafePathOnRealGraph(request, hazardList, realGraph);
+                response = FindSafePathOnRealGraph(request, hazardList, realGraph);
+                await CacheRouteAsync(cacheKey, response);
+                return response;
             }
         }
         catch (OperationCanceledException) { throw; }
         catch { /* PostGIS unavailable */ }
 
         // ── Tier 3: Synthetic grid fallback ──
-        return FindSafePathFallback(request, hazardList);
+        response = FindSafePathFallback(request, hazardList);
+        await CacheRouteAsync(cacheKey, response);
+        return response;
+    }
+
+    private async Task CacheRouteAsync(string cacheKey, RouteResponse response)
+    {
+        try
+        {
+            await _routeCache.SetAsync(cacheKey, response);
+        }
+        catch
+        {
+            // Cache failures must never turn a successful route computation into a 5xx response.
+        }
     }
 
     /// <summary>

@@ -4,8 +4,8 @@ services:
     build:
       context: ./AccessCity.API
       dockerfile: Dockerfile
-    ports:
-      - "8080:8080"
+    expose:
+      - "8080"
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       Jwt__Key: ${JWT_SECRET:-AccessCity_Secret_Key_For_Dev_2026_Placeholder}
@@ -24,12 +24,17 @@ services:
       Postgres__MaxPoolSize: ${Postgres__MaxPoolSize:-100}
       Postgres__DbContextPoolSize: ${Postgres__DbContextPoolSize:-128}
       Routing__MaxConcurrentComputations: ${Routing__MaxConcurrentComputations:-4}
+      Routing__SyncSafePathTimeoutSeconds: ${Routing__SyncSafePathTimeoutSeconds:-4}
       Routing__ComputationQueueTimeoutSeconds: ${Routing__ComputationQueueTimeoutSeconds:-2}
       Routing__JobComputationQueueTimeoutSeconds: ${Routing__JobComputationQueueTimeoutSeconds:-30}
       Routing__HazardQueryPaddingMetres: ${Routing__HazardQueryPaddingMetres:-250}
       Routing__MaxHazardsPerRequest: ${Routing__MaxHazardsPerRequest:-500}
       Routing__MaxRiskQueryRadiusMetres: ${Routing__MaxRiskQueryRadiusMetres:-2500}
       Routing__MaxRouteGraphEdges: ${Routing__MaxRouteGraphEdges:-20000}
+      RiskScoring__CacheTtlSeconds: ${RiskScoring__CacheTtlSeconds:-30}
+      RiskScoring__CacheCoordinatePrecision: ${RiskScoring__CacheCoordinatePrecision:-4}
+      RiskScoring__CacheRadiusBucketMetres: ${RiskScoring__CacheRadiusBucketMetres:-50}
+      RiskScoring__ExternalSignalBudgetMilliseconds: ${RiskScoring__ExternalSignalBudgetMilliseconds:-350}
       ExternalApis__CircuitBreaker__FailureThreshold: ${ExternalApis__CircuitBreaker__FailureThreshold:-3}
       ExternalApis__CircuitBreaker__BreakSeconds: ${ExternalApis__CircuitBreaker__BreakSeconds:-30}
       ExternalApis__CircuitBreaker__QueueTimeoutMilliseconds: ${ExternalApis__CircuitBreaker__QueueTimeoutMilliseconds:-50}
@@ -41,8 +46,8 @@ services:
       ExternalApis__UkPolice__MaxConcurrentRequests: ${ExternalApis__UkPolice__MaxConcurrentRequests:-8}
       ExternalApis__Environmental__TimeoutSeconds: ${ExternalApis__Environmental__TimeoutSeconds:-3}
       ExternalApis__Environmental__MaxConcurrentRequests: ${ExternalApis__Environmental__MaxConcurrentRequests:-4}
-      RateLimiting__Global__PermitLimit: ${RateLimiting__Global__PermitLimit:-100}
-      RateLimiting__Global__QueueLimit: ${RateLimiting__Global__QueueLimit:-10}
+      RateLimiting__Global__PermitLimit: ${RateLimiting__Global__PermitLimit:-30000}
+      RateLimiting__Global__QueueLimit: ${RateLimiting__Global__QueueLimit:-0}
       Workers__OsmImport__Enabled: ${API_OSM_WORKER_ENABLED:-true}
       Workers__TileWarming__Enabled: ${API_TILE_WORKER_ENABLED:-true}
       # Default false (avoids OOM on large extracts). Override when starting compose, e.g.:
@@ -50,7 +55,7 @@ services:
       OsmImport__ImportOnStartup: ${OsmImport__ImportOnStartup:-false}
       # HybridCache L2 (route cache, etc.). Empty = use in-process memory only (see DependencyInjection).
       # Enable Redis: put `REDIS_CONNECTION=redis:6379` in a `.env` next to this file, then recreate api.
-      ConnectionStrings__Redis: ${REDIS_CONNECTION:-}
+      ConnectionStrings__Redis: ${REDIS_CONNECTION:-redis:6379}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://host.docker.internal:4317
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
     depends_on:
@@ -59,9 +64,14 @@ services:
       redis:
         condition: service_healthy
     mem_limit: 4g
+  api-gateway:
+    image: nginx:1.27-alpine
+    ports:
+      - "${ACCESSCITY_API_HOST_PORT:-8080}:8080"
     volumes:
-      - ./AccessCity.API/london.osm:/app/london.osm:ro
-      - ./AccessCity.API/birmingham.osm:/app/birmingham.osm:ro
+      - ./deploy/nginx/accesscity-compose.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api
 
   worker:
     profiles: ["worker"]
@@ -86,7 +96,12 @@ services:
       Postgres__MaxPoolSize: ${Postgres__MaxPoolSize:-100}
       Postgres__DbContextPoolSize: ${Postgres__DbContextPoolSize:-64}
       Routing__MaxConcurrentComputations: ${Routing__MaxConcurrentComputations:-2}
+      Routing__SyncSafePathTimeoutSeconds: ${Routing__SyncSafePathTimeoutSeconds:-4}
       Routing__JobComputationQueueTimeoutSeconds: ${Routing__JobComputationQueueTimeoutSeconds:-60}
+      RiskScoring__CacheTtlSeconds: ${RiskScoring__CacheTtlSeconds:-30}
+      RiskScoring__CacheCoordinatePrecision: ${RiskScoring__CacheCoordinatePrecision:-4}
+      RiskScoring__CacheRadiusBucketMetres: ${RiskScoring__CacheRadiusBucketMetres:-50}
+      RiskScoring__ExternalSignalBudgetMilliseconds: ${RiskScoring__ExternalSignalBudgetMilliseconds:-350}
       OsmImport__ImportOnStartup: "false"
       ConnectionStrings__Redis: ${REDIS_CONNECTION:-redis:6379}
       Workers__OsmImport__Enabled: "true"
@@ -101,15 +116,12 @@ services:
       kafka:
         condition: service_started
     mem_limit: 4g
-    volumes:
-      - ./AccessCity.API/london.osm:/app/london.osm:ro
-      - ./AccessCity.API/birmingham.osm:/app/birmingham.osm:ro
 
   db:
     image: postgis/postgis:16-3.4
     container_name: accesscity_dev_db
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     environment:
       POSTGRES_USER: accesscity
       POSTGRES_PASSWORD: accesscity123
@@ -126,7 +138,7 @@ services:
     image: redis:7-alpine
     container_name: accesscity_dev_redis
     ports:
-      - "6379:6379"
+      - "${REDIS_HOST_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -138,7 +150,7 @@ services:
     image: bitnami/kafka:3.7
     container_name: accesscity_dev_kafka
     ports:
-      - "9092:9092"
+      - "${KAFKA_HOST_PORT:-9092}:9092"
     environment:
       ALLOW_PLAINTEXT_LISTENER: "yes"
       KAFKA_CFG_NODE_ID: 1

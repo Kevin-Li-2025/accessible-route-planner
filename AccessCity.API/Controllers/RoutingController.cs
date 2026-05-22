@@ -29,9 +29,8 @@ public class RoutingController : ControllerBase
     private readonly IRouteJobService _jobs;
     private readonly IRouteCoalescingService _coalescing;
     private readonly IRouteComputationLimiter _routeLimiter;
+    private readonly IRiskScoreCacheService _riskScoreCache;
     private readonly RoutingOptions _routingOptions;
-
-    private static readonly TimeSpan SafePathTimeout = TimeSpan.FromSeconds(30);
 
     public RoutingController(
         RoutingService routing,
@@ -41,6 +40,7 @@ public class RoutingController : ControllerBase
         IRouteJobService jobs,
         IRouteCoalescingService coalescing,
         IRouteComputationLimiter routeLimiter,
+        IRiskScoreCacheService riskScoreCache,
         IOptions<RoutingOptions> routingOptions)
     {
         _routing = routing;
@@ -50,6 +50,7 @@ public class RoutingController : ControllerBase
         _jobs = jobs;
         _coalescing = coalescing;
         _routeLimiter = routeLimiter;
+        _riskScoreCache = riskScoreCache;
         _routingOptions = routingOptions.Value;
     }
 
@@ -68,9 +69,10 @@ public class RoutingController : ControllerBase
         [FromBody] RouteRequest request,
         CancellationToken cancellationToken)
     {
-        // Enforce a 30-second timeout to prevent indefinite blocking.
+        // Enforce a short synchronous timeout; heavier work belongs on the async job path.
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(SafePathTimeout);
+        var safePathTimeout = TimeSpan.FromSeconds(Math.Max(1, _routingOptions.SyncSafePathTimeoutSeconds));
+        timeoutCts.CancelAfter(safePathTimeout);
 
         try
         {
@@ -105,7 +107,7 @@ public class RoutingController : ControllerBase
         {
             return StatusCode(StatusCodes.Status504GatewayTimeout, new ApiError(
                 "Route computation timed out.",
-                Detail: $"The A* pathfinding exceeded the {SafePathTimeout.TotalSeconds}s limit. Consider using the async job endpoint: POST /routing/safe-path/async."));
+                Detail: $"The route computation exceeded the {safePathTimeout.TotalSeconds}s limit. Consider using the async job endpoint: POST /routing/safe-path/async."));
         }
     }
 
@@ -177,8 +179,19 @@ public class RoutingController : ControllerBase
         [FromQuery] RiskScoreRequestDto request,
         CancellationToken cancellationToken = default)
     {
-        var hazards = await LoadHazardsNearPointAsync(request.Lat, request.Lng, request.Radius, cancellationToken);
-        var result = await _risk.EvaluateRiskAsync(request.Lat, request.Lng, request.Radius, hazards);
+        var cappedRadius = Math.Min(
+            Math.Max(0, request.Radius),
+            Math.Max(1, _routingOptions.MaxRiskQueryRadiusMetres));
+        var cacheKey = _riskScoreCache.BuildKey(request.Lat, request.Lng, cappedRadius);
+        var result = await _riskScoreCache.GetOrComputeAsync(
+            cacheKey,
+            async token =>
+            {
+                var hazards = await LoadHazardsNearPointAsync(request.Lat, request.Lng, cappedRadius, token);
+                return await _risk.EvaluateRiskAsync(request.Lat, request.Lng, cappedRadius, hazards);
+            },
+            cancellationToken);
+
         return Ok(result);
     }
 

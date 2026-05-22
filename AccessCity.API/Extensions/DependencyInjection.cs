@@ -229,6 +229,7 @@ public static class DependencyInjection
         // Caching services
         services.AddScoped<IRiskTileCacheService, RiskTileCacheService>();
         services.AddScoped<IRouteCacheService, RouteCacheService>();
+        services.AddScoped<IRiskScoreCacheService, RiskScoreCacheService>();
 
         // API Versioning
         services.AddApiVersioning(options =>
