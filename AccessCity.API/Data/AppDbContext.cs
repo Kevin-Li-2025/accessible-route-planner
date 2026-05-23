@@ -235,6 +235,11 @@ namespace AccessCity.API.Data
                 entity.Property(e => e.Smoothness).HasColumnName("smoothness").HasMaxLength(50);
                 entity.Property(e => e.WidthMetres).HasColumnName("width_metres");
                 entity.Property(e => e.HasTactilePaving).HasColumnName("has_tactile_paving");
+                entity.Property(e => e.AccessibilityCostVersion).HasColumnName("accessibility_cost_version");
+                entity.Property(e => e.StandardAccessibilityPenaltySeconds).HasColumnName("standard_accessibility_penalty_seconds");
+                entity.Property(e => e.WheelchairAccessibilityPenaltySeconds).HasColumnName("wheelchair_accessibility_penalty_seconds");
+                entity.Property(e => e.StrollerAccessibilityPenaltySeconds).HasColumnName("stroller_accessibility_penalty_seconds");
+                entity.Property(e => e.AccessibilityDataQuality).HasColumnName("accessibility_data_quality");
 
                 if (isRelational)
                 {

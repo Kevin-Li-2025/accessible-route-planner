@@ -7,7 +7,10 @@ public sealed class PostgresOptions
     public string? ConnectionString { get; set; }
     public string? DatabaseUrl { get; set; }
     public string? DirectDatabaseUrl { get; set; }
+    public string? ReadOnlyConnectionString { get; set; }
+    public string? ReadOnlyDatabaseUrl { get; set; }
     public bool UseDirectDatabaseUrl { get; set; }
+    public bool UseReadOnlyForHotPaths { get; set; }
     public bool AutoMigrate { get; set; } = true;
     public bool AutoSchemaMaintenance { get; set; } = true;
     public bool MigrateAndExit { get; set; }

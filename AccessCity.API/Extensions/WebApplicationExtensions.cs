@@ -633,6 +633,21 @@ public static class WebApplicationExtensions
                     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'route_edges' AND column_name = 'has_tactile_paving') THEN
                         ALTER TABLE public.route_edges ADD COLUMN has_tactile_paving boolean NOT NULL DEFAULT false;
                     END IF;
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'route_edges' AND column_name = 'accessibility_cost_version') THEN
+                        ALTER TABLE public.route_edges ADD COLUMN accessibility_cost_version integer NOT NULL DEFAULT 1;
+                    END IF;
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'route_edges' AND column_name = 'standard_accessibility_penalty_seconds') THEN
+                        ALTER TABLE public.route_edges ADD COLUMN standard_accessibility_penalty_seconds double precision NOT NULL DEFAULT 0;
+                    END IF;
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'route_edges' AND column_name = 'wheelchair_accessibility_penalty_seconds') THEN
+                        ALTER TABLE public.route_edges ADD COLUMN wheelchair_accessibility_penalty_seconds double precision NOT NULL DEFAULT 0;
+                    END IF;
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'route_edges' AND column_name = 'stroller_accessibility_penalty_seconds') THEN
+                        ALTER TABLE public.route_edges ADD COLUMN stroller_accessibility_penalty_seconds double precision NOT NULL DEFAULT 0;
+                    END IF;
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'route_edges' AND column_name = 'accessibility_data_quality') THEN
+                        ALTER TABLE public.route_edges ADD COLUMN accessibility_data_quality double precision NOT NULL DEFAULT 1;
+                    END IF;
                 END IF;
 
                 CREATE TABLE IF NOT EXISTS public.osm_import_jobs
@@ -704,6 +719,9 @@ public static class WebApplicationExtensions
 
             CREATE INDEX IF NOT EXISTS "IX_route_edges_geometry_gist"
                 ON public.route_edges USING GIST ("Geometry");
+
+            CREATE INDEX IF NOT EXISTS "IX_route_edges_accessibility_cost_version"
+                ON public.route_edges (accessibility_cost_version);
 
             CREATE INDEX IF NOT EXISTS "IX_route_nodes_location_gist"
                 ON public.route_nodes USING GIST ("Location");

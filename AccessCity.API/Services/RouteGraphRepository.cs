@@ -34,6 +34,7 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
     private readonly ILogger<RouteGraphRepository> _logger;
     private readonly RoutingOptions _options;
     private readonly IConnectionMultiplexer? _redis;
+    private readonly IHotPathDbContextFactory? _hotPathDbContextFactory;
     private static readonly JsonSerializerOptions SnapshotJsonOptions = new(JsonSerializerDefaults.Web);
 
     public RouteGraphRepository(
@@ -44,7 +45,8 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         IRouteGraphStatusService routeGraphStatus,
         IOptions<RoutingOptions> options,
         ILogger<RouteGraphRepository> logger,
-        IConnectionMultiplexer? redis = null)
+        IConnectionMultiplexer? redis = null,
+        IHotPathDbContextFactory? hotPathDbContextFactory = null)
     {
         _dbContext = dbContext;
         _cache = cache;
@@ -54,6 +56,7 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         _options = options.Value;
         _logger = logger;
         _redis = redis;
+        _hotPathDbContextFactory = hotPathDbContextFactory;
     }
 
     public async Task<RouteGraphData> LoadGraphAsync(
@@ -302,7 +305,11 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         string cacheKey,
         CancellationToken cancellationToken)
     {
-        var edges = await _dbContext.RouteEdges
+        await using var dbLease = _hotPathDbContextFactory?.CreateDbContext()
+                                  ?? HotPathDbContextLease.Borrowed(_dbContext);
+        var dbContext = dbLease.Context;
+
+        var edges = await dbContext.RouteEdges
             .FromSqlInterpolated($"""
                 SELECT *
                 FROM route_edges
@@ -331,7 +338,7 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
             .Distinct()
             .ToList();
 
-        var nodes = await _dbContext.RouteNodes
+        var nodes = await dbContext.RouteNodes
             .Where(node => nodeIds.Contains(node.Id))
             .AsNoTracking()
             .ToListAsync(cancellationToken);
@@ -369,6 +376,11 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
                 HasTactilePaving = edge.HasTactilePaving,
                 HasBarrier = edge.HasBarrier,
                 Access = edge.Access,
+                AccessibilityCostVersion = edge.AccessibilityCostVersion,
+                StandardAccessibilityPenaltySeconds = edge.StandardAccessibilityPenaltySeconds,
+                WheelchairAccessibilityPenaltySeconds = edge.WheelchairAccessibilityPenaltySeconds,
+                StrollerAccessibilityPenaltySeconds = edge.StrollerAccessibilityPenaltySeconds,
+                AccessibilityDataQuality = edge.AccessibilityDataQuality,
                 Geometry = edge.Geometry?.Coordinates
             };
         }
@@ -418,7 +430,7 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
 
     private static string BuildCacheKey(GraphShardRegion region, int edgeLimit, string graphVersion) =>
         string.Create(CultureInfo.InvariantCulture,
-            $"route_graph:v4:{graphVersion}:{edgeLimit}:{region.MinLon:F4}:{region.MinLat:F4}:{region.MaxLon:F4}:{region.MaxLat:F4}");
+            $"route_graph:v5:{graphVersion}:{edgeLimit}:{region.MinLon:F4}:{region.MinLat:F4}:{region.MaxLon:F4}:{region.MaxLat:F4}");
 
     private static void BuildSpatialBuckets(RouteGraphData graphData)
     {
@@ -461,6 +473,11 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
                     edge.HasTactilePaving,
                     edge.HasBarrier,
                     edge.Access,
+                    edge.AccessibilityCostVersion,
+                    edge.StandardAccessibilityPenaltySeconds,
+                    edge.WheelchairAccessibilityPenaltySeconds,
+                    edge.StrollerAccessibilityPenaltySeconds,
+                    edge.AccessibilityDataQuality,
                     edge.Geometry?.Select(coord => new RouteGraphCoordinateSnapshot(coord.X, coord.Y)).ToArray()))
                     .ToArray()))
             .ToArray();
@@ -500,6 +517,11 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
                         HasTactilePaving = edge.HasTactilePaving,
                         HasBarrier = edge.HasBarrier,
                         Access = edge.Access,
+                        AccessibilityCostVersion = edge.AccessibilityCostVersion,
+                        StandardAccessibilityPenaltySeconds = edge.StandardAccessibilityPenaltySeconds,
+                        WheelchairAccessibilityPenaltySeconds = edge.WheelchairAccessibilityPenaltySeconds,
+                        StrollerAccessibilityPenaltySeconds = edge.StrollerAccessibilityPenaltySeconds,
+                        AccessibilityDataQuality = edge.AccessibilityDataQuality,
                         Geometry = edge.Geometry?.Select(coord => new Coordinate(coord.X, coord.Y)).ToArray()
                     })
             });
@@ -546,6 +568,11 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         bool HasTactilePaving,
         bool HasBarrier,
         string? Access,
+        int AccessibilityCostVersion,
+        double StandardAccessibilityPenaltySeconds,
+        double WheelchairAccessibilityPenaltySeconds,
+        double StrollerAccessibilityPenaltySeconds,
+        double AccessibilityDataQuality,
         RouteGraphCoordinateSnapshot[]? Geometry);
 
     private sealed record RouteGraphCoordinateSnapshot(double X, double Y);

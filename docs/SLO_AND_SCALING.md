@@ -3,7 +3,7 @@
 AccessCity scales on application pressure, not only CPU:
 
 - API replicas scale with KEDA from Prometheus-backed CPU, memory, safe-path p95 latency, and route computation saturation.
-- Worker replicas scale from Kafka lag for `accesscity_osmimportstartedevent`.
+- Worker replicas scale from Kafka lag for route and OSM import topics; the checked-in production path allows 6 to 100 workers and 48 Kafka partitions.
 - Route computation uses an in-process bulkhead per API pod; saturated requests return `503` instead of queuing unbounded work.
 - External dependencies use timeout, bulkhead, circuit-breaker fallback, and metrics per dependency.
 - Production safe-path cache misses return `202 Accepted` by default and compute in the background; completed job status is published through the distributed cache so polling works across API replicas.
@@ -42,6 +42,14 @@ The API KEDA object includes a 6-replica fallback if Prometheus-backed scalers f
 plus weekday morning and evening cron triggers that hold at least 10 replicas during expected peak
 traffic windows. CPU and memory are Prometheus queries rather than KEDA resource triggers because
 KEDA fallback does not support the built-in CPU/memory scalers.
+
+Route workers scale from Kafka lag on `accesscity_routejobrequestedevent` and
+`accesscity_osmimportstartedevent`. Keep the partition count at or above the intended active worker
+count for route jobs; otherwise Kafka partition ownership, not CPU, becomes the worker scale limit.
+
+PostGIS hot reads should go through PgBouncer and, when available, a read replica. The production
+config enables `Postgres__UseReadOnlyForHotPaths`; set `READONLY_DATABASE_URL` for route graph
+shard loads to stop competing with writes, migrations, and ingestion on the primary.
 
 The API KEDA object replaces the standalone `hpa.yaml` in the default kustomization so only one
 controller owns the `accesscity-api` deployment scale. Keep `hpa.yaml` as a CPU/memory fallback

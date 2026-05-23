@@ -28,9 +28,10 @@ kubectl -n accesscity logs -f job/accesscity-distributed-loadtest
 
 The script mixes:
 
-- `/health` and `/health/ready` for replica and dependency readiness.
-- `/api/v1/routing/risk-score` with slightly varied coordinates to exercise scoped PostGIS hazard queries.
-- `/api/v1/routing/safe-path` every fourth iteration to exercise OSRM fallback, route graph loading, route cache, coalescing, and the route computation limiter.
+- `/health/ready` at a fixed arrival rate to catch readiness tail regressions.
+- `/api/v1/routing/risk-score` with varied coordinates to exercise scoped PostGIS hazard queries and risk cache bucketing.
+- `/api/v1/spatial/poi` with varied coordinates to exercise POI PostGIS/cache hot paths.
+- `/api/v1/routing/safe-path/options` as async route jobs, then polls `/api/v1/routing/jobs/{jobId}` to verify the real API -> Kafka -> worker -> Redis status path.
 
 In production config, `safe-path` can return `202 Accepted` for cache misses. That is the expected
 async-first path; the job result is stored through the distributed cache so polling can land on any
@@ -39,9 +40,12 @@ API replica.
 Expected threshold defaults:
 
 - overall HTTP failure rate below 2%
-- overall p95 below 750 ms and p99 below 2 s
-- `safe-path` p95 below 2.5 s
+- overall p95 below 1 s and p99 below 3 s
+- route job submission p95 below 450 ms
+- route job polling p95 below 250 ms
 - `risk-score` p95 below 250 ms
+- `spatial/poi` p95 below 350 ms
+- readiness p95 below 150 ms
 
 If `safe-path` returns `503` or `504` during high bursts, that is capacity protection working rather than silent overload. Increase API replicas, `Routing__MaxConcurrentComputations`, Postgres pool size, and CPU only after checking DB wait time and CPU saturation.
 
@@ -57,6 +61,8 @@ injection checks.
 - `Postgres__MaxPoolSize`: Npgsql physical connection pool per pod.
   Keep this low when the app points at PgBouncer; total client connections should scale with API
   replicas without turning into hundreds of direct Postgres backends.
+- `Kafka__TopicPartitions`: production manifests default to 48 so route jobs can spread across
+  tens of workers; keep broker count, partition count, and worker max scale aligned.
 - `Postgres__DbContextPoolSize`: EF Core context pool per pod.
 - `Routing__MaxConcurrentComputations`: per-pod CPU gate for A*/route scoring work.
 - `Routing__MaxRouteGraphEdges`: cap on route graph fanout before falling back.

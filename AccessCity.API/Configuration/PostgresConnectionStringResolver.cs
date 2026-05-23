@@ -39,6 +39,27 @@ public static class PostgresConnectionStringResolver
         return ApplyRuntimeOptions(connectionString, options);
     }
 
+    public static string? ResolveReadOnly(IConfiguration configuration, PostgresOptions options)
+    {
+        var readOnlyDatabaseUrl = configuration["READONLY_DATABASE_URL"]
+            ?? configuration["READ_REPLICA_DATABASE_URL"]
+            ?? configuration[$"{PostgresOptions.SectionName}:ReadOnlyDatabaseUrl"]
+            ?? Environment.GetEnvironmentVariable("READONLY_DATABASE_URL")
+            ?? Environment.GetEnvironmentVariable("READ_REPLICA_DATABASE_URL");
+
+        if (!string.IsNullOrWhiteSpace(readOnlyDatabaseUrl))
+        {
+            return ApplyRuntimeOptions(FromDatabaseUrl(readOnlyDatabaseUrl), options);
+        }
+
+        var readOnlyConnectionString = configuration[$"{PostgresOptions.SectionName}:ReadOnlyConnectionString"]
+            ?? configuration.GetConnectionString("ReadOnlyConnection");
+
+        return string.IsNullOrWhiteSpace(readOnlyConnectionString)
+            ? null
+            : ApplyRuntimeOptions(readOnlyConnectionString, options);
+    }
+
     public static string? GetPrimarySearchPath(string connectionString)
     {
         var builder = new NpgsqlConnectionStringBuilder(connectionString);

@@ -9,65 +9,172 @@ data:
     import exec from 'k6/execution';
 
     const baseUrl = __ENV.BASE_URL || 'http://accesscity-api';
+    const routeRate = Number(__ENV.ROUTE_RATE || 80);
+    const riskRate = Number(__ENV.RISK_RATE || 180);
+    const poiRate = Number(__ENV.POI_RATE || 60);
+    const readinessRate = Number(__ENV.READINESS_RATE || 40);
+    const testDuration = __ENV.TEST_DURATION || '10m';
+    const routePollTimeoutSeconds = Number(__ENV.ROUTE_POLL_TIMEOUT_SECONDS || 20);
 
     export const options = {
       scenarios: {
-        mixed_api: {
-          executor: 'ramping-vus',
-          stages: [
-            { duration: '30s', target: 20 },
-            { duration: '2m', target: 20 },
-            { duration: '30s', target: 50 },
-            { duration: '2m', target: 50 },
-            { duration: '30s', target: 0 }
-          ],
-          gracefulRampDown: '15s'
+        route_jobs: {
+          executor: 'constant-arrival-rate',
+          rate: routeRate,
+          timeUnit: '1s',
+          duration: testDuration,
+          preAllocatedVUs: 200,
+          maxVUs: 1200,
+          exec: 'routeJobs'
+        },
+        risk_reads: {
+          executor: 'constant-arrival-rate',
+          rate: riskRate,
+          timeUnit: '1s',
+          duration: testDuration,
+          preAllocatedVUs: 80,
+          maxVUs: 400,
+          exec: 'riskReads'
+        },
+        poi_reads: {
+          executor: 'constant-arrival-rate',
+          rate: poiRate,
+          timeUnit: '1s',
+          duration: testDuration,
+          preAllocatedVUs: 40,
+          maxVUs: 240,
+          exec: 'poiReads'
+        },
+        readiness: {
+          executor: 'constant-arrival-rate',
+          rate: readinessRate,
+          timeUnit: '1s',
+          duration: testDuration,
+          preAllocatedVUs: 20,
+          maxVUs: 120,
+          exec: 'readiness'
         }
       },
       thresholds: {
         http_req_failed: ['rate<0.02'],
-        http_req_duration: ['p(95)<750', 'p(99)<2000'],
+        http_req_duration: ['p(95)<1000', 'p(99)<3000'],
         checks: ['rate>0.98'],
-        'http_req_duration{name:safe-path}': ['p(95)<2500'],
-        'http_req_duration{name:risk-score}': ['p(95)<250']
+        'http_req_duration{name:route-submit}': ['p(95)<450'],
+        'http_req_duration{name:route-poll}': ['p(95)<250'],
+        'http_req_duration{name:risk-score}': ['p(95)<250'],
+        'http_req_duration{name:poi}': ['p(95)<350'],
+        'http_req_duration{name:ready}': ['p(95)<150']
       }
     };
 
-    const jsonHeaders = { headers: { 'Content-Type': 'application/json' }, timeout: '5s' };
+    const jsonHeaders = { headers: { 'Content-Type': 'application/json' }, timeout: '8s' };
+    const routePairs = [
+      [-1.8985, 52.4814, -1.9300, 52.4510],
+      [-1.8904, 52.4862, -1.8894, 52.4862],
+      [-1.8885, 52.4835, -1.8936, 52.4795],
+      [-1.9125, 52.4855, -1.9015, 52.4805],
+      [-1.8855, 52.4815, -1.8925, 52.4805]
+    ];
 
-    export default function () {
+    function jitteredPair() {
       const iteration = exec.scenario.iterationInTest;
-      const offset = ((iteration % 21) - 10) * 0.00005;
+      const base = routePairs[iteration % routePairs.length];
+      const bucket = Math.floor(iteration / routePairs.length);
+      const latJitter = ((bucket % 101) - 50) * 0.00003;
+      const lonJitter = (((bucket * 37) % 101) - 50) * 0.00003;
+      return {
+        start: { x: base[0] + lonJitter, y: base[1] + latJitter },
+        end: { x: base[2] - lonJitter, y: base[3] - latJitter }
+      };
+    }
 
-      check(http.get(`${baseUrl}/health`, { timeout: '2s', tags: { name: 'health' } }), {
-        'health ok': r => r.status === 200
-      });
+    function parseJson(response) {
+      try {
+        return response.json();
+      } catch (_) {
+        return null;
+      }
+    }
 
+    export function readiness() {
       check(http.get(`${baseUrl}/health/ready`, { timeout: '2s', tags: { name: 'ready' } }), {
         'ready ok': r => r.status === 200
       });
+    }
+
+    export function riskReads() {
+      const iteration = exec.scenario.iterationInTest;
+      const offset = ((iteration % 401) - 200) * 0.00001;
 
       check(http.get(
-        `${baseUrl}/api/v1/routing/risk-score?lat=${52.4862 + offset}&lng=${-1.8904 + offset}&radius=500`,
+        `${baseUrl}/api/v1/routing/risk-score?lat=${52.4862 + offset}&lng=${-1.8904 - offset}&radius=500`,
         { timeout: '3s', tags: { name: 'risk-score' } }
       ), {
         'risk-score bounded': r => r.status === 200
       });
+    }
 
-      if (iteration % 4 === 0) {
-        const safePathBody = JSON.stringify({
-          start: { x: -1.8985 + offset, y: 52.4814 + offset },
-          end: { x: -1.9300 - offset, y: 52.4510 - offset },
-          preferences: [],
-          safetyWeight: 0.5
-        });
+    export function poiReads() {
+      const iteration = exec.scenario.iterationInTest;
+      const offset = ((iteration % 251) - 125) * 0.000015;
 
-        const safePathParams = Object.assign({}, jsonHeaders, { tags: { name: 'safe-path' } });
+      check(http.get(
+        `${baseUrl}/api/v1/spatial/poi?lat=${52.48625 + offset}&lng=${-1.8899 - offset}&radius=750`,
+        { timeout: '3s', tags: { name: 'poi' } }
+      ), {
+        'poi bounded': r => r.status === 200
+      });
+    }
 
-        check(http.post(`${baseUrl}/api/v1/routing/safe-path`, safePathBody, safePathParams), {
-          'safe-path accepted': r => r.status === 200 || r.status === 202 || r.status === 404 || r.status === 503 || r.status === 504
-        });
+    export function routeJobs() {
+      const pair = jitteredPair();
+      const profile = exec.scenario.iterationInTest % 3 === 0 ? 'manual-wheelchair' : 'standard';
+      const safePathBody = JSON.stringify({
+        start: pair.start,
+        end: pair.end,
+        preferences: profile === 'manual-wheelchair' ? ['wheelchair'] : [],
+        safetyWeight: 0.5,
+        profile
+      });
+
+      const submit = http.post(`${baseUrl}/api/v1/routing/safe-path/options`, safePathBody, {
+        ...jsonHeaders,
+        tags: { name: 'route-submit' }
+      });
+
+      check(submit, {
+        'route accepted': r => r.status === 200 || r.status === 202 || r.status === 404 || r.status === 503 || r.status === 504
+      });
+
+      if (submit.status !== 202) {
+        return;
       }
 
-      sleep(0.2);
+      const body = parseJson(submit);
+      if (!body || !body.jobId) {
+        check(submit, { 'route job id present': () => false });
+        return;
+      }
+
+      const deadline = Date.now() + routePollTimeoutSeconds * 1000;
+      while (Date.now() < deadline) {
+        const poll = http.get(`${baseUrl}/api/v1/routing/jobs/${body.jobId}`, {
+          timeout: '3s',
+          tags: { name: 'route-poll' }
+        });
+        const pollBody = parseJson(poll);
+        if (poll.status === 200 && pollBody && pollBody.status === 'Completed') {
+          check(poll, { 'route job completed': () => true });
+          return;
+        }
+
+        if (poll.status === 200 && pollBody && pollBody.status === 'Failed') {
+          check(poll, { 'route job completed': () => false });
+          return;
+        }
+
+        sleep(0.2);
+      }
+
+      check(submit, { 'route job completed': () => false });
     }

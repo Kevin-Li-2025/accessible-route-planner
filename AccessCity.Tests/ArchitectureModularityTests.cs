@@ -166,10 +166,10 @@ public sealed class ArchitectureModularityTests
         Assert.Contains("Messaging__UseKafka: ${MESSAGING_USE_KAFKA:-true}", File.ReadAllText(Path.Combine(root, "docker-compose.yml")), StringComparison.Ordinal);
         Assert.Contains("Workers__Routing__Enabled: \"false\"", configMap, StringComparison.Ordinal);
         Assert.Contains("Workers__Routing__Enabled: \"true\"", configMap, StringComparison.Ordinal);
-        Assert.Contains("Kafka__TopicPartitions: \"12\"", configMap, StringComparison.Ordinal);
+        Assert.Contains("Kafka__TopicPartitions: \"48\"", configMap, StringComparison.Ordinal);
         Assert.Contains("topic: accesscity_routejobrequestedevent", scaledObject, StringComparison.Ordinal);
-        Assert.Contains("minReplicaCount: 2", scaledObject, StringComparison.Ordinal);
-        Assert.Contains("maxReplicaCount: 12", scaledObject, StringComparison.Ordinal);
+        Assert.Contains("minReplicaCount: 6", scaledObject, StringComparison.Ordinal);
+        Assert.Contains("maxReplicaCount: 100", scaledObject, StringComparison.Ordinal);
         Assert.Contains("CreatePartitionsAsync", kafkaBus, StringComparison.Ordinal);
         Assert.Contains("SafePathOptionsResponse? Options", routeJobService, StringComparison.Ordinal);
         Assert.Contains("SubmitOptionsAsync", routeJobService, StringComparison.Ordinal);
@@ -211,6 +211,42 @@ public sealed class ArchitectureModularityTests
     }
 
     [Fact]
+    public void Route_edge_costs_are_precomputed_and_versioned_for_worker_routing()
+    {
+        var root = FindRepositoryRoot();
+        var costModel = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "RouteEdgeCostModel.cs"));
+        var importer = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "OsmImportService.cs"));
+        var routing = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "RoutingService.cs"));
+        var routeGraph = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "RouteGraphRepository.cs"));
+        var fingerprint = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "RouteRequestFingerprint.cs"));
+        var migration = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Data", "Migrations", "20260523223500_AddRouteEdgeAccessibilityCostProfile.cs"));
+
+        Assert.Contains("public const int Version = 1", costModel, StringComparison.Ordinal);
+        Assert.Contains("RouteEdgeCostModel.Compute", importer, StringComparison.Ordinal);
+        Assert.Contains("RouteEdgeCostModel.ResolvePenaltySeconds", routing, StringComparison.Ordinal);
+        Assert.Contains("WheelchairAccessibilityPenaltySeconds", routeGraph, StringComparison.Ordinal);
+        Assert.Contains("route_graph:v5", routeGraph, StringComparison.Ordinal);
+        Assert.Contains("route-v5-precomputed-edge-cost-v1-risk-v2", fingerprint, StringComparison.Ordinal);
+        Assert.Contains("wheelchair_accessibility_penalty_seconds", migration, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Route_graph_hot_reads_can_use_read_only_postgres_path()
+    {
+        var root = FindRepositoryRoot();
+        var factory = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Data", "HotPathDbContextFactory.cs"));
+        var resolver = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Configuration", "PostgresConnectionStringResolver.cs"));
+        var repository = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "RouteGraphRepository.cs"));
+        var configMap = File.ReadAllText(Path.Combine(root, "deploy", "kubernetes", "configmap.yaml"));
+
+        Assert.Contains("IHotPathDbContextFactory", factory, StringComparison.Ordinal);
+        Assert.Contains("READONLY_DATABASE_URL", resolver, StringComparison.Ordinal);
+        Assert.Contains("READ_REPLICA_DATABASE_URL", resolver, StringComparison.Ordinal);
+        Assert.Contains("CreateDbContext()", repository, StringComparison.Ordinal);
+        Assert.Contains("Postgres__UseReadOnlyForHotPaths: \"true\"", configMap, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Route_graph_warmup_is_worker_scoped_and_uses_configured_shards()
     {
         var root = FindRepositoryRoot();
@@ -223,6 +259,7 @@ public sealed class ArchitectureModularityTests
         Assert.Contains("Routing__RouteGraphWarmupEnabled: \"false\"", configMap, StringComparison.Ordinal);
         Assert.Contains("Routing__RouteGraphWarmupEnabled: \"true\"", configMap, StringComparison.Ordinal);
         Assert.Contains("Routing__RouteGraphWarmupRoutes__0__Name: \"birmingham-core\"", configMap, StringComparison.Ordinal);
+        Assert.Contains("Routing__RouteGraphWarmupRoutes__3__Name: \"birmingham-jewellery-core\"", configMap, StringComparison.Ordinal);
     }
 
     [Fact]

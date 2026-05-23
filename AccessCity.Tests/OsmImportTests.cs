@@ -68,6 +68,16 @@ public class OsmImportTests : IClassFixture<AccessCityApiFactory>
         Assert.True(accessibleEdge.HasTactilePaving);
         Assert.NotNull(accessibleEdge.Access);
         Assert.Contains("wheelchair=yes", accessibleEdge.Access);
+        Assert.Equal(1, accessibleEdge.AccessibilityCostVersion);
+        Assert.Equal(0, accessibleEdge.WheelchairAccessibilityPenaltySeconds, precision: 6);
+        Assert.True(accessibleEdge.AccessibilityDataQuality > 0.9);
+
+        var incompleteEdge = await dbContext.RouteEdges
+            .Where(edge => edge.SourceWayId == 2002)
+            .FirstAsync();
+
+        Assert.True(incompleteEdge.WheelchairAccessibilityPenaltySeconds > incompleteEdge.StandardAccessibilityPenaltySeconds);
+        Assert.True(incompleteEdge.AccessibilityDataQuality < accessibleEdge.AccessibilityDataQuality);
 
         var latestRun = await dbContext.FeedIngestionRuns
             .OrderByDescending(run => run.Id)

@@ -1371,7 +1371,7 @@ public class RoutingService : IRoutingService
 
         double edgeRisk = Math.Clamp((edge.BaseSafetyCost + liveRisk) / 2.0, 0.0, 1.0);
         double riskPenaltySeconds = baseSeconds * edgeRisk * 4.0 * w;
-        double accessibilityPenaltySeconds = ComputeSoftAccessibilityPenaltySeconds(edge, request.Profile) * w;
+        double accessibilityPenaltySeconds = RouteEdgeCostModel.ResolvePenaltySeconds(edge, request.Profile) * w;
 
         double modifier = 1.0;
         foreach (var pref in request.Preferences)
@@ -1392,29 +1392,6 @@ public class RoutingService : IRoutingService
         "stroller" => 1.1,
         _ => WalkingSpeed
     };
-
-    private static double ComputeSoftAccessibilityPenaltySeconds(GraphEdge edge, string profile)
-    {
-        var baseSeconds = edge.DistanceMetres / ResolveProfileSpeed(profile);
-        var strict = IsAccessibilityProfile(profile);
-        var surface = edge.SurfaceType.ToLowerInvariant();
-        double penalty = 0;
-
-        if (edge.HasStairs) penalty += strict ? 600 : 90;
-        if (edge.HasBarrier) penalty += strict ? 600 : 60;
-        if (edge.KerbHeight > 0.03) penalty += strict ? 300 : 30;
-        if (surface is "unknown") penalty += baseSeconds * (strict ? 0.6 : 0.15);
-        if (surface is "cobblestone" or "sett") penalty += baseSeconds * (strict ? 2.0 : 0.4);
-        if (surface is "gravel" or "unpaved" or "sand" or "dirt" or "earth" or "grass")
-            penalty += baseSeconds * (strict ? 4.0 : 0.8);
-        if (!SmoothnessAllowsWheels(edge.Smoothness)) penalty += strict ? 300 : 45;
-        else if (strict && string.IsNullOrWhiteSpace(edge.Smoothness)) penalty += baseSeconds * 0.25;
-        if (edge.WidthMetres.HasValue && edge.WidthMetres < 0.9) penalty += strict ? 300 : 30;
-        else if (strict && !edge.WidthMetres.HasValue) penalty += baseSeconds * 0.35;
-        if (edge.IsSteep) penalty += baseSeconds * (strict ? 1.5 : 0.5);
-
-        return penalty;
-    }
 
     private static List<long> ReconstructPath(Dictionary<long, long> cameFrom, long current)
     {

@@ -10,7 +10,8 @@ Date: 2026-05-22
 | Hazard overlays | `SpatialController.GetMapOverlay` | Ordered latest hazards require a sort as table grows. | `IX_hazard_report_status_reported_at` and existing reported-at index cover active/latest hazard reads. |
 | Vector tiles | `SpatialCacheService.GetHazardsInBoundsAsync` | DB fallback uses `ST_Intersects`; needed a GiST index on `hazard_report.geom`. | `IX_hazard_report_geom_gist`. |
 | POI search | `SpatialController.GetPointsOfInterest` | `ST_DWithin(...::geography)` cannot use a plain geometry GiST index efficiently. | Added expression index `IX_infrastructure_assets_geometry_geog_gist` and geometry index `IX_infrastructure_assets_geometry_gist`. |
-| Route graph load | `RouteGraphRepository.LoadGraphAsync` | `route_edges` bbox scan on imported OSM graph can grow quickly. | `IX_route_edges_geometry_gist` supports `ST_Intersects`; runtime now caps `Routing__MaxRouteGraphEdges` and falls back instead of building an oversized A* graph. |
+| Route graph load | `RouteGraphRepository.LoadGraphAsync` | `route_edges` bbox scan on imported OSM graph can grow quickly. | `IX_route_edges_geometry_gist` supports `ST_Intersects`; runtime caps `Routing__MaxRouteGraphEdges`, caches pre-indexed shards, and can use `READONLY_DATABASE_URL` for hot read traffic. |
+| Route edge cost | OSM import -> worker A* | Recomputing surface/smoothness/width/kerb penalties during every edge expansion burns CPU on large shards. | OSM import stores versioned standard/wheelchair/stroller accessibility penalties on `route_edges`; workers read precomputed costs from graph shards. |
 | Route hazard load | `HazardQueryService.LoadHazardsForRouteAsync` | Loading all active hazards becomes the first DB bottleneck as reports grow. | Runtime now queries only hazards inside the route envelope and uses `IX_hazard_report_active_geom_gist`. |
 | Point risk hazard load | `HazardQueryService.LoadHazardsNearPointAsync` | Risk endpoints used to scan every active hazard. | Runtime now uses `ST_DWithin` around the requested point, caps per-request hazard rows, and uses `IX_hazard_report_active_geom_geog_gist`. |
 | Infrastructure risk | `RiskScoringService.EstimateInfrastructureRiskAsync` | EF `Distance` expression scanned and sorted nearby route edges. | Npgsql path now uses `ST_DWithin` plus GiST KNN ordering on `route_edges.Geometry`. |
@@ -29,6 +30,7 @@ Indexes are created idempotently during API startup after migrations and schema 
 - `IX_infrastructure_assets_geometry_geog_gist`
 - `IX_infrastructure_assets_updated_at`
 - `IX_route_edges_geometry_gist`
+- `IX_route_edges_accessibility_cost_version`
 - `IX_route_nodes_location_gist`
 - `IX_feed_ingestion_runs_source_status_started`
 - `IX_hazard_report_reported_at_brin`

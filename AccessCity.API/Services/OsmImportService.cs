@@ -343,6 +343,20 @@ public sealed class OsmImportService : IOsmImportService
         var kerbHeight = ParseKerbHeight(tags);
         var wheelchair = tags.GetValueOrDefault("wheelchair");
         var access = BuildAccessDescriptor(tags);
+        var distanceMetres = RiskScoringService.HaversineDistance(fromPoint.Y, fromPoint.X, toPoint.Y, toPoint.X);
+        var hasStairs = string.Equals(highway, "steps", StringComparison.OrdinalIgnoreCase);
+        var hasBarrier = IsBlockingBarrier(tags, kerbHeight);
+        var isSteep = IsSteep(incline);
+        var costProfile = RouteEdgeCostModel.Compute(
+            distanceMetres,
+            surface,
+            smoothness,
+            hasStairs,
+            hasBarrier,
+            kerbHeight,
+            width,
+            isSteep,
+            access);
 
         var line = _geometryFactory.CreateLineString(new[]
         {
@@ -356,10 +370,10 @@ public sealed class OsmImportService : IOsmImportService
             ToNodeId = toId,
             SourceWayId = way.Id,
             Geometry = line,
-            DistanceMetres = RiskScoringService.HaversineDistance(fromPoint.Y, fromPoint.X, toPoint.Y, toPoint.X),
+            DistanceMetres = distanceMetres,
             BaseSafetyCost = ComputeBaseSafetyCost(surface, smoothness, lit, highway, incline, barrier, kerbHeight, width, wheelchair),
             SurfaceType = surface,
-            HasStairs = string.Equals(highway, "steps", StringComparison.OrdinalIgnoreCase),
+            HasStairs = hasStairs,
             HasCrossing = HasCrossing(tags),
             LightingQuality = lit?.ToLowerInvariant() switch
             {
@@ -368,14 +382,19 @@ public sealed class OsmImportService : IOsmImportService
                 "no" => 0.1,
                 _ => 0.45
             },
-            IsSteep = IsSteep(incline),
+            IsSteep = isSteep,
             IsUnderConstruction = IsUnderConstruction(tags),
             KerbHeight = kerbHeight,
             Smoothness = smoothness,
             WidthMetres = width,
             HasTactilePaving = IsYes(GetFirstTag(tags, "tactile_paving", "sidewalk:tactile_paving")),
-            HasBarrier = IsBlockingBarrier(tags, kerbHeight),
+            HasBarrier = hasBarrier,
             Access = access,
+            AccessibilityCostVersion = costProfile.Version,
+            StandardAccessibilityPenaltySeconds = costProfile.StandardAccessibilityPenaltySeconds,
+            WheelchairAccessibilityPenaltySeconds = costProfile.WheelchairAccessibilityPenaltySeconds,
+            StrollerAccessibilityPenaltySeconds = costProfile.StrollerAccessibilityPenaltySeconds,
+            AccessibilityDataQuality = costProfile.AccessibilityDataQuality,
             Tags = ToJsonDocument(tags)
         };
     }

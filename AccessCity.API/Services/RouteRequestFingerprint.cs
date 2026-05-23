@@ -7,7 +7,7 @@ namespace AccessCity.API.Services;
 
 public static class RouteRequestFingerprint
 {
-    public const string AlgorithmVersion = "route-v4-cost-v2-risk-v2";
+    public const string AlgorithmVersion = "route-v5-precomputed-edge-cost-v1-risk-v2";
 
     public static string CanonicalPreferences(IEnumerable<string>? preferences)
     {

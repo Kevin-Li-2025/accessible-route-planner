@@ -31,6 +31,11 @@ public class RouteEdge
     public bool HasTactilePaving { get; set; }
     public bool HasBarrier { get; set; }
     public string? Access { get; set; }
+    public int AccessibilityCostVersion { get; set; }
+    public double StandardAccessibilityPenaltySeconds { get; set; }
+    public double WheelchairAccessibilityPenaltySeconds { get; set; }
+    public double StrollerAccessibilityPenaltySeconds { get; set; }
+    public double AccessibilityDataQuality { get; set; } = 1.0;
     public JsonDocument Tags { get; set; } = JsonDocument.Parse("{}");
 
     public RouteNode FromNode { get; set; } = null!;

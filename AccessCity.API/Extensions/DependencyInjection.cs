@@ -90,6 +90,8 @@ public static class DependencyInjection
             }
         }, dbContextPoolSize);
 
+        services.AddScoped<IHotPathDbContextFactory, HotPathDbContextFactory>();
+
         return services;
     }
 

@@ -21,13 +21,25 @@ spec:
           env:
             - name: BASE_URL
               value: http://accesscity-api
+            - name: TEST_DURATION
+              value: 10m
+            - name: ROUTE_RATE
+              value: "80"
+            - name: RISK_RATE
+              value: "180"
+            - name: POI_RATE
+              value: "60"
+            - name: READINESS_RATE
+              value: "40"
+            - name: ROUTE_POLL_TIMEOUT_SECONDS
+              value: "20"
           resources:
             requests:
-              cpu: "250m"
-              memory: "256Mi"
-            limits:
               cpu: "1"
               memory: "512Mi"
+            limits:
+              cpu: "3"
+              memory: "1Gi"
           volumeMounts:
             - name: loadtest-script
               mountPath: /scripts

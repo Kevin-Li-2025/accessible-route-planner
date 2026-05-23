@@ -33,6 +33,8 @@ containers consume the topics through the shared `accesscity-workers` consumer g
 worker processes each route/import job even when multiple workers are running.
 The Kafka container uses the official `apache/kafka` image in single-node KRaft mode for local
 smoke tests; the app also ensures main/retry/DLQ topics exist before publishing or consuming.
+Kubernetes defaults create 48 partitions and let route workers scale up to 100 pods; use a real
+multi-broker Kafka cluster before running that ceiling in production.
 
 Kafka consumers now use bounded retry and DLQ routing:
 
@@ -57,6 +59,11 @@ Risk scoring also uses `IDistributedCache` for external crime/environment data, 
 kept only as a short-lived L1 cache. Imported route graph shards use the same pattern: each worker
 keeps a local pre-indexed shard in memory and writes a compact Redis snapshot so newly scaled
 workers can hydrate hot graph shards without immediately repeating the PostGIS edge/node load.
+OSM import now also precomputes versioned accessibility penalties per route edge for standard,
+wheelchair, and stroller profiles. Route workers read those costs from cached graph shards instead
+of recomputing surface/smoothness/width/kerb penalties for every A* edge expansion.
+Worker config warms several Birmingham shard routes on a timer; add routes that match real demand
+clusters before a launch so city-core shards are hot before the first user request.
 
 ## Kubernetes Path
 
@@ -88,6 +95,9 @@ Set `DATABASE_URL` to the PgBouncer/pooler service for API and worker traffic, a
 `Postgres__UseDirectDatabaseUrl=true`, so DDL and schema normalization bypass transaction pooling
 while regular traffic stays behind PgBouncer. Keep per-pod `Postgres__MaxPoolSize` small when a
 pooler is present; the checked-in manifests use 20 for API pods and 10 for workers.
+Set `READONLY_DATABASE_URL` or `READ_REPLICA_DATABASE_URL` when a read replica/pooler is available.
+With `Postgres__UseReadOnlyForHotPaths=true`, route graph shard loads use that read-only path and
+fall back to the scoped primary connection when no replica URL is configured.
 `Postgres__UseStartupSessionParameters` defaults to `false` because providers such as Neon reject
 `statement_timeout` startup options on pooled connections; use database-level settings there.
 

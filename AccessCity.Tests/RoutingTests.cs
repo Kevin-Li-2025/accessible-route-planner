@@ -487,7 +487,7 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
 
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"route_graph:v4:{graphVersion}:{edgeLimit}:{minLon:F4}:{minLat:F4}:{maxLon:F4}:{maxLat:F4}");
+            $"route_graph:v5:{graphVersion}:{edgeLimit}:{minLon:F4}:{minLat:F4}:{maxLon:F4}:{maxLat:F4}");
     }
 
     [Fact]

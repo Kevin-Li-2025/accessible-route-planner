@@ -6,7 +6,7 @@ spec:
   scaleTargetRef:
     name: accesscity-api
   minReplicaCount: 6
-  maxReplicaCount: 18
+  maxReplicaCount: 40
   fallback:
     failureThreshold: 3
     replicas: 6
@@ -89,8 +89,8 @@ metadata:
 spec:
   scaleTargetRef:
     name: accesscity-worker
-  minReplicaCount: 2
-  maxReplicaCount: 12
+  minReplicaCount: 6
+  maxReplicaCount: 100
   pollingInterval: 30
   cooldownPeriod: 300
   triggers:
@@ -99,12 +99,12 @@ spec:
         bootstrapServers: kafka:9092
         consumerGroup: accesscity-workers
         topic: accesscity_routejobrequestedevent
-        lagThreshold: "6"
+        lagThreshold: "4"
         activationLagThreshold: "2"
     - type: kafka
       metadata:
         bootstrapServers: kafka:9092
         consumerGroup: accesscity-workers
         topic: accesscity_osmimportstartedevent
-        lagThreshold: "3"
+        lagThreshold: "2"
         activationLagThreshold: "1"
