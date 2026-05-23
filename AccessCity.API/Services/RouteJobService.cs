@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using AccessCity.API.Configuration;
 using AccessCity.API.Exceptions;
+using AccessCity.API.Messaging;
 using AccessCity.API.Models;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Hosting;
@@ -21,6 +22,9 @@ public interface IRouteJobService
 {
     /// <summary>Submits a route computation and returns a job ID immediately.</summary>
     Task<string> SubmitAsync(RouteRequest request, List<HazardReport>? hazards = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Processes a queued route job. Called by the route worker consumer.</summary>
+    Task ProcessQueuedJobAsync(RouteJobRequestedEvent @event, CancellationToken cancellationToken = default);
 
     /// <summary>Polls the status of a previously submitted job.</summary>
     Task<RouteJobResult?> GetResultAsync(string jobId, CancellationToken cancellationToken = default);
@@ -43,30 +47,36 @@ public sealed class RouteJobService : IRouteJobService
 {
     private readonly ConcurrentDictionary<string, RouteJobResult> _jobs = new();
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IMessageBus _messageBus;
     private readonly IRouteCoalescingService _coalescing;
     private readonly IRouteComputationLimiter _routeLimiter;
     private readonly IDistributedCache _distributedCache;
     private readonly IHostApplicationLifetime _lifetime;
     private readonly ILogger<RouteJobService> _logger;
     private readonly RoutingOptions _options;
+    private readonly bool _dispatchJobsToWorker;
     private static readonly TimeSpan JobTtl = TimeSpan.FromMinutes(5);
     private static readonly JsonSerializerOptions JobJsonOptions = CreateJobJsonOptions();
 
     public RouteJobService(
         IServiceScopeFactory scopeFactory,
+        IMessageBus messageBus,
         IRouteCoalescingService coalescing,
         IRouteComputationLimiter routeLimiter,
         IDistributedCache distributedCache,
         IHostApplicationLifetime lifetime,
+        IConfiguration configuration,
         IOptions<RoutingOptions> options,
         ILogger<RouteJobService> logger)
     {
         _scopeFactory = scopeFactory;
+        _messageBus = messageBus;
         _coalescing = coalescing;
         _routeLimiter = routeLimiter;
         _distributedCache = distributedCache;
         _lifetime = lifetime;
         _options = options.Value;
+        _dispatchJobsToWorker = _options.DispatchJobsToWorker || configuration.GetValue<bool>("Messaging:UseKafka");
         _logger = logger;
     }
 
@@ -86,12 +96,37 @@ public sealed class RouteJobService : IRouteJobService
         _jobs[jobId] = result;
         await PersistAsync(result, cancellationToken);
 
-        // Fire-and-forget the computation on the thread pool.
+        if (_dispatchJobsToWorker)
+        {
+            await _messageBus.PublishAsync(
+                new RouteJobRequestedEvent(jobId, request, result.SubmittedAt),
+                cancellationToken);
+            return jobId;
+        }
+
+        // Local-dev fallback: compute in-process when Kafka worker dispatch is disabled.
         _ = Task.Run(
-            () => ComputeAsync(jobId, request, hazards, _lifetime.ApplicationStopping),
+            () => ComputeAsync(jobId, request, hazards, result.SubmittedAt, _lifetime.ApplicationStopping),
             CancellationToken.None);
 
         return jobId;
+    }
+
+    public async Task ProcessQueuedJobAsync(RouteJobRequestedEvent @event, CancellationToken cancellationToken = default)
+    {
+        var existing = await GetResultAsync(@event.JobId, cancellationToken);
+        if (existing?.Status == RouteJobStatus.Completed)
+        {
+            _jobs[@event.JobId] = existing;
+            return;
+        }
+
+        await ComputeAsync(
+            @event.JobId,
+            @event.Request,
+            hazards: null,
+            @event.SubmittedAtUtc,
+            cancellationToken);
     }
 
     public async Task<RouteJobResult?> GetResultAsync(string jobId, CancellationToken cancellationToken = default)
@@ -122,9 +157,10 @@ public sealed class RouteJobService : IRouteJobService
         string jobId,
         RouteRequest request,
         List<HazardReport>? hazards,
+        DateTime submittedAt,
         CancellationToken stoppingToken)
     {
-        var result = _jobs[jobId];
+        var result = await LoadOrCreateJobResultAsync(jobId, submittedAt, CancellationToken.None);
         result.Status = RouteJobStatus.Processing;
         await PersistAsync(result, CancellationToken.None);
 
@@ -180,6 +216,33 @@ public sealed class RouteJobService : IRouteJobService
 
         // Auto-expire completed jobs after 5 minutes.
         _ = CleanupAfterDelay(jobId, JobTtl, stoppingToken);
+    }
+
+    private async Task<RouteJobResult> LoadOrCreateJobResultAsync(
+        string jobId,
+        DateTime submittedAt,
+        CancellationToken cancellationToken)
+    {
+        if (_jobs.TryGetValue(jobId, out var local))
+        {
+            return local;
+        }
+
+        var persisted = await GetResultAsync(jobId, cancellationToken);
+        if (persisted is not null)
+        {
+            _jobs[jobId] = persisted;
+            return persisted;
+        }
+
+        var created = new RouteJobResult
+        {
+            JobId = jobId,
+            Status = RouteJobStatus.Pending,
+            SubmittedAt = submittedAt
+        };
+        _jobs[jobId] = created;
+        return created;
     }
 
     private async Task CleanupAfterDelay(string jobId, TimeSpan delay, CancellationToken stoppingToken)

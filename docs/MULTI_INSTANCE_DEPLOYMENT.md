@@ -16,22 +16,29 @@ Run API replicas with Kafka enabled and OSM/tile workers disabled on API contain
 
 ```bash
 MESSAGING_USE_KAFKA=true \
+Routing__DispatchJobsToWorker=true \
 API_OSM_WORKER_ENABLED=false \
+API_ROUTING_WORKER_ENABLED=false \
 API_TILE_WORKER_ENABLED=false \
 docker compose --profile worker up --scale api=2 api worker kafka redis db
 ```
 
-The API publishes `OsmImportStartedEvent` messages to Kafka. Worker containers consume the
-same topic through the shared `accesscity-workers` consumer group, so only one worker processes
-each import job even when multiple workers are running.
+The API publishes `RouteJobRequestedEvent` and `OsmImportStartedEvent` messages to Kafka. Worker
+containers consume the topics through the shared `accesscity-workers` consumer group, so only one
+worker processes each route/import job even when multiple workers are running.
 
 Kafka consumers now use bounded retry and DLQ routing:
 
+- route job main topic: `accesscity_routejobrequestedevent`
+- route job retry topic: `accesscity_routejobrequestedevent.retry`
+- route job dead-letter topic: `accesscity_routejobrequestedevent.dlq`
 - main topic: `accesscity_osmimportstartedevent`
 - retry topic: `accesscity_osmimportstartedevent.retry`
 - dead-letter topic: `accesscity_osmimportstartedevent.dlq`
 - knobs: `Kafka__MaxProcessingAttempts`, `Kafka__RetryDelaySeconds`
 
+Route jobs are persisted to distributed cache for cross-replica polling; poll
+`GET /api/v1/routing/jobs/{jobId}` after `POST /api/v1/routing/safe-path/async`.
 OSM import jobs are persisted in `osm_import_jobs`; poll
 `GET /api/v1/admin/osm/import-jobs/{jobId}` after `POST /import-jobs`.
 

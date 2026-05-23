@@ -2,8 +2,10 @@ using AccessCity.API.Configuration;
 using AccessCity.API.Data;
 using AccessCity.API.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using NetTopologySuite.Geometries;
+using System.Globalization;
 
 namespace AccessCity.API.Services;
 
@@ -15,12 +17,20 @@ public interface IRouteGraphRepository
 public sealed class RouteGraphRepository : IRouteGraphRepository
 {
     private readonly AppDbContext _dbContext;
+    private readonly IMemoryCache _cache;
+    private readonly ILogger<RouteGraphRepository> _logger;
     private readonly RoutingOptions _options;
 
-    public RouteGraphRepository(AppDbContext dbContext, IOptions<RoutingOptions> options)
+    public RouteGraphRepository(
+        AppDbContext dbContext,
+        IMemoryCache cache,
+        IOptions<RoutingOptions> options,
+        ILogger<RouteGraphRepository> logger)
     {
         _dbContext = dbContext;
+        _cache = cache;
         _options = options.Value;
+        _logger = logger;
     }
 
     public async Task<RouteGraphData> LoadGraphAsync(
@@ -28,21 +38,35 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         Coordinate end,
         CancellationToken cancellationToken = default)
     {
-        var padding = ComputePaddingDegrees(start, end);
-        var minLon = Math.Min(start.X, end.X) - padding;
-        var maxLon = Math.Max(start.X, end.X) + padding;
-        var minLat = Math.Min(start.Y, end.Y) - padding;
-        var maxLat = Math.Max(start.Y, end.Y) + padding;
         var edgeLimit = Math.Max(100, _options.MaxRouteGraphEdges);
+        var region = ComputeShardRegion(start, end);
+        var cacheKey = BuildCacheKey(region, edgeLimit);
 
+        if (_cache.TryGetValue(cacheKey, out RouteGraphData? cached) && cached is not null)
+        {
+            return cached;
+        }
+
+        var graphData = await LoadGraphRegionAsync(region, edgeLimit, cacheKey, cancellationToken);
+        var ttl = TimeSpan.FromSeconds(Math.Max(30, _options.RouteGraphCacheTtlSeconds));
+        _cache.Set(cacheKey, graphData, ttl);
+        return graphData;
+    }
+
+    private async Task<RouteGraphData> LoadGraphRegionAsync(
+        GraphShardRegion region,
+        int edgeLimit,
+        string cacheKey,
+        CancellationToken cancellationToken)
+    {
         var edges = await _dbContext.RouteEdges
             .FromSqlInterpolated($"""
                 SELECT *
                 FROM route_edges
                 WHERE ST_Intersects(
                     "Geometry",
-                    ST_MakeEnvelope({minLon}, {minLat}, {maxLon}, {maxLat}, 4326))
-                ORDER BY "Geometry" <-> ST_SetSRID(ST_MakePoint({start.X}, {start.Y}), 4326)
+                    ST_MakeEnvelope({region.MinLon}, {region.MinLat}, {region.MaxLon}, {region.MaxLat}, 4326))
+                ORDER BY "Geometry" <-> ST_Centroid(ST_MakeEnvelope({region.MinLon}, {region.MinLat}, {region.MaxLon}, {region.MaxLat}, 4326))
                 LIMIT {edgeLimit + 1}
                 """)
             .AsNoTracking()
@@ -106,7 +130,24 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
             };
         }
 
-        return new RouteGraphData { Nodes = graph, IsTruncated = isTruncated };
+        var graphData = new RouteGraphData
+        {
+            Nodes = graph,
+            IsTruncated = isTruncated,
+            ShardKey = cacheKey,
+            LoadedEdgeCount = edges.Count,
+            SpatialBucketSizeDegrees = 0.001
+        };
+        BuildSpatialBuckets(graphData);
+
+        _logger.LogDebug(
+            "Loaded route graph shard {ShardKey}: {NodeCount} nodes, {EdgeCount} edges, truncated={IsTruncated}",
+            cacheKey,
+            graph.Count,
+            edges.Count,
+            isTruncated);
+
+        return graphData;
     }
 
     private static double ComputePaddingDegrees(Coordinate start, Coordinate end)
@@ -115,4 +156,44 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         var longitudeDelta = Math.Abs(start.X - end.X);
         return Math.Max(0.01, Math.Max(latitudeDelta, longitudeDelta) * 0.35);
     }
+
+    private GraphShardRegion ComputeShardRegion(Coordinate start, Coordinate end)
+    {
+        var padding = ComputePaddingDegrees(start, end);
+        var minLon = Math.Min(start.X, end.X) - padding;
+        var maxLon = Math.Max(start.X, end.X) + padding;
+        var minLat = Math.Min(start.Y, end.Y) - padding;
+        var maxLat = Math.Max(start.Y, end.Y) + padding;
+        var shardSize = Math.Clamp(_options.RouteGraphShardSizeDegrees, 0.002, 0.05);
+
+        return new GraphShardRegion(
+            Math.Floor(minLon / shardSize) * shardSize,
+            Math.Floor(minLat / shardSize) * shardSize,
+            Math.Ceiling(maxLon / shardSize) * shardSize,
+            Math.Ceiling(maxLat / shardSize) * shardSize);
+    }
+
+    private static string BuildCacheKey(GraphShardRegion region, int edgeLimit) =>
+        string.Create(CultureInfo.InvariantCulture,
+            $"route_graph:v3:{edgeLimit}:{region.MinLon:F4}:{region.MinLat:F4}:{region.MaxLon:F4}:{region.MaxLat:F4}");
+
+    private static void BuildSpatialBuckets(RouteGraphData graphData)
+    {
+        var bucketSize = graphData.SpatialBucketSizeDegrees;
+        foreach (var node in graphData.Nodes.Values)
+        {
+            var bucket = (
+                X: (int)Math.Floor(node.Location.X / bucketSize),
+                Y: (int)Math.Floor(node.Location.Y / bucketSize));
+            if (!graphData.SpatialBuckets.TryGetValue(bucket, out var nodeIds))
+            {
+                nodeIds = new List<long>();
+                graphData.SpatialBuckets[bucket] = nodeIds;
+            }
+
+            nodeIds.Add(node.Id);
+        }
+    }
+
+    private sealed record GraphShardRegion(double MinLon, double MinLat, double MaxLon, double MaxLat);
 }

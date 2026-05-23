@@ -298,8 +298,8 @@ public class RoutingService : IRoutingService
         List<HazardReport> hazardList,
         RouteGraphData graphData)
     {
-        long startId = FindNearest(graphData.Nodes, request.Start);
-        long endId = FindNearest(graphData.Nodes, request.End);
+        long startId = FindNearest(graphData, request.Start);
+        long endId = FindNearest(graphData, request.End);
 
         if (startId == endId)
         {
@@ -574,29 +574,13 @@ public class RoutingService : IRoutingService
         {
             var coord = routeCoords[i];
 
-            // Find the nearest graph node within ~50m
-            long nearestId = -1;
-            double nearestDist = 50.0; // metres threshold
-
-            foreach (var node in graphData.Nodes.Values)
-            {
-                double dist = RiskScoringService.HaversineDistance(
-                    coord.Y, coord.X, node.Location.Y, node.Location.X);
-                if (dist < nearestDist)
-                {
-                    nearestDist = dist;
-                    nearestId = node.Id;
-                }
-            }
-
-            if (nearestId < 0) continue;
-
-            var nearestNode = graphData.Nodes[nearestId];
+            var nearestNode = FindNearestNode(graphData, coord, maxDistanceMetres: 50.0);
+            if (nearestNode is null) continue;
 
             // Check all edges from this node for obstacles
             foreach (var (targetId, edge) in nearestNode.Edges)
             {
-                if (!checkedEdges.Add((nearestId, targetId))) continue;
+                if (!checkedEdges.Add((nearestNode.Id, targetId))) continue;
 
                 // Profile-specific penalties
                 if (ProfileFilters.TryGetValue(profile, out var filter) && !filter(edge))
@@ -872,15 +856,10 @@ public class RoutingService : IRoutingService
 
         foreach (var point in samplePoints)
         {
-            // Find nearest graph node within 30m
-            foreach (var node in graphData.Nodes.Values)
+            // Find nearby graph nodes from the prebuilt shard index instead of scanning the whole graph.
+            foreach (var node in FindNodesNear(graphData, point, radiusMetres: 30.0))
             {
                 if (!checkedNodes.Add(node.Id)) continue;
-
-                double dist = RiskScoringService.HaversineDistance(
-                    point.Y, point.X, node.Location.Y, node.Location.X);
-
-                if (dist > 30) continue;
 
                 foreach (var (_, edge) in node.Edges)
                 {
@@ -1054,6 +1033,7 @@ public class RoutingService : IRoutingService
         var open = new PriorityQueue<long, double>();
         open.Enqueue(startId, fScore[startId]);
         var closed = new HashSet<long>();
+        var riskMemo = new Dictionary<(long From, long To), double>();
 
         // Build combined edge filter from preferences AND profile
         var edgeFilterChain = BuildEdgeFilterChain(request);
@@ -1086,8 +1066,13 @@ public class RoutingService : IRoutingService
                 }
                 if (!passesFilters) continue;
 
-                double edgeCost = ComputeEdgeCost(edge, currentNode, graph[neighbourId],
-                                                   request, hazards);
+                double edgeCost = ComputeEdgeCost(
+                    edge,
+                    currentNode,
+                    graph[neighbourId],
+                    request,
+                    hazards,
+                    riskMemo);
                 double tentativeG = gScore[current] + edgeCost;
 
                 if (tentativeG < gScore.GetValueOrDefault(neighbourId, double.MaxValue))
@@ -1137,14 +1122,24 @@ public class RoutingService : IRoutingService
 
     private double ComputeEdgeCost(
         GraphEdge edge, GraphNode fromNode, GraphNode toNode,
-        RouteRequest request, List<HazardReport> hazards)
+        RouteRequest request,
+        List<HazardReport> hazards,
+        Dictionary<(long From, long To), double> riskMemo)
     {
         double w = Math.Clamp(request.SafetyWeight, 0.0, 1.0);
         double distCost = edge.DistanceMetres;
-        double midLat = (fromNode.Location.Y + toNode.Location.Y) / 2.0;
-        double midLon = (fromNode.Location.X + toNode.Location.X) / 2.0;
 
-        double liveRisk = _riskService.QuickRisk(midLat, midLon, hazards, radiusMetres: 200);
+        var riskKey = fromNode.Id <= toNode.Id
+            ? (fromNode.Id, toNode.Id)
+            : (toNode.Id, fromNode.Id);
+        if (!riskMemo.TryGetValue(riskKey, out var liveRisk))
+        {
+            double midLat = (fromNode.Location.Y + toNode.Location.Y) / 2.0;
+            double midLon = (fromNode.Location.X + toNode.Location.X) / 2.0;
+            liveRisk = _riskService.QuickRisk(midLat, midLon, hazards, radiusMetres: 200);
+            riskMemo[riskKey] = liveRisk;
+        }
+
         double safetyCost = (edge.BaseSafetyCost + liveRisk) / 2.0 * edge.DistanceMetres;
 
         double modifier = 1.0;
@@ -1397,6 +1392,90 @@ public class RoutingService : IRoutingService
             }
         }
         return bestId;
+    }
+
+    private static long FindNearest(RouteGraphData graphData, Coordinate point)
+    {
+        var nearest = FindNearestNode(graphData, point, maxDistanceMetres: double.PositiveInfinity);
+        return nearest?.Id ?? graphData.Nodes.Keys.First();
+    }
+
+    private static GraphNode? FindNearestNode(
+        RouteGraphData graphData,
+        Coordinate point,
+        double maxDistanceMetres)
+    {
+        if (graphData.Nodes.Count == 0)
+        {
+            return null;
+        }
+
+        var candidates = double.IsFinite(maxDistanceMetres)
+            ? FindNodesNear(graphData, point, maxDistanceMetres)
+            : graphData.Nodes.Values;
+
+        GraphNode? best = null;
+        var bestDist = maxDistanceMetres;
+        foreach (var node in candidates)
+        {
+            var dist = RiskScoringService.HaversineDistance(
+                point.Y, point.X, node.Location.Y, node.Location.X);
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                best = node;
+            }
+        }
+
+        return best;
+    }
+
+    private static IEnumerable<GraphNode> FindNodesNear(
+        RouteGraphData graphData,
+        Coordinate point,
+        double radiusMetres)
+    {
+        if (graphData.SpatialBuckets.Count == 0 || graphData.SpatialBucketSizeDegrees <= 0)
+        {
+            return graphData.Nodes.Values.Where(node =>
+                RiskScoringService.HaversineDistance(
+                    point.Y, point.X, node.Location.Y, node.Location.X) <= radiusMetres);
+        }
+
+        var bucketSize = graphData.SpatialBucketSizeDegrees;
+        var origin = (
+            X: (int)Math.Floor(point.X / bucketSize),
+            Y: (int)Math.Floor(point.Y / bucketSize));
+        var bucketRadius = Math.Max(1, (int)Math.Ceiling((radiusMetres / 111_320.0) / bucketSize) + 1);
+        var nodes = new List<GraphNode>();
+
+        for (var dx = -bucketRadius; dx <= bucketRadius; dx++)
+        {
+            for (var dy = -bucketRadius; dy <= bucketRadius; dy++)
+            {
+                if (!graphData.SpatialBuckets.TryGetValue((origin.X + dx, origin.Y + dy), out var nodeIds))
+                {
+                    continue;
+                }
+
+                foreach (var nodeId in nodeIds)
+                {
+                    if (!graphData.Nodes.TryGetValue(nodeId, out var node))
+                    {
+                        continue;
+                    }
+
+                    var dist = RiskScoringService.HaversineDistance(
+                        point.Y, point.X, node.Location.Y, node.Location.X);
+                    if (dist <= radiusMetres)
+                    {
+                        nodes.Add(node);
+                    }
+                }
+            }
+        }
+
+        return nodes;
     }
 
     private static string GenerateInstruction(

@@ -3,7 +3,10 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using AccessCity.API.Data;
 using AccessCity.API.Models;
+using AccessCity.API.Services;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using NetTopologySuite.Geometries;
 using Xunit;
@@ -230,5 +233,70 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
             Assert.NotNull(v.Route.Path);
             Assert.True(v.Route.Distance > 0);
         }
+    }
+
+    [Fact]
+    public async Task SafePathAsync_Dispatches_To_Route_Worker_When_Enabled()
+    {
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Development");
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["DATABASE_URL"] = string.Empty,
+                    ["Postgres:ConnectionString"] = _factory.ConnectionString,
+                    ["Postgres:AutoMigrate"] = "true",
+                    ["OsmImport:ImportOnStartup"] = "false",
+                    ["Messaging:UseKafka"] = "false",
+                    ["Routing:DispatchJobsToWorker"] = "true",
+                    ["Workers:OsmImport:Enabled"] = "false",
+                    ["Workers:Routing:Enabled"] = "true",
+                    ["Workers:TileWarming:Enabled"] = "false"
+                });
+            });
+            builder.ConfigureServices(services =>
+            {
+                services.AddHostedService<AccessCity.API.Services.Background.RouteJobBackgroundService>();
+            });
+        });
+
+        var client = factory.CreateClient();
+        var request = new
+        {
+            Start = new { X = -1.8904, Y = 52.4862 },
+            End = new { X = -1.8894, Y = 52.4862 },
+            Preferences = new List<string>(),
+            SafetyWeight = 0.5,
+            Profile = "standard"
+        };
+
+        var accepted = await client.PostAsJsonAsync("/api/v1/routing/safe-path/async", request, JsonOptions);
+        Assert.Equal(HttpStatusCode.Accepted, accepted.StatusCode);
+
+        using var payload = JsonDocument.Parse(await accepted.Content.ReadAsStringAsync());
+        var jobId = payload.RootElement.GetProperty("jobId").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(jobId));
+
+        RouteJobResult? final = null;
+        for (var attempt = 0; attempt < 30; attempt++)
+        {
+            var poll = await client.GetAsync($"/api/v1/routing/jobs/{jobId}");
+            poll.EnsureSuccessStatusCode();
+            final = await poll.Content.ReadFromJsonAsync<RouteJobResult>(JsonOptions);
+
+            if (final?.Status is RouteJobStatus.Completed or RouteJobStatus.Failed)
+            {
+                break;
+            }
+
+            await Task.Delay(250);
+        }
+
+        Assert.NotNull(final);
+        Assert.Equal(RouteJobStatus.Completed, final!.Status);
+        Assert.NotNull(final.Route);
+        Assert.True(final.Route!.Distance > 0);
     }
 }

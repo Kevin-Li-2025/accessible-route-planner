@@ -128,6 +128,36 @@ public sealed class ArchitectureModularityTests
         Assert.Contains("GetStringAsync", routeJobService, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Route_jobs_are_dispatched_to_worker_path_in_production()
+    {
+        var root = FindRepositoryRoot();
+        var configMap = File.ReadAllText(Path.Combine(root, "deploy", "kubernetes", "configmap.yaml"));
+        var routingModule = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Modules", "RoutingModule.cs"));
+        var routeJobService = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "RouteJobService.cs"));
+
+        Assert.Contains("RouteJobBackgroundService", routingModule, StringComparison.Ordinal);
+        Assert.Contains("RouteJobRequestedEvent", routeJobService, StringComparison.Ordinal);
+        Assert.Contains("Routing__DispatchJobsToWorker: \"true\"", configMap, StringComparison.Ordinal);
+        Assert.Contains("Workers__Routing__Enabled: \"false\"", configMap, StringComparison.Ordinal);
+        Assert.Contains("Workers__Routing__Enabled: \"true\"", configMap, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Route_graph_repository_caches_preindexed_shards()
+    {
+        var root = FindRepositoryRoot();
+        var repository = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "RouteGraphRepository.cs"));
+        var models = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Models", "RouteGraphModels.cs"));
+        var routing = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "RoutingService.cs"));
+
+        Assert.Contains("IMemoryCache", repository, StringComparison.Ordinal);
+        Assert.Contains("ComputeShardRegion", repository, StringComparison.Ordinal);
+        Assert.Contains("BuildSpatialBuckets", repository, StringComparison.Ordinal);
+        Assert.Contains("SpatialBuckets", models, StringComparison.Ordinal);
+        Assert.Contains("FindNodesNear", routing, StringComparison.Ordinal);
+    }
+
     private static bool IsConcreteAccessCityService(Type type)
     {
         if (type == typeof(AccessCityMetrics))

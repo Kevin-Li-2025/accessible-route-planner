@@ -36,9 +36,12 @@ public class KafkaMessageBus : IMessageBus, IDisposable
     public async Task PublishAsync<T>(T @event, CancellationToken cancellationToken = default) where T : IntegrationEvent
     {
         var topic = TopicFor<T>();
+        var key = @event is IKeyedIntegrationEvent keyedEvent && !string.IsNullOrWhiteSpace(keyedEvent.PartitionKey)
+            ? keyedEvent.PartitionKey
+            : @event.Id.ToString();
         var message = new Message<string, string>
         {
-            Key = @event.Id.ToString(),
+            Key = key,
             Value = JsonSerializer.Serialize(@event),
             Headers = new Headers
             {

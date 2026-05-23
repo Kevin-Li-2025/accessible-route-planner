@@ -13,4 +13,7 @@ public sealed class RoutingOptions
     public int MaxRiskQueryRadiusMetres { get; set; } = 2_500;
     public int MaxRouteGraphEdges { get; set; } = 20_000;
     public bool AsyncFirstForCacheMiss { get; set; }
+    public bool DispatchJobsToWorker { get; set; }
+    public int RouteGraphCacheTtlSeconds { get; set; } = 300;
+    public double RouteGraphShardSizeDegrees { get; set; } = 0.01;
 }

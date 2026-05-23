@@ -20,6 +20,11 @@ public static class RoutingModule
         services.AddScoped<RoutingService>();
         services.AddScoped<IRoutingService>(sp => sp.GetRequiredService<RoutingService>());
 
+        if (configuration.GetValue("Workers:Routing:Enabled", false))
+        {
+            services.AddHostedService<AccessCity.API.Services.Background.RouteJobBackgroundService>();
+        }
+
         return services;
     }
 }

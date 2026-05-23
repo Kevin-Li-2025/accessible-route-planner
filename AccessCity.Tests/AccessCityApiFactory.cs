@@ -68,10 +68,13 @@ public class AccessCityApiFactory : WebApplicationFactory<Program>
                 ["DATABASE_URL"] = string.Empty,
                 ["Postgres:ConnectionString"] = ConnectionString,
                 ["Postgres:AutoMigrate"] = "true",
+                ["Messaging:UseKafka"] = "false",
                 ["OsmImport:FilePath"] = OsmFixturePath,
                 ["OsmImport:ImportOnStartup"] = "false",
                 ["OsmImport:ReplaceExisting"] = "true",
+                ["Routing:DispatchJobsToWorker"] = "false",
                 ["Workers:OsmImport:Enabled"] = "false",
+                ["Workers:Routing:Enabled"] = "false",
                 ["Workers:TileWarming:Enabled"] = "false"
             });
         });

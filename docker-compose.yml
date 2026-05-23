@@ -31,6 +31,9 @@ services:
       Routing__MaxHazardsPerRequest: ${Routing__MaxHazardsPerRequest:-500}
       Routing__MaxRiskQueryRadiusMetres: ${Routing__MaxRiskQueryRadiusMetres:-2500}
       Routing__MaxRouteGraphEdges: ${Routing__MaxRouteGraphEdges:-20000}
+      Routing__DispatchJobsToWorker: ${Routing__DispatchJobsToWorker:-false}
+      Routing__RouteGraphCacheTtlSeconds: ${Routing__RouteGraphCacheTtlSeconds:-300}
+      Routing__RouteGraphShardSizeDegrees: ${Routing__RouteGraphShardSizeDegrees:-0.01}
       RiskScoring__CacheTtlSeconds: ${RiskScoring__CacheTtlSeconds:-30}
       RiskScoring__CacheCoordinatePrecision: ${RiskScoring__CacheCoordinatePrecision:-4}
       RiskScoring__CacheRadiusBucketMetres: ${RiskScoring__CacheRadiusBucketMetres:-50}
@@ -49,6 +52,7 @@ services:
       RateLimiting__Global__PermitLimit: ${RateLimiting__Global__PermitLimit:-30000}
       RateLimiting__Global__QueueLimit: ${RateLimiting__Global__QueueLimit:-0}
       Workers__OsmImport__Enabled: ${API_OSM_WORKER_ENABLED:-true}
+      Workers__Routing__Enabled: ${API_ROUTING_WORKER_ENABLED:-false}
       Workers__TileWarming__Enabled: ${API_TILE_WORKER_ENABLED:-true}
       # Default false (avoids OOM on large extracts). Override when starting compose, e.g.:
       #   OsmImport__ImportOnStartup=true docker compose up -d --force-recreate api
@@ -98,6 +102,9 @@ services:
       Routing__MaxConcurrentComputations: ${Routing__MaxConcurrentComputations:-2}
       Routing__SyncSafePathTimeoutSeconds: ${Routing__SyncSafePathTimeoutSeconds:-4}
       Routing__JobComputationQueueTimeoutSeconds: ${Routing__JobComputationQueueTimeoutSeconds:-60}
+      Routing__DispatchJobsToWorker: ${Routing__DispatchJobsToWorker:-true}
+      Routing__RouteGraphCacheTtlSeconds: ${Routing__RouteGraphCacheTtlSeconds:-300}
+      Routing__RouteGraphShardSizeDegrees: ${Routing__RouteGraphShardSizeDegrees:-0.01}
       RiskScoring__CacheTtlSeconds: ${RiskScoring__CacheTtlSeconds:-30}
       RiskScoring__CacheCoordinatePrecision: ${RiskScoring__CacheCoordinatePrecision:-4}
       RiskScoring__CacheRadiusBucketMetres: ${RiskScoring__CacheRadiusBucketMetres:-50}
@@ -105,6 +112,7 @@ services:
       OsmImport__ImportOnStartup: "false"
       ConnectionStrings__Redis: ${REDIS_CONNECTION:-redis:6379}
       Workers__OsmImport__Enabled: "true"
+      Workers__Routing__Enabled: "true"
       Workers__TileWarming__Enabled: "true"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://host.docker.internal:4317
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc

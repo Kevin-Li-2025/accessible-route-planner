@@ -40,6 +40,10 @@ public class RouteEdge
 public sealed class RouteGraphData
 {
     public Dictionary<long, GraphNode> Nodes { get; init; } = new();
+    public Dictionary<(int X, int Y), List<long>> SpatialBuckets { get; } = new();
+    public double SpatialBucketSizeDegrees { get; init; } = 0.001;
+    public string? ShardKey { get; init; }
+    public int LoadedEdgeCount { get; init; }
     public bool IsTruncated { get; init; }
     public bool HasCoverage => Nodes.Count > 0;
 }

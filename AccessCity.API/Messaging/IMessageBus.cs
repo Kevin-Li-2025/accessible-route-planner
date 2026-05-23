@@ -6,6 +6,11 @@ public abstract record IntegrationEvent
     public DateTime CreatedAt { get; } = DateTime.UtcNow;
 }
 
+public interface IKeyedIntegrationEvent
+{
+    string PartitionKey { get; }
+}
+
 public interface IMessageBus
 {
     Task PublishAsync<T>(T @event, CancellationToken cancellationToken = default) where T : IntegrationEvent;
