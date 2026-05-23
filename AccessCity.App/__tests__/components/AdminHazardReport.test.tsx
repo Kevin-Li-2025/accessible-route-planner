@@ -7,12 +7,49 @@ jest.mock('@/services/api', () => ({
   api: {
     get: jest.fn(),
     post: jest.fn(),
+    patch: jest.fn(),
   },
 }));
+
+jest.mock('@/services/aiAssist.service', () => ({
+  aiAssistService: {
+    getHazardEnrichment: jest.fn(),
+  },
+}));
+
+import { aiAssistService } from '@/services/aiAssist.service';
+
+const enrichment = {
+  hazardId: 'h1',
+  forRouteDecision: false,
+  provider: 'local-rules',
+  generatedAtUtc: new Date().toISOString(),
+  text: {
+    normalizedDescription: 'No lights.',
+    suggestedType: 'low_lighting',
+    suggestedSeverity: 'medium',
+    confidence: 0.7,
+    adminSummary: 'low_lighting report',
+    tags: ['visibility'],
+  },
+  duplicateSuggestions: [],
+  missingOsmAttributeCandidates: [
+    {
+      attribute: 'lit',
+      value: 'no',
+      confidence: 0.64,
+      evidence: 'Report indicates missing or failed lighting.',
+      source: 'user_report_text',
+      canAutoApply: false,
+    },
+  ],
+  guardrails: [],
+};
 
 describe('AdminHazardReport', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    jest.mocked(aiAssistService.getHazardEnrichment).mockResolvedValue(enrichment);
   });
 
   it('shows empty state when no pending hazards', async () => {
@@ -32,13 +69,14 @@ describe('AdminHazardReport', () => {
       if (path === '/hazards') {
         return [
           {
-            id: 'h1',
-            status: 'reported',
-            type: 'Lighting',
-            title: 'Dark alley',
-            locationName: 'Main St',
-            reportedAt: new Date().toISOString(),
-            reporterName: 'Alex',
+              id: 'h1',
+              status: 'reported',
+              type: 'Lighting',
+              title: 'Dark alley',
+              description: 'No lights.',
+              locationName: 'Main St',
+              reportedAt: new Date().toISOString(),
+              reporterName: 'Alex',
           },
         ];
       }
@@ -52,8 +90,8 @@ describe('AdminHazardReport', () => {
           locationName: 'Main St',
           createdAt: new Date().toISOString(),
           reporter: { name: 'Alex', email: 'a@b.com', verified: false },
-        };
-      }
+            };
+          }
       if (path === '/dashboard/summary') return { pendingAlerts: 1 };
       return {};
     });
@@ -64,6 +102,9 @@ describe('AdminHazardReport', () => {
     fireEvent.press(getByText('Dark alley'));
 
     expect(await findByText('Report Details')).toBeTruthy();
+    expect(await findByText('Review signals')).toBeTruthy();
+    expect(await findByText('Low Lighting')).toBeTruthy();
+    expect(await findByText('Lit')).toBeTruthy();
     expect(await findByText('Review Report')).toBeTruthy();
   });
 
@@ -95,7 +136,7 @@ describe('AdminHazardReport', () => {
       if (path === '/dashboard/summary') return { pendingAlerts: 1 };
       return {};
     });
-    jest.mocked(api.post).mockResolvedValue({});
+    jest.mocked(api.patch).mockResolvedValue({});
 
     const { findByText, getByText } = render(<AdminHazardReport />);
 
@@ -108,10 +149,7 @@ describe('AdminHazardReport', () => {
     fireEvent.press(getByText('Approve Report'));
 
     await waitFor(() => {
-      expect(api.post).toHaveBeenCalledWith(
-        '/hazards/h1/review',
-        expect.objectContaining({ status: 'approved' }),
-      );
+      expect(api.patch).toHaveBeenCalledWith('/hazards/h1', 1);
     });
 
     expect(await findByText('Report Approved Successfully')).toBeTruthy();

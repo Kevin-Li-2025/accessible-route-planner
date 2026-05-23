@@ -42,6 +42,27 @@ describe('api.request', () => {
     await expect(api.get('/bad')).rejects.toThrow('Invalid request');
   });
 
+  it('sends PATCH requests with JSON bodies', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 204,
+      headers: { get: () => '' },
+      json: async () => ({}),
+      text: async () => '',
+    }) as unknown as typeof fetch;
+
+    const { api } = require('@/services/api');
+    await expect(api.patch('/hazards/h1', 1)).resolves.toEqual({});
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/hazards/h1'),
+      expect.objectContaining({
+        method: 'PATCH',
+        body: '1',
+      }),
+    );
+  });
+
   it('URL-encodes refresh tokens sent in the query string', async () => {
     const secureStore = require('expo-secure-store');
     secureStore.getItemAsync.mockImplementation(async (key: string) => {

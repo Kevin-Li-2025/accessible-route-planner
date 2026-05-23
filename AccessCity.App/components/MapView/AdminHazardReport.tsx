@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -12,14 +13,20 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../../services/api';
-
-/**
- * ============================
- * TODO: Replace these types later
- * ============================
- */
+import {
+  aiAssistService,
+  type HazardAiEnrichment,
+} from '../../services/aiAssist.service';
 
 type ReviewStatus = 'pending' | 'approved' | 'rejected';
+
+const HAZARD_STATUS = {
+  Reported: 0,
+  Acknowledged: 1,
+  UnderReview: 2,
+  Resolved: 3,
+  Dismissed: 4,
+} as const;
 
 type PendingHazardItem = {
   id: string;
@@ -27,6 +34,7 @@ type PendingHazardItem = {
   locationName: string;
   createdAt: string;
   title?: string;
+  description?: string;
   severity?: string;
   reporterName?: string;
 };
@@ -65,27 +73,8 @@ type ScreenMode =
   | 'success-rejected';
 
 type AdminHazardReportProps = {
-  /**
-   * Optional: If you want to control the return from an external page
-   * For example, in ReportPage, if you want to exit the admin page...
-   */
   onClose?: () => void;
 };
-
-/**
- * ============================
- * TODO: Replace admin id later
- * ============================
- * I'll write it out now and wait for you guys. auth / user profile 接好了，
- * Change it to the ID of the real logged-in user.
- */
-const MOCK_ADMIN_ID = 'admin_id_001';
-
-/**
- * ============================
- * Utility function: Formatting time
- * ============================
- */
 function formatRelativeTime(dateString: string) {
   const date = new Date(dateString);
   const now = new Date();
@@ -112,24 +101,74 @@ function formatDateTime(dateString: string) {
   return date.toLocaleString();
 }
 
-/**
- * ============================
- * TODO: Replace backend mapping later
- * ============================
- * In the future, if the backend changes a field,
- * only this part needs to be changed, instead of changing the entire component.
- */
+function normalizeReviewStatus(status: unknown): ReviewStatus {
+  if (status === HAZARD_STATUS.Acknowledged) return 'approved';
+  if (status === HAZARD_STATUS.Dismissed) return 'rejected';
+
+  const value = String(status ?? '').trim().toLowerCase().replace(/[_\s-]+/g, '');
+
+  if (value === 'acknowledged' || value === 'approved') return 'approved';
+  if (value === 'dismissed' || value === 'rejected') return 'rejected';
+  return 'pending';
+}
+
+function isPendingStatus(status: unknown) {
+  if (status === HAZARD_STATUS.Reported || status === HAZARD_STATUS.UnderReview) {
+    return true;
+  }
+
+  const value = String(status ?? '').trim().toLowerCase().replace(/[_\s-]+/g, '');
+  return value === 'reported' || value === 'underreview' || value === 'pending';
+}
+
+function getCoordinates(item: any) {
+  const coordinates = item.location?.coordinates ?? item.coordinates;
+  const longitude = Number(
+    item.longitude ??
+      item.lng ??
+      item.lon ??
+      item.x ??
+      item.location?.x ??
+      coordinates?.[0]
+  );
+  const latitude = Number(
+    item.latitude ??
+      item.lat ??
+      item.y ??
+      item.location?.y ??
+      coordinates?.[1]
+  );
+
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return null;
+  }
+
+  return { latitude, longitude };
+}
+
+function formatCoordinates(coordinates: { latitude: number; longitude: number } | null) {
+  return coordinates
+    ? `${coordinates.latitude.toFixed(5)}, ${coordinates.longitude.toFixed(5)}`
+    : 'Unknown location';
+}
+
+function formatSignalLabel(value?: string) {
+  if (!value) return 'Unknown';
+
+  return value
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
 
 function mapPendingReport(item: any): PendingHazardItem {
+  const coordinates = getCoordinates(item);
   return {
     id: String(item.id),
     category: item.type ?? item.category ?? 'Unknown',
     locationName:
       item.locationName ??
       item.location ??
-      (item.location?.x != null && item.location?.y != null
-        ? `${item.location.y}, ${item.location.x}`
-        : 'Unknown location'),
+      formatCoordinates(coordinates),
     createdAt:
       item.reportedAt ?? item.createdAt ?? item.submittedAt ?? new Date().toISOString(),
     title:
@@ -137,6 +176,7 @@ function mapPendingReport(item: any): PendingHazardItem {
       (item.type ?? item.category
         ? `${item.type ?? item.category} Report`
         : 'Hazard Report'),
+    description: item.description ?? '',
     severity: item.severity ?? item.priority ?? 'Normal',
     reporterName:
       item.reporterName ??
@@ -147,29 +187,22 @@ function mapPendingReport(item: any): PendingHazardItem {
 }
 
 function mapHazardDetails(item: any): HazardDetails {
+  const coordinates = getCoordinates(item);
   return {
     id: String(item.id),
     category: item.category ?? item.type ?? 'Unknown',
-    status: item.status ?? 'pending',
+    status: normalizeReviewStatus(item.status),
     title:
       item.title ??
-      (item.category ? `${item.category} Report` : 'Hazard Report'),
+      (item.category ?? item.type
+        ? `${item.category ?? item.type} Report`
+        : 'Hazard Report'),
     severity: item.severity ?? item.priority ?? 'Normal',
     description: item.description ?? 'No description provided.',
     imageUrl: item.imageUrl ?? item.photoUrl ?? null,
-    coordinates: item.coordinates
-      ? {
-          latitude: Number(item.coordinates.latitude),
-          longitude: Number(item.coordinates.longitude),
-        }
-      : item.latitude != null && item.longitude != null
-      ? {
-          latitude: Number(item.latitude),
-          longitude: Number(item.longitude),
-        }
-      : null,
-    locationName: item.locationName ?? item.location ?? 'Unknown location',
-    submittedAt: item.createdAt ?? item.submittedAt ?? new Date().toISOString(),
+    coordinates,
+    locationName: item.locationName ?? item.location ?? formatCoordinates(coordinates),
+    submittedAt: item.reportedAt ?? item.createdAt ?? item.submittedAt ?? new Date().toISOString(),
     reporter: item.reporter
       ? {
           name: item.reporter.name,
@@ -210,6 +243,8 @@ export default function AdminHazardReport({ onClose }: AdminHazardReportProps) {
   const [selectedReport, setSelectedReport] = useState<HazardDetails | null>(
     null
   );
+  const [aiEnrichment, setAiEnrichment] = useState<HazardAiEnrichment | null>(null);
+  const [aiEnrichmentError, setAiEnrichmentError] = useState<string | null>(null);
 
   const [adminNotes, setAdminNotes] = useState('');
   const [searchText, setSearchText] = useState('');
@@ -221,15 +256,10 @@ export default function AdminHazardReport({ onClose }: AdminHazardReportProps) {
 
   const [loadingList, setLoadingList] = useState(false);
   const [loadingDetails, setLoadingDetails] = useState(false);
+  const [loadingAiEnrichment, setLoadingAiEnrichment] = useState(false);
   const [submittingDecision, setSubmittingDecision] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  /**
-   * ============================
-   * API 1: Get the list of items pending review
-   * GET /hazards/pending
-   * ============================
-   */
   async function fetchPendingReports(showRefresh = false) {
     try {
       if (showRefresh) {
@@ -242,10 +272,7 @@ export default function AdminHazardReport({ onClose }: AdminHazardReportProps) {
 
       const allItems = Array.isArray(response) ? response : [];
 
-      const pendingItems = allItems.filter((item) => {
-        const status = String(item.status ?? '').toLowerCase();
-        return status === 'reported' || status === 'underreview';
-      });
+      const pendingItems = allItems.filter((item) => isPendingStatus(item.status));
 
       const mapped = pendingItems.map(mapPendingReport);
 
@@ -264,65 +291,46 @@ export default function AdminHazardReport({ onClose }: AdminHazardReportProps) {
     }
   }
 
-  /**
-   * ============================
-   * API 2: Get details of a single hazard.
-   * GET /hazards/{id}
-   * ============================
-   */
   async function fetchReportDetails(reportId: string) {
     try {
       setLoadingDetails(true);
+      setLoadingAiEnrichment(true);
+      setAiEnrichment(null);
+      setAiEnrichmentError(null);
 
-      /**
-       * TODO:
-       * If the backend provides /hazards/report/{id} or something else,
-       * update
-       */
-      const response = await api.get<any>(`/hazards/${reportId}`);
+      const [response, enrichment] = await Promise.all([
+        api.get<any>(`/hazards/${reportId}`),
+        aiAssistService.getHazardEnrichment(reportId).catch((error) => {
+          console.warn('AI enrichment unavailable:', error);
+          setAiEnrichmentError('Review signals unavailable');
+          return null;
+        }),
+      ]);
       const mapped = mapHazardDetails(response);
 
       setSelectedReportId(reportId);
       setSelectedReport(mapped);
+      setAiEnrichment(enrichment);
       setScreenMode('details');
     } catch (error) {
       console.error('Failed to fetch report details:', error);
       Alert.alert('Error', 'Failed to load report details.');
     } finally {
       setLoadingDetails(false);
+      setLoadingAiEnrichment(false);
     }
   }
 
-  /**
-   * ============================
-   * API 3: Submit Review Decision
-   * PATCH /hazards/{id}/review
-   * body:
-   * {
-   *   status: "approved" | "rejected",
-   *   adminNotes: "...",
-   *   reviewedBy: "admin_id_001"
-   * }
-   * ============================
-   */
   async function submitReviewDecision(status: 'approved' | 'rejected') {
     if (!selectedReportId) return;
 
     try {
       setSubmittingDecision(true);
 
-      const payload = {
-        status,
-        adminNotes,
-        reviewedBy: MOCK_ADMIN_ID,
-      };
-
-      /**
-       * TODO:
-       * If the backend uses PATCH instead of POST,
-       * update：api.patch(`/hazards/${selectedReportId}/review`, payload)
-       */
-      await api.post(`/hazards/${selectedReportId}/review`, payload);
+      await api.patch(
+        `/hazards/${selectedReportId}`,
+        status === 'approved' ? HAZARD_STATUS.Acknowledged : HAZARD_STATUS.Dismissed
+      );
 
       /**
        * After a successful decision:
@@ -350,12 +358,6 @@ export default function AdminHazardReport({ onClose }: AdminHazardReportProps) {
     }
   }
 
-  /**
-   * ============================
-   * API 4: Get Review Statistics
-   * GET /admin/stats/daily
-   * ============================
-   */
   async function fetchReviewStats() {
     try {
       const response = await api.get<any>('/dashboard/summary');
@@ -398,6 +400,8 @@ export default function AdminHazardReport({ onClose }: AdminHazardReportProps) {
     setScreenMode('list');
     setSelectedReport(null);
     setSelectedReportId(null);
+    setAiEnrichment(null);
+    setAiEnrichmentError(null);
     setAdminNotes('');
   }
 
@@ -409,6 +413,8 @@ export default function AdminHazardReport({ onClose }: AdminHazardReportProps) {
     setScreenMode('list');
     setSelectedReport(null);
     setSelectedReportId(null);
+    setAiEnrichment(null);
+    setAiEnrichmentError(null);
     setAdminNotes('');
     await fetchPendingReports(true);
     await fetchReviewStats();
@@ -518,7 +524,7 @@ export default function AdminHazardReport({ onClose }: AdminHazardReportProps) {
                   </Text>
 
                   <Text style={styles.reportDescriptionPreview} numberOfLines={2}>
-                    {item.locationName}
+                    {item.description || item.locationName}
                   </Text>
 
                   <View style={styles.metaRow}>
@@ -556,11 +562,126 @@ export default function AdminHazardReport({ onClose }: AdminHazardReportProps) {
     );
   }
 
-  /**
-   * ============================
-   * Details Page
-   * ============================
-   */
+  function renderAiReviewPanel() {
+    const candidates = aiEnrichment?.missingOsmAttributeCandidates ?? [];
+    const duplicates = aiEnrichment?.duplicateSuggestions ?? [];
+
+    return (
+      <View style={styles.sectionCard}>
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionHeader}>Review signals</Text>
+          {loadingAiEnrichment ? (
+            <ActivityIndicator size="small" color="#0F4C92" />
+          ) : null}
+        </View>
+
+        {aiEnrichment ? (
+          <>
+            <View style={styles.signalGrid}>
+              <View style={styles.signalBlock}>
+                <Text style={styles.sectionLabel}>Suggested type</Text>
+                <Text style={styles.signalValue} numberOfLines={1}>
+                  {formatSignalLabel(aiEnrichment.text.suggestedType)}
+                </Text>
+              </View>
+              <View style={styles.signalBlock}>
+                <Text style={styles.sectionLabel}>Severity</Text>
+                <Text style={styles.signalValue} numberOfLines={1}>
+                  {formatSignalLabel(aiEnrichment.text.suggestedSeverity)}
+                </Text>
+              </View>
+              <View style={styles.signalBlock}>
+                <Text style={styles.sectionLabel}>Duplicates</Text>
+                <Text style={styles.signalValue}>{duplicates.length}</Text>
+              </View>
+              <View style={styles.signalBlock}>
+                <Text style={styles.sectionLabel}>OSM candidates</Text>
+                <Text style={styles.signalValue}>{candidates.length}</Text>
+              </View>
+            </View>
+
+            <Text style={styles.sectionLabel}>Normalized report</Text>
+            <Text style={styles.detailsParagraph}>
+              {aiEnrichment.text.normalizedDescription}
+            </Text>
+
+            {candidates.length > 0 ? (
+              <View style={styles.candidateList}>
+                {candidates.slice(0, 4).map((candidate) => (
+                  <View
+                    key={`${candidate.attribute}-${candidate.value}`}
+                    style={styles.candidateRow}
+                  >
+                    <View style={styles.candidateTextBlock}>
+                      <Text style={styles.candidateTitle} numberOfLines={1}>
+                        {formatSignalLabel(candidate.attribute)}
+                      </Text>
+                      <Text style={styles.smallMutedText} numberOfLines={1}>
+                        {candidate.value} · {Math.round(candidate.confidence * 100)}%
+                      </Text>
+                    </View>
+                    <View style={styles.reviewOnlyPill}>
+                      <Text style={styles.reviewOnlyText}>Review</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.smallMutedText}>No OSM candidates for this report.</Text>
+            )}
+          </>
+        ) : (
+          <Text style={styles.smallMutedText}>
+            {aiEnrichmentError ?? 'Review signals are loading.'}
+          </Text>
+        )}
+      </View>
+    );
+  }
+
+  function renderSubmittedPhoto() {
+    return (
+      <View style={styles.sectionCard}>
+        <Text style={styles.sectionHeader}>Submitted photo</Text>
+        {selectedReport?.imageUrl ? (
+          <Image
+            source={{ uri: selectedReport.imageUrl }}
+            style={styles.submittedPhoto}
+            resizeMode="cover"
+          />
+        ) : (
+          <View style={styles.emptyMediaBox}>
+            <Ionicons name="camera-outline" size={30} color="#9CA3AF" />
+            <Text style={styles.emptyMediaTitle}>No photo uploaded</Text>
+          </View>
+        )}
+      </View>
+    );
+  }
+
+  function renderLocationPreview() {
+    const coordinates = selectedReport?.coordinates ?? null;
+
+    return (
+      <View style={styles.sectionCard}>
+        <Text style={styles.sectionHeader}>Location</Text>
+        <View style={styles.locationPreview}>
+          <View style={styles.locationIcon}>
+            <Ionicons name="location-outline" size={22} color="#1D4ED8" />
+          </View>
+          <View style={styles.locationTextBlock}>
+            <Text style={styles.locationTitle} numberOfLines={1}>
+              {selectedReport?.locationName}
+            </Text>
+            <Text style={styles.smallMutedText}>
+              {formatCoordinates(coordinates)}
+            </Text>
+          </View>
+        </View>
+      </View>
+    );
+  }
+
   function renderDetailsPage() {
     if (loadingDetails || !selectedReport) {
       return (
@@ -667,38 +788,9 @@ export default function AdminHazardReport({ onClose }: AdminHazardReportProps) {
             </View>
           </View>
 
-          <View style={styles.sectionCard}>
-            <Text style={styles.sectionHeader}>Submitted Photo</Text>
-            <View style={styles.placeholderBox}>
-              <Ionicons name="camera-outline" size={34} color="#9CA3AF" />
-              <Text style={styles.placeholderTitle}>
-                {selectedReport.imageUrl
-                  ? 'Photo URL received from backend'
-                  : 'No photo uploaded'}
-              </Text>
-              <Text style={styles.placeholderSubtitle}>
-                {selectedReport.imageUrl
-                  ? selectedReport.imageUrl
-                  : 'TODO: Replace this placeholder with a real Image component later.'}
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.sectionCard}>
-            <Text style={styles.sectionHeader}>Location on Map</Text>
-            <View style={styles.placeholderBox}>
-              <Ionicons name="location-outline" size={34} color="#3B82F6" />
-              <Text style={styles.placeholderTitle}>Map preview</Text>
-              <Text style={styles.placeholderSubtitle}>
-                {selectedReport.coordinates
-                  ? `${selectedReport.coordinates.latitude}, ${selectedReport.coordinates.longitude}`
-                  : selectedReport.locationName}
-              </Text>
-              <Text style={styles.placeholderSubtitle}>
-                TODO: If you want, this block can later be replaced by MapView.
-              </Text>
-            </View>
-          </View>
+          {renderAiReviewPanel()}
+          {renderSubmittedPhoto()}
+          {renderLocationPreview()}
         </ScrollView>
 
         <View style={styles.bottomActionBar}>
@@ -1141,7 +1233,7 @@ const styles = StyleSheet.create({
 
   sectionCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 18,
+    borderRadius: 8,
     padding: 16,
     borderWidth: 1,
     borderColor: '#E5E7EB',
@@ -1212,29 +1304,117 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
 
-  placeholderBox: {
-    height: 180,
-    borderRadius: 16,
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+
+  signalGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: 8,
+  },
+
+  signalBlock: {
+    width: '47%',
+  },
+
+  signalValue: {
+    marginTop: 4,
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111827',
+  },
+
+  candidateList: {
+    marginTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+  },
+
+  candidateRow: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+    gap: 12,
+  },
+
+  candidateTextBlock: {
+    flex: 1,
+  },
+
+  candidateTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111827',
+  },
+
+  reviewOnlyPill: {
+    borderRadius: 999,
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+
+  reviewOnlyText: {
+    color: '#1D4ED8',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+
+  submittedPhoto: {
+    width: '100%',
+    height: 190,
+    borderRadius: 8,
+    backgroundColor: '#F3F4F6',
+  },
+
+  emptyMediaBox: {
+    height: 130,
+    borderRadius: 8,
     backgroundColor: '#F3F4F6',
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 20,
   },
 
-  placeholderTitle: {
+  emptyMediaTitle: {
     marginTop: 12,
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
     color: '#6B7280',
     textAlign: 'center',
   },
 
-  placeholderSubtitle: {
-    marginTop: 8,
-    fontSize: 12,
-    color: '#9CA3AF',
-    textAlign: 'center',
-    lineHeight: 18,
+  locationPreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+
+  locationIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: '#EFF6FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  locationTextBlock: {
+    flex: 1,
+  },
+
+  locationTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111827',
   },
 
   bottomActionBar: {

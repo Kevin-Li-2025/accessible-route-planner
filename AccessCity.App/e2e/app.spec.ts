@@ -21,10 +21,8 @@ test.describe('AccessCity web (Expo)', () => {
     });
   });
 
-  test('map tab shows web stub message', async ({ page }) => {
+  test('map tab renders the web map shell', async ({ page }) => {
     await page.goto('/map');
-    await expect(
-      page.getByText(/Map is available in the iOS and Android app/i),
-    ).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText(/AccessCity Map/i)).toBeVisible({ timeout: 60_000 });
   });
 });

@@ -603,7 +603,6 @@ export default function MapScreen() {
       const raw = await api.get<GeocodingSearchResponse>(
         `/geocoding/search?query=${encodeURIComponent(query)}`,
         {
-          // TODO: Change skipAuth to false if geocoding later becomes a protected endpoint.
           skipAuth: true,
         }
       );

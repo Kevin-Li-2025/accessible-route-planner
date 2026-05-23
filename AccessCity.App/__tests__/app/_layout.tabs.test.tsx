@@ -51,7 +51,7 @@ describe('TabLayout', () => {
     jest.clearAllMocks();
   });
 
-  it('registers report tabPress to route admin report when role is admin', () => {
+  it('registers report tabPress to open the user report flow', () => {
     render(<TabLayout />);
 
     const report = capturedScreens.find((p) => p.name === 'report/reportpage') as
@@ -62,7 +62,7 @@ describe('TabLayout', () => {
     const e = { preventDefault: jest.fn() };
     report!.listeners!.tabPress!(e);
     expect(e.preventDefault).toHaveBeenCalled();
-    expect(router.push).toHaveBeenCalledWith('/report/adminHazard-report');
+    expect(router.push).toHaveBeenCalledWith('/report/reportpage');
   });
 
   it('includes map and profile screens', () => {
