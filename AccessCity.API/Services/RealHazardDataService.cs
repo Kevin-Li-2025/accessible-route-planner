@@ -27,6 +27,8 @@ public class RealHazardDataService : IRealHazardDataService
     private readonly IMemoryCache _cache;
     private readonly Data.AppDbContext _dbContext;
     private readonly ILogger<RealHazardDataService> _logger;
+    private readonly bool _realtimeOverpassEnabled;
+    private readonly TimeSpan _osmFetchBudget;
 
     private const string CacheKeyPrefix = "real_hazards:";
     /// <summary>Overpass is slow; longer cache reduces cold-cache storms on /hazards.</summary>
@@ -37,9 +39,6 @@ public class RealHazardDataService : IRealHazardDataService
 
     /// <summary>Safety valve for DB rows in bbox (misconfigured client or huge imports).</summary>
     private const int MaxDbHazardsPerResponse = 5000;
-
-    /// <summary>Wall clock for the Overpass HTTP call + JSON read; on timeout we degrade to DB-only.</summary>
-    private static readonly TimeSpan OsmFetchBudget = TimeSpan.FromSeconds(12);
 
     // Default bbox: Birmingham area (so we always have a fallback if no bbox provided)
     private const double DefaultMinLat = 52.45;
@@ -52,12 +51,16 @@ public class RealHazardDataService : IRealHazardDataService
         IOpenStreetMapClient openStreetMapClient,
         IMemoryCache cache,
         Data.AppDbContext dbContext,
-        ILogger<RealHazardDataService> logger)
+        ILogger<RealHazardDataService> logger,
+        IConfiguration configuration)
     {
         _openStreetMapClient = openStreetMapClient;
         _cache = cache;
         _dbContext = dbContext;
         _logger = logger;
+        _realtimeOverpassEnabled = configuration.GetValue("ExternalApis:Overpass:RealtimeHazardsEnabled", true);
+        _osmFetchBudget = TimeSpan.FromSeconds(
+            Math.Max(1, configuration.GetValue("ExternalApis:Overpass:HazardFetchBudgetSeconds", 12)));
     }
 
     public async Task<List<HazardReport>> GetActiveHazardsAsync(double? minLat = null, double? minLng = null, double? maxLat = null, double? maxLng = null, HazardStatus? status = null)
@@ -76,12 +79,12 @@ public class RealHazardDataService : IRealHazardDataService
         if (minLngVal > maxLngVal)
             throw new ArgumentException("minLng must be less than or equal to maxLng.");
 
-        var cacheKey = $"{CacheKeyPrefix}{minLatVal:F4}_{minLngVal:F4}_{maxLatVal:F4}_{maxLngVal:F4}_{status?.ToString() ?? "all"}";
+        var cacheKey = $"{CacheKeyPrefix}{minLatVal:F4}_{minLngVal:F4}_{maxLatVal:F4}_{maxLngVal:F4}_{status?.ToString() ?? "all"}_osm:{_realtimeOverpassEnabled}";
 
         if (_cache.TryGetValue(cacheKey, out List<HazardReport>? cached))
             return cached ?? new List<HazardReport>();
 
-        var includeOsm = status == null || status == HazardStatus.Reported;
+        var includeOsm = _realtimeOverpassEnabled && (status == null || status == HazardStatus.Reported);
         var osmTask = includeOsm
             ? FetchAndMapHazardsAsync(minLatVal, minLngVal, maxLatVal, maxLngVal, DateTime.UtcNow)
             : Task.FromResult(new List<HazardReport>());
@@ -141,7 +144,7 @@ public class RealHazardDataService : IRealHazardDataService
         double minLatVal, double minLngVal, double maxLatVal, double maxLngVal,
         DateTime snapshotUtc)
     {
-        using var budget = new CancellationTokenSource(OsmFetchBudget);
+        using var budget = new CancellationTokenSource(_osmFetchBudget);
         List<OverpassElement>? elements;
         try
         {
@@ -153,7 +156,7 @@ public class RealHazardDataService : IRealHazardDataService
         {
             _logger.LogWarning(ex,
                 "Overpass hazard fetch timed out after {Budget}s; returning DB hazards only for bbox.",
-                OsmFetchBudget.TotalSeconds);
+                _osmFetchBudget.TotalSeconds);
             return new List<HazardReport>();
         }
         catch (Exception ex)

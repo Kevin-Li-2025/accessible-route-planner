@@ -28,6 +28,7 @@ public class RoutingController : ControllerBase
     private readonly IRouteJobService _jobs;
     private readonly IRouteCoalescingService _coalescing;
     private readonly IRouteComputationLimiter _routeLimiter;
+    private readonly IRouteCacheService _routeCache;
     private readonly IRiskScoreCacheService _riskScoreCache;
     private readonly AccessCityMetrics _metrics;
     private readonly RoutingOptions _routingOptions;
@@ -40,6 +41,7 @@ public class RoutingController : ControllerBase
         IRouteJobService jobs,
         IRouteCoalescingService coalescing,
         IRouteComputationLimiter routeLimiter,
+        IRouteCacheService routeCache,
         IRiskScoreCacheService riskScoreCache,
         AccessCityMetrics metrics,
         IOptions<RoutingOptions> routingOptions)
@@ -51,6 +53,7 @@ public class RoutingController : ControllerBase
         _jobs = jobs;
         _coalescing = coalescing;
         _routeLimiter = routeLimiter;
+        _routeCache = routeCache;
         _riskScoreCache = riskScoreCache;
         _metrics = metrics;
         _routingOptions = routingOptions.Value;
@@ -64,6 +67,7 @@ public class RoutingController : ControllerBase
     [HttpPost("safe-path")]
     [ProducesResponseType(typeof(RouteResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status202Accepted)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status404NotFound)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status503ServiceUnavailable)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status504GatewayTimeout)]
@@ -79,6 +83,27 @@ public class RoutingController : ControllerBase
 
         try
         {
+            if (_routingOptions.AsyncFirstForCacheMiss)
+            {
+                var cacheKey = _routeCache.BuildKey(
+                    request.Start.Y,
+                    request.Start.X,
+                    request.End.Y,
+                    request.End.X,
+                    request.Profile ?? "standard",
+                    request.SafetyWeight);
+                var cached = await _routeCache.TryGetAsync(cacheKey);
+                if (cached is not null)
+                {
+                    RecordSafePath(stopwatch, "cache_hit");
+                    return Ok(cached);
+                }
+
+                var jobId = await _jobs.SubmitAsync(request, cancellationToken: cancellationToken);
+                RecordSafePath(stopwatch, "async_accepted");
+                return Accepted(new { jobId, status = "pending", pollUrl = $"/api/v1/routing/jobs/{jobId}" });
+            }
+
             var queueTimeout = TimeSpan.FromSeconds(Math.Max(1, _routingOptions.ComputationQueueTimeoutSeconds));
             var result = await _coalescing.GetOrComputeAsync(
                 request,
@@ -130,8 +155,7 @@ public class RoutingController : ControllerBase
         [FromBody] RouteRequest request,
         CancellationToken cancellationToken)
     {
-        var hazards = await _hazardQueries.LoadHazardsForRouteAsync(request, cancellationToken);
-        var jobId = _jobs.Submit(request, hazards);
+        var jobId = await _jobs.SubmitAsync(request, cancellationToken: cancellationToken);
 
         return Accepted(new { jobId, status = "pending", pollUrl = $"/api/v1/routing/jobs/{jobId}" });
     }
@@ -142,9 +166,9 @@ public class RoutingController : ControllerBase
     [HttpGet("jobs/{jobId}")]
     [ProducesResponseType(typeof(RouteJobResult), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status404NotFound)]
-    public ActionResult<RouteJobResult> GetJobStatus(string jobId)
+    public async Task<ActionResult<RouteJobResult>> GetJobStatus(string jobId, CancellationToken cancellationToken)
     {
-        var result = _jobs.GetResult(jobId);
+        var result = await _jobs.GetResultAsync(jobId, cancellationToken);
         if (result is null)
             return NotFound(new ApiError("Job not found.", Detail: "The job ID may have expired (TTL: 5 minutes)."));
 

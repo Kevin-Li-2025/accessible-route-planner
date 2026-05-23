@@ -7,6 +7,9 @@ spec:
     name: accesscity-api
   minReplicaCount: 6
   maxReplicaCount: 18
+  fallback:
+    failureThreshold: 3
+    replicas: 6
   pollingInterval: 15
   cooldownPeriod: 300
   advanced:
@@ -46,14 +49,38 @@ spec:
         threshold: "0.5"
         query: |
           sum(rate(accesscity_route_computation_saturated_total[2m]))
-    - type: cpu
+    - type: prometheus
       metadata:
-        type: Utilization
-        value: "70"
-    - type: memory
+        serverAddress: http://prometheus:9090
+        metricName: accesscity_api_cpu_request_utilization
+        threshold: "70"
+        query: |
+          100 *
+          sum(rate(container_cpu_usage_seconds_total{namespace="accesscity",pod=~"accesscity-api-.*",container="api"}[2m]))
+          /
+          sum(kube_pod_container_resource_requests{namespace="accesscity",pod=~"accesscity-api-.*",container="api",resource="cpu"})
+    - type: prometheus
       metadata:
-        type: Utilization
-        value: "75"
+        serverAddress: http://prometheus:9090
+        metricName: accesscity_api_memory_limit_utilization
+        threshold: "75"
+        query: |
+          100 *
+          sum(container_memory_working_set_bytes{namespace="accesscity",pod=~"accesscity-api-.*",container="api"})
+          /
+          sum(kube_pod_container_resource_limits{namespace="accesscity",pod=~"accesscity-api-.*",container="api",resource="memory"})
+    - type: cron
+      metadata:
+        timezone: Europe/London
+        start: "0 7 * * 1-5"
+        end: "0 10 * * 1-5"
+        desiredReplicas: "10"
+    - type: cron
+      metadata:
+        timezone: Europe/London
+        start: "0 16 * * 1-5"
+        end: "0 19 * * 1-5"
+        desiredReplicas: "10"
 ---
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject

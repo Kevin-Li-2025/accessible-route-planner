@@ -12,4 +12,5 @@ public sealed class RoutingOptions
     public int MaxHazardsPerRequest { get; set; } = 500;
     public int MaxRiskQueryRadiusMetres { get; set; } = 2_500;
     public int MaxRouteGraphEdges { get; set; } = 20_000;
+    public bool AsyncFirstForCacheMiss { get; set; }
 }

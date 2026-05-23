@@ -24,6 +24,8 @@ public class AccessCityApiFactory : WebApplicationFactory<Program>
 
     public AccessCityApiFactory()
     {
+        Environment.SetEnvironmentVariable("DOTNET_USE_POLLING_FILE_WATCHER", "1");
+        Environment.SetEnvironmentVariable("DOTNET_HOST_FACTORY_RESOLVER_DEFAULT_TIMEOUT_IN_SECONDS", "60");
         EnvironmentBootstrap.LoadRepoRootDotEnv();
 
         var configuration = new ConfigurationBuilder()
@@ -40,6 +42,20 @@ public class AccessCityApiFactory : WebApplicationFactory<Program>
 
     public string ConnectionString { get; }
     public string OsmFixturePath { get; }
+
+    public new HttpClient CreateClient()
+    {
+        return base.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            HandleCookies = false
+        });
+    }
+
+    public new HttpClient CreateClient(WebApplicationFactoryClientOptions options)
+    {
+        options.HandleCookies = false;
+        return base.CreateClient(options);
+    }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {

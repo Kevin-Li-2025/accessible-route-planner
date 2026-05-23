@@ -2,10 +2,12 @@
 
 AccessCity scales on application pressure, not only CPU:
 
-- API replicas scale with KEDA from CPU, memory, safe-path p95 latency, and route computation saturation.
+- API replicas scale with KEDA from Prometheus-backed CPU, memory, safe-path p95 latency, and route computation saturation.
 - Worker replicas scale from Kafka lag for `accesscity_osmimportstartedevent`.
 - Route computation uses an in-process bulkhead per API pod; saturated requests return `503` instead of queuing unbounded work.
 - External dependencies use timeout, bulkhead, circuit-breaker fallback, and metrics per dependency.
+- Production safe-path cache misses return `202 Accepted` by default and compute in the background; completed job status is published through the distributed cache so polling works across API replicas.
+- Production risk scoring uses cached external signals only. Public Overpass, Police, environmental, and weather APIs stay off the request hot path by default.
 
 ## Production SLOs
 
@@ -35,6 +37,11 @@ AccessCity scales on application pressure, not only CPU:
 `deploy/kubernetes/keda-scaledobject.yaml` expects KEDA and a Prometheus service reachable as
 `http://prometheus:9090` from the `accesscity` namespace. If Prometheus runs elsewhere, update
 the `serverAddress` fields before applying the kustomization.
+
+The API KEDA object includes a 6-replica fallback if Prometheus-backed scalers fail repeatedly,
+plus weekday morning and evening cron triggers that hold at least 10 replicas during expected peak
+traffic windows. CPU and memory are Prometheus queries rather than KEDA resource triggers because
+KEDA fallback does not support the built-in CPU/memory scalers.
 
 The API KEDA object replaces the standalone `hpa.yaml` in the default kustomization so only one
 controller owns the `accesscity-api` deployment scale. Keep `hpa.yaml` as a CPU/memory fallback

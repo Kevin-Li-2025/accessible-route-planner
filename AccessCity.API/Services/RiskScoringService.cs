@@ -66,6 +66,7 @@ namespace AccessCity.API.Services
         private readonly AccessCityMetrics? _metrics;
         private readonly AppDbContext _dbContext;
         private readonly TimeSpan _externalSignalBudget;
+        private readonly bool _realtimeExternalSignalsEnabled;
 
         private const string CrimeCacheKeyPrefix = "ukcrime:";
         private const string EnvCacheKeyPrefix = "env:";
@@ -126,6 +127,7 @@ namespace AccessCity.API.Services
             var externalBudgetMs = configuration?.GetValue("RiskScoring:ExternalSignalBudgetMilliseconds", (int)DefaultExternalSignalBudget.TotalMilliseconds)
                 ?? (int)DefaultExternalSignalBudget.TotalMilliseconds;
             _externalSignalBudget = TimeSpan.FromMilliseconds(Math.Max(50, externalBudgetMs));
+            _realtimeExternalSignalsEnabled = configuration?.GetValue("RiskScoring:RealtimeExternalSignalsEnabled", true) ?? true;
         }
 
         /// <summary>
@@ -177,9 +179,7 @@ namespace AccessCity.API.Services
             var infrastructureRiskTask = WithExternalSignalBudgetAsync(
                 EstimateInfrastructureRiskAsync(latitude, longitude, radiusMetres),
                 DefaultInfrastructureRisk);
-            var crimeCountTask = _ukPolice != null && _cache != null
-                ? WithExternalSignalBudgetAsync(GetCachedCrimeCountAsync(latitude, longitude), 0)
-                : Task.FromResult(0);
+            var crimeCountTask = WithExternalSignalBudgetAsync(GetCachedCrimeCountAsync(latitude, longitude), 0);
             var environmentalRisksTask = WithExternalSignalBudgetAsync(
                 GetCachedEnvironmentalRisksAsync(latitude, longitude, radiusMetres),
                 (DefaultLightingRisk, DefaultSurveillanceRisk));
@@ -230,7 +230,9 @@ namespace AccessCity.API.Services
             else if (now.Hours >= 6 && now.Hours < 9) timeFactor = 0.4; // Morning rush
 
             // 2. Weather — same OpenWeather mapping as PredictiveRiskModel (shared cache key).
-            double weatherFactor = await WeatherRiskEvaluator.GetRiskAsync(_weatherClient, _cache, latitude, longitude);
+            double weatherFactor = _realtimeExternalSignalsEnabled
+                ? await WeatherRiskEvaluator.GetRiskAsync(_weatherClient, _cache, latitude, longitude)
+                : WeatherRiskEvaluator.GetCachedRisk(_cache, latitude, longitude);
 
             var factors = new List<string>();
             if (baseRisk.HazardDensityRisk > 0.6) factors.Add("High density of reported hazards in this sector.");
@@ -273,14 +275,14 @@ namespace AccessCity.API.Services
 
         private async Task<int> GetCachedCrimeCountAsync(double lat, double lng)
         {
-            if (_ukPolice == null) return 0;
-
             var key = $"{CrimeCacheKeyPrefix}{Math.Round(lat, 3):F3}:{Math.Round(lng, 3):F3}";
             var cachedCrime = await TryGetCachedAsync<int>(key, "crime");
             if (cachedCrime.Hit)
             {
                 return cachedCrime.Value;
             }
+
+            if (!_realtimeExternalSignalsEnabled || _ukPolice == null) return 0;
 
             var list = await _ukPolice.GetRecentStreetCrimesAsync(lat, lng);
             int count = list?.Count ?? 0;
@@ -388,8 +390,6 @@ namespace AccessCity.API.Services
             double lng,
             double radiusMetres)
         {
-            if (_envClient == null) return (DefaultLightingRisk, DefaultSurveillanceRisk);
-
             var lampKey = $"{EnvCacheKeyPrefix}lamp:{Math.Round(lat, 3):F3}:{Math.Round(lng, 3):F3}";
             var camKey = $"{EnvCacheKeyPrefix}cam:{Math.Round(lat, 3):F3}:{Math.Round(lng, 3):F3}";
             var cachedLighting = await TryGetCachedAsync<double>(lampKey, "environment");
@@ -397,6 +397,13 @@ namespace AccessCity.API.Services
             if (cachedLighting.Hit && cachedSurveillance.Hit)
             {
                 return (cachedLighting.Value, cachedSurveillance.Value);
+            }
+
+            if (!_realtimeExternalSignalsEnabled || _envClient == null)
+            {
+                return (
+                    cachedLighting.Hit ? cachedLighting.Value : DefaultLightingRisk,
+                    cachedSurveillance.Hit ? cachedSurveillance.Value : DefaultSurveillanceRisk);
             }
 
             var summary = await _envClient.GetNearbyInfrastructureAsync(lat, lng, Math.Min(radiusMetres, 300));

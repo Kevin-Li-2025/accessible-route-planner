@@ -32,6 +32,10 @@ The script mixes:
 - `/api/v1/routing/risk-score` with slightly varied coordinates to exercise scoped PostGIS hazard queries.
 - `/api/v1/routing/safe-path` every fourth iteration to exercise OSRM fallback, route graph loading, route cache, coalescing, and the route computation limiter.
 
+In production config, `safe-path` can return `202 Accepted` for cache misses. That is the expected
+async-first path; the job result is stored through the distributed cache so polling can land on any
+API replica.
+
 Expected threshold defaults:
 
 - overall HTTP failure rate below 2%
@@ -42,8 +46,11 @@ Expected threshold defaults:
 If `safe-path` returns `503` or `504` during high bursts, that is capacity protection working rather than silent overload. Increase API replicas, `Routing__MaxConcurrentComputations`, Postgres pool size, and CPU only after checking DB wait time and CPU saturation.
 
 In Kubernetes, the default kustomization now lets KEDA scale `accesscity-api` from safe-path p95
-latency and route limiter saturation in addition to CPU and memory. If Prometheus runs outside the
-`accesscity` namespace, update `deploy/kubernetes/keda-scaledobject.yaml` before applying.
+latency, route limiter saturation, and Prometheus-backed CPU/memory queries. If Prometheus runs
+outside the `accesscity` namespace, update `deploy/kubernetes/keda-scaledobject.yaml` before applying.
+
+After this short run passes, use `docs/SOAK_AND_CHAOS_TESTING.md` for the 24-hour soak and failure
+injection checks.
 
 ## Tuning Knobs
 

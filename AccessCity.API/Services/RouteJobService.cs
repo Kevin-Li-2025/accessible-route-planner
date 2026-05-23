@@ -1,24 +1,28 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using AccessCity.API.Configuration;
 using AccessCity.API.Exceptions;
 using AccessCity.API.Models;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
+using NetTopologySuite.IO.Converters;
 
 namespace AccessCity.API.Services;
 
 /// <summary>
-/// In-memory route job queue implementing the Job-Status pattern (RFC 7240 / 202 Accepted).
+/// Distributed-cache backed route job queue implementing the Job-Status pattern (RFC 7240 / 202 Accepted).
 /// Clients submit a route request, receive a job ID, and poll for the result.
 /// This decouples the expensive A* computation from the HTTP request lifecycle,
-/// preventing database connection pool exhaustion under concurrent load.
+/// preventing database connection pool exhaustion under concurrent load while allowing polling across API replicas.
 /// </summary>
 public interface IRouteJobService
 {
     /// <summary>Submits a route computation and returns a job ID immediately.</summary>
-    string Submit(RouteRequest request, List<HazardReport> hazards);
+    Task<string> SubmitAsync(RouteRequest request, List<HazardReport>? hazards = null, CancellationToken cancellationToken = default);
 
     /// <summary>Polls the status of a previously submitted job.</summary>
-    RouteJobResult? GetResult(string jobId);
+    Task<RouteJobResult?> GetResultAsync(string jobId, CancellationToken cancellationToken = default);
 }
 
 /// <summary>Result envelope for an async route job.</summary>
@@ -40,24 +44,32 @@ public sealed class RouteJobService : IRouteJobService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IRouteCoalescingService _coalescing;
     private readonly IRouteComputationLimiter _routeLimiter;
+    private readonly IDistributedCache _distributedCache;
     private readonly ILogger<RouteJobService> _logger;
     private readonly RoutingOptions _options;
+    private static readonly TimeSpan JobTtl = TimeSpan.FromMinutes(5);
+    private static readonly JsonSerializerOptions JobJsonOptions = CreateJobJsonOptions();
 
     public RouteJobService(
         IServiceScopeFactory scopeFactory,
         IRouteCoalescingService coalescing,
         IRouteComputationLimiter routeLimiter,
+        IDistributedCache distributedCache,
         IOptions<RoutingOptions> options,
         ILogger<RouteJobService> logger)
     {
         _scopeFactory = scopeFactory;
         _coalescing = coalescing;
         _routeLimiter = routeLimiter;
+        _distributedCache = distributedCache;
         _options = options.Value;
         _logger = logger;
     }
 
-    public string Submit(RouteRequest request, List<HazardReport> hazards)
+    public async Task<string> SubmitAsync(
+        RouteRequest request,
+        List<HazardReport>? hazards = null,
+        CancellationToken cancellationToken = default)
     {
         var jobId = Guid.NewGuid().ToString("N")[..12];
         var result = new RouteJobResult
@@ -68,6 +80,7 @@ public sealed class RouteJobService : IRouteJobService
         };
 
         _jobs[jobId] = result;
+        await PersistAsync(result, cancellationToken);
 
         // Fire-and-forget the computation on the thread pool.
         _ = ComputeAsync(jobId, request, hazards);
@@ -75,13 +88,35 @@ public sealed class RouteJobService : IRouteJobService
         return jobId;
     }
 
-    public RouteJobResult? GetResult(string jobId) =>
-        _jobs.TryGetValue(jobId, out var result) ? result : null;
+    public async Task<RouteJobResult?> GetResultAsync(string jobId, CancellationToken cancellationToken = default)
+    {
+        if (_jobs.TryGetValue(jobId, out var result))
+        {
+            return result;
+        }
 
-    private async Task ComputeAsync(string jobId, RouteRequest request, List<HazardReport> hazards)
+        var json = await _distributedCache.GetStringAsync(JobCacheKey(jobId), cancellationToken);
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<RouteJobResult>(json, JobJsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "Route job {JobId} could not be deserialized from distributed cache", jobId);
+            return null;
+        }
+    }
+
+    private async Task ComputeAsync(string jobId, RouteRequest request, List<HazardReport>? hazards)
     {
         var result = _jobs[jobId];
         result.Status = RouteJobStatus.Processing;
+        await PersistAsync(result, CancellationToken.None);
 
         try
         {
@@ -97,8 +132,15 @@ public sealed class RouteJobService : IRouteJobService
 
                     // Create a scoped DI container to resolve scoped routing dependencies.
                     await using var scope = _scopeFactory.CreateAsyncScope();
+                    var scopedHazards = hazards;
+                    if (scopedHazards is null)
+                    {
+                        var hazardQueries = scope.ServiceProvider.GetRequiredService<IHazardQueryService>();
+                        scopedHazards = await hazardQueries.LoadHazardsForRouteAsync(request, CancellationToken.None);
+                    }
+
                     var routing = scope.ServiceProvider.GetRequiredService<IRoutingService>();
-                    return await routing.FindSafePathAsync(request, hazards);
+                    return await routing.FindSafePathAsync(request, scopedHazards);
                 });
 
             result.Route = route;
@@ -119,14 +161,52 @@ public sealed class RouteJobService : IRouteJobService
         }
 
         result.CompletedAt = DateTime.UtcNow;
+        await PersistAsync(result, CancellationToken.None);
 
         // Auto-expire completed jobs after 5 minutes.
-        _ = CleanupAfterDelay(jobId, TimeSpan.FromMinutes(5));
+        _ = CleanupAfterDelay(jobId, JobTtl);
     }
 
     private async Task CleanupAfterDelay(string jobId, TimeSpan delay)
     {
         await Task.Delay(delay);
         _jobs.TryRemove(jobId, out _);
+        try
+        {
+            await _distributedCache.RemoveAsync(JobCacheKey(jobId));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Route job {JobId} could not be removed from distributed cache", jobId);
+        }
+    }
+
+    private async Task PersistAsync(RouteJobResult result, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(result, JobJsonOptions);
+            await _distributedCache.SetStringAsync(
+                JobCacheKey(result.JobId),
+                json,
+                new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = JobTtl },
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Route job {JobId} could not be persisted to distributed cache", result.JobId);
+        }
+    }
+
+    private static string JobCacheKey(string jobId) => $"route_job:{jobId}";
+
+    private static JsonSerializerOptions CreateJobJsonOptions()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals
+        };
+        options.Converters.Add(new GeoJsonConverterFactory());
+        return options;
     }
 }

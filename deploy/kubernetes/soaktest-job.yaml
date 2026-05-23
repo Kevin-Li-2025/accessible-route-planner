@@ -1,0 +1,46 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: accesscity-soaktest
+  labels:
+    app: accesscity-soaktest
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: accesscity-soaktest
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: k6
+          image: grafana/k6:0.51.0
+          imagePullPolicy: IfNotPresent
+          command: ["k6", "run", "/scripts/accesscity-soak.js"]
+          env:
+            - name: BASE_URL
+              value: http://accesscity-api
+            - name: SOAK_DURATION
+              value: 24h
+            - name: SOAK_RATE
+              value: "120"
+            - name: SOAK_PREALLOCATED_VUS
+              value: "120"
+            - name: SOAK_MAX_VUS
+              value: "600"
+          resources:
+            requests:
+              cpu: "1"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "1Gi"
+          volumeMounts:
+            - name: soaktest-script
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: soaktest-script
+          configMap:
+            name: accesscity-soaktest-script

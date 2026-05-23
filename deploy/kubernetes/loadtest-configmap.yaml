@@ -65,7 +65,7 @@ data:
         const safePathParams = Object.assign({}, jsonHeaders, { tags: { name: 'safe-path' } });
 
         check(http.post(`${baseUrl}/api/v1/routing/safe-path`, safePathBody, safePathParams), {
-          'safe-path accepted': r => r.status === 200 || r.status === 404 || r.status === 503 || r.status === 504
+          'safe-path accepted': r => r.status === 200 || r.status === 202 || r.status === 404 || r.status === 503 || r.status === 504
         });
       }
 

@@ -95,6 +95,37 @@ public sealed class ArchitectureModularityTests
         Assert.Contains("name: accesscity-api-scalability", scaledObject, StringComparison.Ordinal);
         Assert.Contains("accesscity_safe_path_p95_ms", scaledObject, StringComparison.Ordinal);
         Assert.Contains("accesscity_route_capacity_saturation_rate", scaledObject, StringComparison.Ordinal);
+        Assert.Contains("accesscity_api_cpu_request_utilization", scaledObject, StringComparison.Ordinal);
+        Assert.Contains("accesscity_api_memory_limit_utilization", scaledObject, StringComparison.Ordinal);
+        Assert.Contains("fallback:", scaledObject, StringComparison.Ordinal);
+        Assert.Contains("failureThreshold: 3", scaledObject, StringComparison.Ordinal);
+        Assert.Contains("type: cron", scaledObject, StringComparison.Ordinal);
+        Assert.Contains("desiredReplicas: \"10\"", scaledObject, StringComparison.Ordinal);
+        Assert.DoesNotContain("type: cpu", scaledObject, StringComparison.Ordinal);
+        Assert.DoesNotContain("type: memory", scaledObject, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Production_config_keeps_external_latency_off_request_hot_paths()
+    {
+        var root = FindRepositoryRoot();
+        var configMap = File.ReadAllText(Path.Combine(root, "deploy", "kubernetes", "configmap.yaml"));
+
+        Assert.Contains("Routing__AsyncFirstForCacheMiss: \"true\"", configMap, StringComparison.Ordinal);
+        Assert.Contains("RiskScoring__RealtimeExternalSignalsEnabled: \"false\"", configMap, StringComparison.Ordinal);
+        Assert.Contains("ExternalApis__Overpass__RealtimeHazardsEnabled: \"false\"", configMap, StringComparison.Ordinal);
+        Assert.Contains("ExternalApis__Overpass__HazardFetchBudgetSeconds: \"5\"", configMap, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Route_jobs_publish_status_to_distributed_cache_for_multi_replica_polling()
+    {
+        var root = FindRepositoryRoot();
+        var routeJobService = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "RouteJobService.cs"));
+
+        Assert.Contains("IDistributedCache", routeJobService, StringComparison.Ordinal);
+        Assert.Contains("SetStringAsync", routeJobService, StringComparison.Ordinal);
+        Assert.Contains("GetStringAsync", routeJobService, StringComparison.Ordinal);
     }
 
     private static bool IsConcreteAccessCityService(Type type)

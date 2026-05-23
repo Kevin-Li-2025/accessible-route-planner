@@ -1,0 +1,101 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: accesscity-soaktest-script
+data:
+  accesscity-soak.js: |
+    import http from 'k6/http';
+    import { check, sleep } from 'k6';
+    import exec from 'k6/execution';
+
+    const baseUrl = __ENV.BASE_URL || 'http://accesscity-api';
+    const soakDuration = __ENV.SOAK_DURATION || '24h';
+    const soakRate = Number(__ENV.SOAK_RATE || 120);
+    const preAllocatedVUs = Number(__ENV.SOAK_PREALLOCATED_VUS || 120);
+    const maxVUs = Number(__ENV.SOAK_MAX_VUS || 600);
+
+    export const options = {
+      scenarios: {
+        steady_mixed_api: {
+          executor: 'constant-arrival-rate',
+          rate: soakRate,
+          timeUnit: '1s',
+          duration: soakDuration,
+          preAllocatedVUs,
+          maxVUs,
+          gracefulStop: '30s'
+        }
+      },
+      thresholds: {
+        http_req_failed: ['rate<0.02'],
+        http_req_duration: ['p(95)<1000', 'p(99)<3000'],
+        checks: ['rate>0.98'],
+        'http_req_duration{name:health}': ['p(95)<200'],
+        'http_req_duration{name:risk-score}': ['p(95)<250'],
+        'http_req_duration{name:safe-path}': ['p(95)<2500'],
+        'http_req_duration{name:route-job}': ['p(95)<500']
+      }
+    };
+
+    const jsonHeaders = { headers: { 'Content-Type': 'application/json' }, timeout: '5s' };
+
+    function offsetFor(iteration) {
+      return ((iteration % 41) - 20) * 0.00003;
+    }
+
+    export default function () {
+      const iteration = exec.scenario.iterationInTest;
+      const offset = offsetFor(iteration);
+
+      if (iteration % 20 === 0) {
+        check(http.get(`${baseUrl}/health`, { timeout: '2s', tags: { name: 'health' } }), {
+          'health ok': r => r.status === 200
+        });
+      }
+
+      check(http.get(
+        `${baseUrl}/api/v1/routing/risk-score?lat=${52.4862 + offset}&lng=${-1.8904 - offset}&radius=500`,
+        { timeout: '3s', tags: { name: 'risk-score' } }
+      ), {
+        'risk-score ok': r => r.status === 200
+      });
+
+      if (iteration % 5 === 0) {
+        const body = JSON.stringify({
+          start: { x: -1.8985 + offset, y: 52.4814 - offset },
+          end: { x: -1.9300 - offset, y: 52.4510 + offset },
+          preferences: [],
+          safetyWeight: 0.5,
+          profile: 'standard'
+        });
+
+        const response = http.post(
+          `${baseUrl}/api/v1/routing/safe-path`,
+          body,
+          Object.assign({}, jsonHeaders, { tags: { name: 'safe-path' } })
+        );
+
+        check(response, {
+          'safe-path ok or accepted': r => r.status === 200 || r.status === 202
+        });
+
+        if (response.status === 202 && iteration % 25 === 0) {
+          try {
+            const jobId = response.json('jobId');
+            if (jobId) {
+              sleep(0.2);
+              check(http.get(`${baseUrl}/api/v1/routing/jobs/${jobId}`, {
+                timeout: '2s',
+                tags: { name: 'route-job' }
+              }), {
+                'route-job visible': r => r.status === 200
+              });
+            }
+          } catch (_) {
+            check(response, { 'route-job id parseable': () => false });
+          }
+        }
+      }
+
+      sleep(0.05);
+    }

@@ -309,8 +309,20 @@ public class RoutingService : IRoutingService
             {
                 Path = new LineString(new[] { request.Start, request.End }),
                 Distance = directDist,
+                EstimatedTime = CalculateEstimatedMinutes(directDist, null),
                 SafetyScore = 1.0,
-                Warnings = new List<string> { "Origin and destination are very close." }
+                Warnings = new List<string> { "Origin and destination are very close." },
+                Steps = new List<RouteStep>
+                {
+                    new()
+                    {
+                        From = new Point(request.Start),
+                        To = new Point(request.End),
+                        Distance = Math.Round(directDist, 1),
+                        SafetyScore = 1.0,
+                        Instruction = "Proceed directly to your destination."
+                    }
+                }
             };
         }
 
@@ -990,8 +1002,20 @@ public class RoutingService : IRoutingService
             {
                 Path = new LineString(new[] { request.Start, request.End }),
                 Distance = directDist,
+                EstimatedTime = CalculateEstimatedMinutes(directDist, null),
                 SafetyScore = 1.0,
-                Warnings = new List<string> { "Origin and destination are very close." }
+                Warnings = new List<string> { "Origin and destination are very close." },
+                Steps = new List<RouteStep>
+                {
+                    new()
+                    {
+                        From = new Point(request.Start),
+                        To = new Point(request.End),
+                        Distance = Math.Round(directDist, 1),
+                        SafetyScore = 1.0,
+                        Instruction = "Proceed directly to your destination."
+                    }
+                }
             };
         }
 

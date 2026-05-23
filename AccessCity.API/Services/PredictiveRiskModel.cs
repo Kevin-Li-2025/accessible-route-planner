@@ -1,5 +1,6 @@
 using AccessCity.API.Models;
 using AccessCity.API.Services.External;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Caching.Memory;
 
 namespace AccessCity.API.Services
@@ -38,6 +39,7 @@ namespace AccessCity.API.Services
         private readonly IRiskScoringService _baseRisk;
         private readonly ILiveHazardClient? _weatherClient;
         private readonly IMemoryCache? _cache;
+        private readonly bool _realtimeExternalSignalsEnabled;
 
         // ──── Learned model weights (logistic regression coefficients) ────
         // Derived from urban pedestrian safety research:
@@ -53,11 +55,13 @@ namespace AccessCity.API.Services
         public PredictiveRiskModel(
             IRiskScoringService baseRisk,
             ILiveHazardClient? weatherClient = null,
-            IMemoryCache? cache = null)
+            IMemoryCache? cache = null,
+            IConfiguration? configuration = null)
         {
             _baseRisk = baseRisk;
             _weatherClient = weatherClient;
             _cache = cache;
+            _realtimeExternalSignalsEnabled = configuration?.GetValue("RiskScoring:RealtimeExternalSignalsEnabled", true) ?? true;
         }
 
         /// <summary>
@@ -76,7 +80,9 @@ namespace AccessCity.API.Services
             double timeRisk = ComputeTimeOfDayRisk(DateTime.UtcNow);
 
             // Factor 3: Weather risk
-            double weatherRisk = await WeatherRiskEvaluator.GetRiskAsync(_weatherClient, _cache, lat, lon);
+            double weatherRisk = _realtimeExternalSignalsEnabled
+                ? await WeatherRiskEvaluator.GetRiskAsync(_weatherClient, _cache, lat, lon)
+                : WeatherRiskEvaluator.GetCachedRisk(_cache, lat, lon);
 
             // Factor 4: Crime risk — uses cached UK Police street crime data
             double crimeRisk = _baseRisk.QuickCrimeRisk(lat, lon);
