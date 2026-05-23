@@ -108,7 +108,7 @@ public class AccessCityApiFactory : WebApplicationFactory<Program>
         await _importLock.WaitAsync();
         try
         {
-            if (_osmImported)
+            if (_osmImported && await HasImportedRouteGraphAsync())
             {
                 return;
             }
@@ -131,6 +131,27 @@ public class AccessCityApiFactory : WebApplicationFactory<Program>
         }
 
         base.Dispose(disposing);
+    }
+
+    private async Task<bool> HasImportedRouteGraphAsync()
+    {
+        await using var connection = new NpgsqlConnection(ConnectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT EXISTS (SELECT 1 FROM route_nodes LIMIT 1)
+               AND EXISTS (SELECT 1 FROM route_edges LIMIT 1);
+            """;
+
+        try
+        {
+            return await command.ExecuteScalarAsync() is true;
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+        {
+            return false;
+        }
     }
 
     private void ResetDatabaseState()
