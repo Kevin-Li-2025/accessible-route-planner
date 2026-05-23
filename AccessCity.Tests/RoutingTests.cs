@@ -469,6 +469,49 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
         Assert.True(loaded.HasCoverage);
     }
 
+    [Fact]
+    public async Task RouteGraphRepository_Loads_Prepartitioned_Packed_Shards()
+    {
+        var client = await _factory.CreateAuthenticatedClientAsync();
+        await _factory.ImportOsmAsync(client);
+
+        using var scope = _factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var distributedCache = scope.ServiceProvider.GetRequiredService<IDistributedCache>();
+        var metrics = scope.ServiceProvider.GetRequiredService<AccessCityMetrics>();
+        var routeGraphStatus = scope.ServiceProvider.GetRequiredService<IRouteGraphStatusService>();
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<RouteGraphRepository>>();
+        using var memoryCache = new MemoryCache(new MemoryCacheOptions());
+        var options = Options.Create(new RoutingOptions
+        {
+            RouteGraphPrepartitionedShardsEnabled = true,
+            RouteGraphPackedArtifactsEnabled = true,
+            RouteGraphShardSizeDegrees = 0.01,
+            RouteGraphMaxPrepartitionedShardCount = 64,
+            RouteGraphMinEdgesPerPrepartitionedShard = 25,
+            MaxRouteGraphEdges = 20_000
+        });
+
+        var repository = new RouteGraphRepository(
+            dbContext,
+            memoryCache,
+            distributedCache,
+            metrics,
+            routeGraphStatus,
+            options,
+            logger);
+
+        var loaded = await repository.LoadGraphAsync(
+            new Coordinate(-1.8904, 52.4862),
+            new Coordinate(-1.8894, 52.4862));
+
+        Assert.True(loaded.HasCoverage);
+        Assert.Contains("bundle", loaded.ShardKey);
+        Assert.All(
+            loaded.Nodes.Values.SelectMany(node => node.Edges.Values),
+            edge => Assert.Equal(RouteEdgeCostModel.EdgeWeightVersion, edge.EdgeWeightVersion));
+    }
+
     private static string BuildRouteGraphCacheKey(
         Coordinate start,
         Coordinate end,
@@ -487,7 +530,7 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
 
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"route_graph:v5:{graphVersion}:{edgeLimit}:{minLon:F4}:{minLat:F4}:{maxLon:F4}:{maxLat:F4}");
+            $"route_graph:v6:{RouteGraphArtifactCodec.SchemaVersion}:ew{RouteEdgeCostModel.EdgeWeightVersion}:region:{graphVersion}:{edgeLimit}:{minLon:F4}:{minLat:F4}:{maxLon:F4}:{maxLat:F4}");
     }
 
     [Fact]

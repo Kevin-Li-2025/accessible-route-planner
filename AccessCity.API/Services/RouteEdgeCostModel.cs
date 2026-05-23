@@ -5,6 +5,7 @@ namespace AccessCity.API.Services;
 public static class RouteEdgeCostModel
 {
     public const int Version = 1;
+    public const int EdgeWeightVersion = 1;
 
     public static RouteEdgeCostProfile Compute(
         double distanceMetres,
@@ -49,6 +50,32 @@ public static class RouteEdgeCostModel
             edge.Access,
             profile);
     }
+
+    public static void PopulateTraversalWeights(GraphEdge edge)
+    {
+        edge.EdgeWeightVersion = EdgeWeightVersion;
+        edge.StandardTraversalSeconds = ComputeTraversalSeconds(edge.DistanceMetres, edge.StandardAccessibilityPenaltySeconds, "standard");
+        edge.WheelchairTraversalSeconds = ComputeTraversalSeconds(edge.DistanceMetres, edge.WheelchairAccessibilityPenaltySeconds, "manual-wheelchair");
+        edge.StrollerTraversalSeconds = ComputeTraversalSeconds(edge.DistanceMetres, edge.StrollerAccessibilityPenaltySeconds, "stroller");
+    }
+
+    public static double ResolveTraversalSeconds(GraphEdge edge, string? profile)
+    {
+        if (edge.EdgeWeightVersion >= EdgeWeightVersion)
+        {
+            return profile?.ToLowerInvariant() switch
+            {
+                "manual-wheelchair" or "power-wheelchair" => edge.WheelchairTraversalSeconds,
+                "stroller" => edge.StrollerTraversalSeconds,
+                _ => edge.StandardTraversalSeconds
+            };
+        }
+
+        return ComputeTraversalSeconds(edge.DistanceMetres, ResolvePenaltySeconds(edge, profile), profile);
+    }
+
+    public static double ComputeTraversalSeconds(double distanceMetres, double accessibilityPenaltySeconds, string? profile) =>
+        distanceMetres / ResolveProfileSpeed(profile) + Math.Max(0, accessibilityPenaltySeconds);
 
     public static double ComputePenaltySeconds(
         double distanceMetres,

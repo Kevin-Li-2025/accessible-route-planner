@@ -1371,7 +1371,9 @@ public class RoutingService : IRoutingService
 
         double edgeRisk = Math.Clamp((edge.BaseSafetyCost + liveRisk) / 2.0, 0.0, 1.0);
         double riskPenaltySeconds = baseSeconds * edgeRisk * 4.0 * w;
-        double accessibilityPenaltySeconds = RouteEdgeCostModel.ResolvePenaltySeconds(edge, request.Profile) * w;
+        double accessibilityPenaltySeconds = Math.Max(
+            0,
+            RouteEdgeCostModel.ResolveTraversalSeconds(edge, request.Profile) - baseSeconds) * w;
 
         double modifier = 1.0;
         foreach (var pref in request.Preferences)

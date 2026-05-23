@@ -23,6 +23,10 @@ public sealed class RoutingOptions
     public bool RequireRouteGraphForReadiness { get; set; }
     public int RouteGraphCacheTtlSeconds { get; set; } = 300;
     public double RouteGraphShardSizeDegrees { get; set; } = 0.01;
+    public bool RouteGraphPrepartitionedShardsEnabled { get; set; }
+    public int RouteGraphMaxPrepartitionedShardCount { get; set; } = 64;
+    public int RouteGraphMinEdgesPerPrepartitionedShard { get; set; } = 250;
+    public bool RouteGraphPackedArtifactsEnabled { get; set; } = true;
     public bool RouteGraphDistributedLoadCoalescingEnabled { get; set; } = true;
     public int RouteGraphDistributedLoadLockTtlSeconds { get; set; } = 8;
     public int RouteGraphDistributedLoadWaitMilliseconds { get; set; } = 3_500;

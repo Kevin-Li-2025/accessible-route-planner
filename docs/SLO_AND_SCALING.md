@@ -51,6 +51,12 @@ PostGIS hot reads should go through PgBouncer and, when available, a read replic
 config enables `Postgres__UseReadOnlyForHotPaths`; set `READONLY_DATABASE_URL` for route graph
 shard loads to stop competing with writes, migrations, and ingestion on the primary.
 
+Route graph cache misses should create reusable graph partitions, not one-off route-sized blobs.
+The production config enables `Routing__RouteGraphPrepartitionedShardsEnabled` and
+`Routing__RouteGraphPackedArtifactsEnabled`, so workers cache packed grid-cell artifacts with
+explicit edge-weight versions. Watch packed artifact hit ratio before increasing route worker
+counts; without reusable graph partitions, worker scale mostly moves the CPU bottleneck around.
+
 The API KEDA object replaces the standalone `hpa.yaml` in the default kustomization so only one
 controller owns the `accesscity-api` deployment scale. Keep `hpa.yaml` as a CPU/memory fallback
 for environments that do not run KEDA Prometheus triggers.

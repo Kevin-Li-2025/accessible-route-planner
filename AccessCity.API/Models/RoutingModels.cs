@@ -193,6 +193,10 @@ namespace AccessCity.API.Models
         public double WheelchairAccessibilityPenaltySeconds { get; set; }
         public double StrollerAccessibilityPenaltySeconds { get; set; }
         public double AccessibilityDataQuality { get; set; } = 1.0;
+        public int EdgeWeightVersion { get; set; }
+        public double StandardTraversalSeconds { get; set; }
+        public double WheelchairTraversalSeconds { get; set; }
+        public double StrollerTraversalSeconds { get; set; }
 
         /// <summary>Actual road shape (lon/lat) for this segment. When set, used so the route follows roads instead of straight lines.</summary>
         public Coordinate[]? Geometry { get; set; }

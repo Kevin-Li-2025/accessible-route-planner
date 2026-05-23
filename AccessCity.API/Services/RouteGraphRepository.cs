@@ -66,9 +66,14 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
     {
         var edgeLimit = Math.Max(100, _options.MaxRouteGraphEdges);
         var region = ComputeShardRegion(start, end);
+        var loadRegions = ComputeLoadRegions(region);
         var stopwatch = Stopwatch.StartNew();
         var coverage = await _routeGraphStatus.GetStatusAsync(cancellationToken);
-        var cacheKey = BuildCacheKey(region, edgeLimit, coverage.Version);
+        var cacheKey = BuildCacheKey(
+            region,
+            edgeLimit,
+            coverage.Version,
+            loadRegions.Count > 1 ? $"bundle{loadRegions.Count}" : "region");
 
         if (!coverage.HasCoverage)
         {
@@ -85,7 +90,7 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         var lazy = InFlightGraphLoads.GetOrAdd(
             cacheKey,
             _ => new Lazy<Task<RouteGraphData>>(
-                () => LoadAndCacheGraphRegionAsync(region, edgeLimit, cacheKey, cancellationToken),
+                () => LoadAndCacheGraphRegionsAsync(loadRegions, edgeLimit, cacheKey, coverage.Version, cancellationToken),
                 LazyThreadSafetyMode.ExecutionAndPublication));
 
         try
@@ -105,21 +110,67 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         }
     }
 
+    private async Task<RouteGraphData> LoadAndCacheGraphRegionsAsync(
+        IReadOnlyList<GraphShardRegion> regions,
+        int edgeLimit,
+        string cacheKey,
+        string graphVersion,
+        CancellationToken cancellationToken)
+    {
+        var ttl = TimeSpan.FromSeconds(Math.Max(30, _options.RouteGraphCacheTtlSeconds));
+        var distributed = await TryGetDistributedSnapshotAsync(cacheKey, cancellationToken);
+        if (distributed is not null)
+        {
+            _cache.Set(cacheKey, distributed, ttl);
+            return distributed;
+        }
+
+        if (regions.Count == 1)
+        {
+            return await LoadAndCacheGraphRegionAsync(regions[0], edgeLimit, cacheKey, ttl, cancellationToken);
+        }
+
+        var perShardEdgeLimit = ComputePerShardEdgeLimit(edgeLimit, regions.Count);
+        var shards = new List<RouteGraphData>(regions.Count);
+        foreach (var region in regions)
+        {
+            var shardKey = BuildCacheKey(region, perShardEdgeLimit, graphVersion, "cell");
+            var shard = await LoadAndCacheGraphRegionAsync(region, perShardEdgeLimit, shardKey, ttl, cancellationToken);
+            if (shard.HasCoverage)
+            {
+                shards.Add(shard);
+            }
+        }
+
+        var graphData = MergeGraphShards(shards, cacheKey, edgeLimit);
+        if (graphData.HasCoverage)
+        {
+            _cache.Set(cacheKey, graphData, ttl);
+            await TrySetDistributedSnapshotAsync(cacheKey, graphData, ttl, cancellationToken);
+        }
+
+        return graphData;
+    }
+
     private async Task<RouteGraphData> LoadAndCacheGraphRegionAsync(
         GraphShardRegion region,
         int edgeLimit,
         string cacheKey,
+        TimeSpan ttl,
         CancellationToken cancellationToken)
     {
+        if (_cache.TryGetValue(cacheKey, out RouteGraphData? cached) && cached is not null)
+        {
+            return cached;
+        }
+
         var distributed = await TryGetDistributedSnapshotAsync(cacheKey, cancellationToken);
         if (distributed is not null)
         {
-            var distributedTtl = TimeSpan.FromSeconds(Math.Max(30, _options.RouteGraphCacheTtlSeconds));
-            _cache.Set(cacheKey, distributed, distributedTtl);
+            _cache.Set(cacheKey, distributed, ttl);
             return distributed;
         }
 
-        var ttl = TimeSpan.FromSeconds(Math.Max(30, _options.RouteGraphCacheTtlSeconds));
         var graphData = await LoadGraphRegionWithDistributedCoalescingAsync(region, edgeLimit, cacheKey, ttl, cancellationToken);
         if (graphData.HasCoverage)
         {
@@ -247,7 +298,32 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
                 return null;
             }
 
-            var snapshot = JsonSerializer.Deserialize<RouteGraphSnapshot>(json, SnapshotJsonOptions);
+            using var document = JsonDocument.Parse(json);
+            if (_options.RouteGraphPackedArtifactsEnabled
+                && (document.RootElement.TryGetProperty("schemaVersion", out _)
+                    || document.RootElement.TryGetProperty("SchemaVersion", out _)))
+            {
+                var artifact = document.RootElement.Deserialize<PackedRouteGraphArtifact>(SnapshotJsonOptions);
+                if (artifact is not null && RouteGraphArtifactCodec.IsCompatible(artifact))
+                {
+                    var packedGraphData = RouteGraphArtifactCodec.Unpack(artifact);
+                    if (!packedGraphData.HasCoverage)
+                    {
+                        await _distributedCache.RemoveAsync(cacheKey, cancellationToken);
+                        _metrics.CacheLookup("route_graph_l2", hit: false, stopwatch.Elapsed.TotalMilliseconds);
+                        return null;
+                    }
+
+                    _metrics.CacheLookup("route_graph_l2", hit: true, stopwatch.Elapsed.TotalMilliseconds);
+                    return packedGraphData;
+                }
+
+                await _distributedCache.RemoveAsync(cacheKey, cancellationToken);
+                _metrics.CacheLookup("route_graph_l2", hit: false, stopwatch.Elapsed.TotalMilliseconds);
+                return null;
+            }
+
+            var snapshot = document.RootElement.Deserialize<RouteGraphSnapshot>(SnapshotJsonOptions);
             if (snapshot is null)
             {
                 _metrics.CacheLookup("route_graph_l2", hit: false, stopwatch.Elapsed.TotalMilliseconds);
@@ -286,7 +362,10 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
 
         try
         {
-            var json = JsonSerializer.Serialize(ToSnapshot(graphData), SnapshotJsonOptions);
+            var snapshot = _options.RouteGraphPackedArtifactsEnabled
+                ? (object)RouteGraphArtifactCodec.Pack(graphData)
+                : ToSnapshot(graphData);
+            var json = JsonSerializer.Serialize(snapshot, SnapshotJsonOptions);
             await _distributedCache.SetStringAsync(
                 cacheKey,
                 json,
@@ -359,30 +438,7 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
                 continue;
             }
 
-            fromNode.Edges[edge.ToNodeId] = new GraphEdge
-            {
-                TargetNodeId = edge.ToNodeId,
-                DistanceMetres = edge.DistanceMetres,
-                BaseSafetyCost = edge.BaseSafetyCost,
-                SurfaceType = edge.SurfaceType,
-                HasStairs = edge.HasStairs,
-                HasCrossing = edge.HasCrossing,
-                IsUnderConstruction = edge.IsUnderConstruction,
-                LightingQuality = edge.LightingQuality,
-                IsSteep = edge.IsSteep,
-                KerbHeight = edge.KerbHeight,
-                Smoothness = edge.Smoothness,
-                WidthMetres = edge.WidthMetres,
-                HasTactilePaving = edge.HasTactilePaving,
-                HasBarrier = edge.HasBarrier,
-                Access = edge.Access,
-                AccessibilityCostVersion = edge.AccessibilityCostVersion,
-                StandardAccessibilityPenaltySeconds = edge.StandardAccessibilityPenaltySeconds,
-                WheelchairAccessibilityPenaltySeconds = edge.WheelchairAccessibilityPenaltySeconds,
-                StrollerAccessibilityPenaltySeconds = edge.StrollerAccessibilityPenaltySeconds,
-                AccessibilityDataQuality = edge.AccessibilityDataQuality,
-                Geometry = edge.Geometry?.Coordinates
-            };
+            fromNode.Edges[edge.ToNodeId] = CreateGraphEdge(edge);
         }
 
         var graphData = new RouteGraphData
@@ -403,6 +459,66 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
             isTruncated);
 
         return graphData;
+    }
+
+    private static GraphEdge CreateGraphEdge(RouteEdge edge)
+    {
+        var graphEdge = new GraphEdge
+        {
+            TargetNodeId = edge.ToNodeId,
+            DistanceMetres = edge.DistanceMetres,
+            BaseSafetyCost = edge.BaseSafetyCost,
+            SurfaceType = edge.SurfaceType,
+            HasStairs = edge.HasStairs,
+            HasCrossing = edge.HasCrossing,
+            IsUnderConstruction = edge.IsUnderConstruction,
+            LightingQuality = edge.LightingQuality,
+            IsSteep = edge.IsSteep,
+            KerbHeight = edge.KerbHeight,
+            Smoothness = edge.Smoothness,
+            WidthMetres = edge.WidthMetres,
+            HasTactilePaving = edge.HasTactilePaving,
+            HasBarrier = edge.HasBarrier,
+            Access = edge.Access,
+            AccessibilityCostVersion = edge.AccessibilityCostVersion,
+            StandardAccessibilityPenaltySeconds = edge.StandardAccessibilityPenaltySeconds,
+            WheelchairAccessibilityPenaltySeconds = edge.WheelchairAccessibilityPenaltySeconds,
+            StrollerAccessibilityPenaltySeconds = edge.StrollerAccessibilityPenaltySeconds,
+            AccessibilityDataQuality = edge.AccessibilityDataQuality,
+            Geometry = edge.Geometry?.Coordinates
+        };
+        RouteEdgeCostModel.PopulateTraversalWeights(graphEdge);
+        return graphEdge;
+    }
+
+    private static GraphEdge CreateGraphEdge(RouteGraphEdgeSnapshot edge)
+    {
+        var graphEdge = new GraphEdge
+        {
+            TargetNodeId = edge.TargetNodeId,
+            DistanceMetres = edge.DistanceMetres,
+            BaseSafetyCost = edge.BaseSafetyCost,
+            SurfaceType = edge.SurfaceType,
+            HasStairs = edge.HasStairs,
+            HasCrossing = edge.HasCrossing,
+            IsUnderConstruction = edge.IsUnderConstruction,
+            LightingQuality = edge.LightingQuality,
+            IsSteep = edge.IsSteep,
+            KerbHeight = edge.KerbHeight,
+            Smoothness = edge.Smoothness,
+            WidthMetres = edge.WidthMetres,
+            HasTactilePaving = edge.HasTactilePaving,
+            HasBarrier = edge.HasBarrier,
+            Access = edge.Access,
+            AccessibilityCostVersion = edge.AccessibilityCostVersion,
+            StandardAccessibilityPenaltySeconds = edge.StandardAccessibilityPenaltySeconds,
+            WheelchairAccessibilityPenaltySeconds = edge.WheelchairAccessibilityPenaltySeconds,
+            StrollerAccessibilityPenaltySeconds = edge.StrollerAccessibilityPenaltySeconds,
+            AccessibilityDataQuality = edge.AccessibilityDataQuality,
+            Geometry = edge.Geometry?.Select(coord => new Coordinate(coord.X, coord.Y)).ToArray()
+        };
+        RouteEdgeCostModel.PopulateTraversalWeights(graphEdge);
+        return graphEdge;
     }
 
     private static double ComputePaddingDegrees(Coordinate start, Coordinate end)
@@ -428,27 +544,98 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
             Math.Ceiling(maxLat / shardSize) * shardSize);
     }
 
-    private static string BuildCacheKey(GraphShardRegion region, int edgeLimit, string graphVersion) =>
+    private IReadOnlyList<GraphShardRegion> ComputeLoadRegions(GraphShardRegion region)
+    {
+        if (!_options.RouteGraphPrepartitionedShardsEnabled)
+        {
+            return new[] { region };
+        }
+
+        var shardSize = Math.Clamp(_options.RouteGraphShardSizeDegrees, 0.002, 0.05);
+        var minX = (int)Math.Floor(region.MinLon / shardSize);
+        var minY = (int)Math.Floor(region.MinLat / shardSize);
+        var maxX = (int)Math.Ceiling(region.MaxLon / shardSize) - 1;
+        var maxY = (int)Math.Ceiling(region.MaxLat / shardSize) - 1;
+        var shardCount = (maxX - minX + 1) * (maxY - minY + 1);
+
+        if (shardCount <= 1 || shardCount > Math.Max(1, _options.RouteGraphMaxPrepartitionedShardCount))
+        {
+            return new[] { region };
+        }
+
+        var regions = new List<GraphShardRegion>(shardCount);
+        for (var x = minX; x <= maxX; x++)
+        {
+            for (var y = minY; y <= maxY; y++)
+            {
+                regions.Add(new GraphShardRegion(
+                    x * shardSize,
+                    y * shardSize,
+                    (x + 1) * shardSize,
+                    (y + 1) * shardSize));
+            }
+        }
+
+        return regions;
+    }
+
+    private static int ComputeBasePerShardEdgeLimit(int edgeLimit, int shardCount) =>
+        Math.Max(100, Math.Max(1, edgeLimit) / Math.Max(1, shardCount));
+
+    private int ComputePerShardEdgeLimit(int edgeLimit, int shardCount) =>
+        Math.Max(_options.RouteGraphMinEdgesPerPrepartitionedShard, ComputeBasePerShardEdgeLimit(edgeLimit, shardCount));
+
+    private static RouteGraphData MergeGraphShards(
+        IReadOnlyList<RouteGraphData> shards,
+        string cacheKey,
+        int edgeLimit)
+    {
+        if (shards.Count == 0)
+        {
+            return new RouteGraphData { ShardKey = cacheKey };
+        }
+
+        var nodes = new Dictionary<long, GraphNode>();
+        foreach (var shard in shards)
+        {
+            foreach (var node in shard.Nodes.Values)
+            {
+                if (!nodes.TryGetValue(node.Id, out var mergedNode))
+                {
+                    mergedNode = new GraphNode
+                    {
+                        Id = node.Id,
+                        Location = node.Location
+                    };
+                    nodes[node.Id] = mergedNode;
+                }
+
+                foreach (var (targetNodeId, edge) in node.Edges)
+                {
+                    mergedNode.Edges[targetNodeId] = edge;
+                }
+            }
+        }
+
+        var loadedEdgeCount = nodes.Values.Sum(node => node.Edges.Count);
+        var graphData = new RouteGraphData
+        {
+            Nodes = nodes,
+            ShardKey = cacheKey,
+            LoadedEdgeCount = loadedEdgeCount,
+            IsTruncated = shards.Any(shard => shard.IsTruncated) || loadedEdgeCount >= edgeLimit,
+            SpatialBucketSizeDegrees = shards.Min(shard => shard.SpatialBucketSizeDegrees)
+        };
+        RouteGraphSpatialIndex.BuildSpatialBuckets(graphData);
+        return graphData;
+    }
+
+    private static string BuildCacheKey(GraphShardRegion region, int edgeLimit, string graphVersion, string scope) =>
         string.Create(CultureInfo.InvariantCulture,
-            $"route_graph:v5:{graphVersion}:{edgeLimit}:{region.MinLon:F4}:{region.MinLat:F4}:{region.MaxLon:F4}:{region.MaxLat:F4}");
+            $"route_graph:v6:{RouteGraphArtifactCodec.SchemaVersion}:ew{RouteEdgeCostModel.EdgeWeightVersion}:{scope}:{graphVersion}:{edgeLimit}:{region.MinLon:F4}:{region.MinLat:F4}:{region.MaxLon:F4}:{region.MaxLat:F4}");
 
     private static void BuildSpatialBuckets(RouteGraphData graphData)
-    {
-        var bucketSize = graphData.SpatialBucketSizeDegrees;
-        foreach (var node in graphData.Nodes.Values)
-        {
-            var bucket = (
-                X: (int)Math.Floor(node.Location.X / bucketSize),
-                Y: (int)Math.Floor(node.Location.Y / bucketSize));
-            if (!graphData.SpatialBuckets.TryGetValue(bucket, out var nodeIds))
-            {
-                nodeIds = new List<long>();
-                graphData.SpatialBuckets[bucket] = nodeIds;
-            }
-
-            nodeIds.Add(node.Id);
-        }
-    }
+        => RouteGraphSpatialIndex.BuildSpatialBuckets(graphData);
 
     private static RouteGraphSnapshot ToSnapshot(RouteGraphData graphData)
     {
@@ -500,30 +687,7 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
                 Location = new Coordinate(node.X, node.Y),
                 Edges = node.Edges.ToDictionary(
                     edge => edge.TargetNodeId,
-                    edge => new GraphEdge
-                    {
-                        TargetNodeId = edge.TargetNodeId,
-                        DistanceMetres = edge.DistanceMetres,
-                        BaseSafetyCost = edge.BaseSafetyCost,
-                        SurfaceType = edge.SurfaceType,
-                        HasStairs = edge.HasStairs,
-                        HasCrossing = edge.HasCrossing,
-                        IsUnderConstruction = edge.IsUnderConstruction,
-                        LightingQuality = edge.LightingQuality,
-                        IsSteep = edge.IsSteep,
-                        KerbHeight = edge.KerbHeight,
-                        Smoothness = edge.Smoothness,
-                        WidthMetres = edge.WidthMetres,
-                        HasTactilePaving = edge.HasTactilePaving,
-                        HasBarrier = edge.HasBarrier,
-                        Access = edge.Access,
-                        AccessibilityCostVersion = edge.AccessibilityCostVersion,
-                        StandardAccessibilityPenaltySeconds = edge.StandardAccessibilityPenaltySeconds,
-                        WheelchairAccessibilityPenaltySeconds = edge.WheelchairAccessibilityPenaltySeconds,
-                        StrollerAccessibilityPenaltySeconds = edge.StrollerAccessibilityPenaltySeconds,
-                        AccessibilityDataQuality = edge.AccessibilityDataQuality,
-                        Geometry = edge.Geometry?.Select(coord => new Coordinate(coord.X, coord.Y)).ToArray()
-                    })
+                    CreateGraphEdge)
             });
 
         var graphData = new RouteGraphData

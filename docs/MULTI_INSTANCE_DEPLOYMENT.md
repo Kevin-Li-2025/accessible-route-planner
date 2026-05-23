@@ -62,6 +62,12 @@ workers can hydrate hot graph shards without immediately repeating the PostGIS e
 OSM import now also precomputes versioned accessibility penalties per route edge for standard,
 wheelchair, and stroller profiles. Route workers read those costs from cached graph shards instead
 of recomputing surface/smoothness/width/kerb penalties for every A* edge expansion.
+The production route graph cache stores packed, versioned artifacts instead of nested node
+snapshots. When `Routing__RouteGraphPrepartitionedShardsEnabled=true`, route regions are split into
+stable grid cells; each cell artifact carries schema, accessibility-cost, and edge-weight versions
+so graph data is invalidated when routing cost logic changes. Nearby but non-identical route
+requests can then reuse the same city graph partitions instead of depending only on exact request
+coalescing.
 Worker config warms several Birmingham shard routes on a timer; add routes that match real demand
 clusters before a launch so city-core shards are hot before the first user request.
 

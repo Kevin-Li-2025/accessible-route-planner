@@ -197,14 +197,22 @@ public sealed class ArchitectureModularityTests
     {
         var root = FindRepositoryRoot();
         var repository = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "RouteGraphRepository.cs"));
+        var artifactCodec = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "RouteGraphArtifactCodec.cs"));
         var models = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Models", "RouteGraphModels.cs"));
         var routing = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "RoutingService.cs"));
+        var configMap = File.ReadAllText(Path.Combine(root, "deploy", "kubernetes", "configmap.yaml"));
 
         Assert.Contains("IMemoryCache", repository, StringComparison.Ordinal);
         Assert.Contains("IDistributedCache", repository, StringComparison.Ordinal);
         Assert.Contains("InFlightGraphLoads", repository, StringComparison.Ordinal);
-        Assert.Contains("RouteGraphSnapshot", repository, StringComparison.Ordinal);
+        Assert.Contains("PackedRouteGraphArtifact", artifactCodec, StringComparison.Ordinal);
+        Assert.Contains("FirstEdgeIndex", artifactCodec, StringComparison.Ordinal);
         Assert.Contains("ComputeShardRegion", repository, StringComparison.Ordinal);
+        Assert.Contains("ComputeLoadRegions", repository, StringComparison.Ordinal);
+        Assert.Contains("MergeGraphShards", repository, StringComparison.Ordinal);
+        Assert.Contains("route_graph:v6", repository, StringComparison.Ordinal);
+        Assert.Contains("Routing__RouteGraphPrepartitionedShardsEnabled: \"true\"", configMap, StringComparison.Ordinal);
+        Assert.Contains("Routing__RouteGraphPackedArtifactsEnabled: \"true\"", configMap, StringComparison.Ordinal);
         Assert.Contains("BuildSpatialBuckets", repository, StringComparison.Ordinal);
         Assert.Contains("SpatialBuckets", models, StringComparison.Ordinal);
         Assert.Contains("FindNodesNear", routing, StringComparison.Ordinal);
@@ -222,11 +230,12 @@ public sealed class ArchitectureModularityTests
         var migration = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Data", "Migrations", "20260523223500_AddRouteEdgeAccessibilityCostProfile.cs"));
 
         Assert.Contains("public const int Version = 1", costModel, StringComparison.Ordinal);
+        Assert.Contains("public const int EdgeWeightVersion = 1", costModel, StringComparison.Ordinal);
         Assert.Contains("RouteEdgeCostModel.Compute", importer, StringComparison.Ordinal);
-        Assert.Contains("RouteEdgeCostModel.ResolvePenaltySeconds", routing, StringComparison.Ordinal);
+        Assert.Contains("RouteEdgeCostModel.ResolveTraversalSeconds", routing, StringComparison.Ordinal);
         Assert.Contains("WheelchairAccessibilityPenaltySeconds", routeGraph, StringComparison.Ordinal);
-        Assert.Contains("route_graph:v5", routeGraph, StringComparison.Ordinal);
-        Assert.Contains("route-v5-precomputed-edge-cost-v1-risk-v2", fingerprint, StringComparison.Ordinal);
+        Assert.Contains("RouteEdgeCostModel.EdgeWeightVersion", routeGraph, StringComparison.Ordinal);
+        Assert.Contains("route-v6-packed-graph-edge-weight-v1-risk-v2", fingerprint, StringComparison.Ordinal);
         Assert.Contains("wheelchair_accessibility_penalty_seconds", migration, StringComparison.Ordinal);
     }
 

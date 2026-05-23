@@ -66,6 +66,10 @@ injection checks.
 - `Postgres__DbContextPoolSize`: EF Core context pool per pod.
 - `Routing__MaxConcurrentComputations`: per-pod CPU gate for A*/route scoring work.
 - `Routing__MaxRouteGraphEdges`: cap on route graph fanout before falling back.
+- `Routing__RouteGraphPrepartitionedShardsEnabled`: split route graph loads into reusable grid
+  cell artifacts instead of caching only exact route-sized graph blobs.
+- `Routing__RouteGraphPackedArtifactsEnabled`: store compact versioned graph artifacts with
+  precomputed edge traversal weights in the shared cache.
 - `Routing__MaxHazardsPerRequest`: cap on active hazards loaded for one route/risk request.
 - `ExternalApis__*__MaxConcurrentRequests`: per-pod bulkhead for tail-sensitive upstream services.
 - `ExternalApis__CircuitBreaker__*`: shared timeout/circuit behavior for external dependency fallback.
