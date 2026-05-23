@@ -70,8 +70,10 @@ namespace AccessCity.API.Services
 
         private const string CrimeCacheKeyPrefix = "ukcrime:";
         private const string EnvCacheKeyPrefix = "env:";
+        private const string InfrastructureRiskCacheKeyPrefix = "infra-risk:";
         private static readonly TimeSpan CrimeCacheExpiry = TimeSpan.FromHours(24);
         private static readonly TimeSpan EnvCacheExpiry = TimeSpan.FromHours(1);
+        private static readonly TimeSpan InfrastructureRiskCacheExpiry = TimeSpan.FromMinutes(10);
         private static readonly TimeSpan DefaultExternalSignalBudget = TimeSpan.FromMilliseconds(350);
         private const double DefaultInfrastructureRisk = 0.35;
         private const double DefaultLightingRisk = 0.30;
@@ -531,6 +533,20 @@ namespace AccessCity.API.Services
 
         private async Task<double> EstimateInfrastructureRiskAsync(double lat, double lng, double radiusMetres)
         {
+            var cacheKey = BuildInfrastructureRiskCacheKey(lat, lng, radiusMetres);
+            var cached = await TryGetCachedAsync<double>(cacheKey, "infrastructure");
+            if (cached.Hit)
+            {
+                return cached.Value;
+            }
+
+            var risk = await ComputeInfrastructureRiskAsync(lat, lng, radiusMetres);
+            await SetCachedAsync(cacheKey, risk, InfrastructureRiskCacheExpiry);
+            return risk;
+        }
+
+        private async Task<double> ComputeInfrastructureRiskAsync(double lat, double lng, double radiusMetres)
+        {
             var queryPoint = Wgs84.CreatePoint(new Coordinate(lng, lat));
             List<RouteEdge> nearbyEdges;
             if (string.Equals(_dbContext.Database.ProviderName, "Npgsql.EntityFrameworkCore.PostgreSQL", StringComparison.Ordinal))
@@ -570,6 +586,14 @@ namespace AccessCity.API.Services
             double mobilityRisk = (stairDensity * 0.7) + (Math.Min(kerbHeightAvg * 10.0, 1.0) * 0.3);
 
             return Clamp01(lightingRisk * 0.4 + mobilityRisk * 0.6);
+        }
+
+        private static string BuildInfrastructureRiskCacheKey(double lat, double lng, double radiusMetres)
+        {
+            var roundedLat = Math.Round(lat, 4, MidpointRounding.AwayFromZero);
+            var roundedLng = Math.Round(lng, 4, MidpointRounding.AwayFromZero);
+            var radiusBucket = (int)Math.Ceiling(Math.Clamp(radiusMetres, 1, 2_500) / 50.0) * 50;
+            return FormattableString.Invariant($"{InfrastructureRiskCacheKeyPrefix}{roundedLat:F4}:{roundedLng:F4}:{radiusBucket}");
         }
     }
 }

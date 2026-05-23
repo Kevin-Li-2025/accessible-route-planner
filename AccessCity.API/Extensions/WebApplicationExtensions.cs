@@ -1,6 +1,7 @@
 using System.Data;
 using AccessCity.API.Configuration;
 using AccessCity.API.Data;
+using AccessCity.API.HealthChecks;
 using AccessCity.API.Hubs;
 using AccessCity.API.Messaging;
 using AccessCity.API.Models;
@@ -9,6 +10,7 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Npgsql;
@@ -49,9 +51,13 @@ public static class WebApplicationExtensions
             Predicate = _ => false
         })
             .DisableRateLimiting();
-        app.MapHealthChecks("/health/ready", new HealthCheckOptions
+        app.MapGet("/health/ready", async (CachedReadinessService readiness, CancellationToken cancellationToken) =>
         {
-            Predicate = check => check.Tags.Contains("ready")
+            var report = await readiness.CheckAsync(cancellationToken);
+            var statusCode = report.Status == HealthStatus.Unhealthy
+                ? StatusCodes.Status503ServiceUnavailable
+                : StatusCodes.Status200OK;
+            return Results.Text(report.Status.ToString(), "text/plain", statusCode: statusCode);
         })
             .DisableRateLimiting();
 
@@ -627,6 +633,9 @@ public static class WebApplicationExtensions
             CREATE INDEX IF NOT EXISTS "IX_hazard_report_active_reported_at"
                 ON public.hazard_report (reported_at DESC)
                 WHERE status IN ('reported'::hazard_status, 'under_review'::hazard_status);
+
+            CREATE INDEX IF NOT EXISTS "IX_refresh_token_revoked_expires_user"
+                ON public.refresh_token (revoked, expires_at, user_id);
 
             CREATE INDEX IF NOT EXISTS "IX_infrastructure_assets_geometry_gist"
                 ON public.infrastructure_assets USING GIST ("Geometry");

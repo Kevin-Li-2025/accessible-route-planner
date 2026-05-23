@@ -1,6 +1,7 @@
 using AccessCity.API.Data;
 using AccessCity.API.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Hybrid;
 
 namespace AccessCity.API.Services;
 
@@ -32,21 +33,92 @@ public sealed record InfrastructureFeedItem(
 
 public sealed class DashboardQueryService : IDashboardQueryService
 {
+    private static readonly HybridCacheEntryOptions SummaryCacheOptions = new()
+    {
+        Expiration = TimeSpan.FromSeconds(10)
+    };
+
     private readonly IRealHazardDataService _realHazardData;
     private readonly AppDbContext _dbContext;
+    private readonly HybridCache _cache;
 
-    public DashboardQueryService(IRealHazardDataService realHazardData, AppDbContext dbContext)
+    public DashboardQueryService(IRealHazardDataService realHazardData, AppDbContext dbContext, HybridCache cache)
     {
         _realHazardData = realHazardData;
         _dbContext = dbContext;
+        _cache = cache;
     }
 
     public async Task<DashboardSummary> GetSummaryAsync(CancellationToken cancellationToken)
     {
-        var hazards = await _realHazardData.GetActiveHazardsAsync();
-        var totalHazards = hazards.Count;
-        var pendingAlerts = hazards.Count(h =>
-            h.Status == HazardStatus.Reported || h.Status == HazardStatus.UnderReview);
+#pragma warning disable EXTEXP0018
+        return await _cache.GetOrCreateAsync(
+            "dashboard:summary:v1",
+            async token => await BuildSummaryAsync(token),
+            SummaryCacheOptions,
+            cancellationToken: cancellationToken);
+#pragma warning restore EXTEXP0018
+    }
+
+    private async Task<DashboardSummary> BuildSummaryAsync(CancellationToken cancellationToken)
+    {
+        if (string.Equals(
+            _dbContext.Database.ProviderName,
+            "Npgsql.EntityFrameworkCore.PostgreSQL",
+            StringComparison.Ordinal))
+        {
+            return await BuildPostgresSummaryAsync(cancellationToken);
+        }
+
+        return await BuildEfSummaryAsync(cancellationToken);
+    }
+
+    private async Task<DashboardSummary> BuildPostgresSummaryAsync(CancellationToken cancellationToken)
+    {
+        var now = DateTime.UtcNow;
+        var row = await _dbContext.Database
+            .SqlQueryRaw<DashboardSummaryRow>(
+                """
+                SELECT
+                    COUNT(*)::int AS "TotalHazards",
+                    COUNT(*) FILTER (
+                        WHERE status IN ('reported'::hazard_status, 'under_review'::hazard_status)
+                    )::int AS "PendingAlerts",
+                    COUNT(*) FILTER (
+                        WHERE status = 'resolved'::hazard_status
+                    )::int AS "Resolved",
+                    COALESCE((
+                        SELECT COUNT(DISTINCT user_id)::int
+                        FROM public.refresh_token
+                        WHERE revoked IS NULL
+                          AND expires_at > {0}
+                    ), 0) AS "ActiveUsers"
+                FROM public.hazard_report
+                """,
+                now)
+            .SingleAsync(cancellationToken);
+
+        return new DashboardSummary(
+            row.TotalHazards,
+            row.ActiveUsers,
+            "Distinct accounts with at least one non-revoked, non-expired refresh token.",
+            row.PendingAlerts,
+            row.Resolved);
+    }
+
+    private async Task<DashboardSummary> BuildEfSummaryAsync(CancellationToken cancellationToken)
+    {
+        var hazardCounts = await _dbContext.Hazards.AsNoTracking()
+            .GroupBy(h => h.Status)
+            .Select(g => new HazardStatusCount(g.Key, g.Count()))
+            .ToListAsync(cancellationToken);
+        var totalHazards = hazardCounts.Sum(h => h.Count);
+        var pendingAlerts = hazardCounts
+            .Where(h => h.Status is HazardStatus.Reported or HazardStatus.UnderReview)
+            .Sum(h => h.Count);
+        var resolved = hazardCounts
+            .Where(h => h.Status == HazardStatus.Resolved)
+            .Sum(h => h.Count);
 
         var now = DateTime.UtcNow;
         var activeUsers = await _dbContext.RefreshTokens.AsNoTracking()
@@ -60,7 +132,7 @@ public sealed class DashboardQueryService : IDashboardQueryService
             activeUsers,
             "Distinct accounts with at least one non-revoked, non-expired refresh token.",
             pendingAlerts,
-            hazards.Count(h => h.Status == HazardStatus.Resolved));
+            resolved);
     }
 
     public async Task<object> GetHeatMapAsync(CancellationToken cancellationToken)
@@ -116,5 +188,15 @@ public sealed class DashboardQueryService : IDashboardQueryService
                 h.ReportedAt,
                 h.Location != null ? new[] { h.Location.X, h.Location.Y } : null))
             .ToList();
+    }
+
+    private sealed record HazardStatusCount(HazardStatus Status, int Count);
+
+    private sealed class DashboardSummaryRow
+    {
+        public int TotalHazards { get; set; }
+        public int ActiveUsers { get; set; }
+        public int PendingAlerts { get; set; }
+        public int Resolved { get; set; }
     }
 }

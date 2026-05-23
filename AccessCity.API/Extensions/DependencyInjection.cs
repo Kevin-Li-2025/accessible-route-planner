@@ -318,6 +318,7 @@ public static class DependencyInjection
             .AddCheck<PostgresHealthCheck>("db", tags: new[] { "ready" })
             .AddCheck<DistributedCacheHealthCheck>("cache", tags: new[] { "ready" })
             .AddCheck<KafkaHealthCheck>("kafka", tags: new[] { "ready" });
+        services.AddSingleton<CachedReadinessService>();
 
         return services;
     }

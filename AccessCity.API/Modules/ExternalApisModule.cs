@@ -15,6 +15,7 @@ public static class ExternalApisModule
         var placesTimeout = TimeSpan.FromSeconds(configuration.GetValue("ExternalApis:GooglePlaces:TimeoutSeconds", 6));
         var weatherTimeout = TimeSpan.FromSeconds(configuration.GetValue("ExternalApis:OpenWeather:TimeoutSeconds", 5));
         var environmentalTimeout = TimeSpan.FromSeconds(configuration.GetValue("ExternalApis:Environmental:TimeoutSeconds", 3));
+        var nominatimTimeout = TimeSpan.FromSeconds(Math.Max(1, configuration.GetValue("ExternalApis:Nominatim:TimeoutSeconds", 2)));
 
         // Tail-sensitive dependencies keep bounded timeouts and avoid retry amplification on hot paths.
         services.AddHttpClient<IOsrmClient, OsrmClient>(client =>
@@ -29,7 +30,7 @@ public static class ExternalApisModule
         {
             c.BaseAddress = new Uri("https://nominatim.openstreetmap.org/");
             c.DefaultRequestHeaders.Add("User-Agent", "AccessCity-App/1.0");
-            c.Timeout = TimeSpan.FromSeconds(12);
+            c.Timeout = nominatimTimeout;
         });
 
         services.AddHttpClient<IUkPoliceDataClient, UkPoliceDataClient>(client =>

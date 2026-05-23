@@ -227,8 +227,17 @@ public class ApiSuperStressTests : IClassFixture<AccessCityApiFactory>
                         !r.RequestMessage.RequestUri.AbsolutePath.Contains("options", StringComparison.Ordinal))
                     {
                         Assert.True(
-                            code is HttpStatusCode.OK or HttpStatusCode.NotFound or HttpStatusCode.ServiceUnavailable,
+                            code is HttpStatusCode.OK or HttpStatusCode.Accepted or HttpStatusCode.NotFound or HttpStatusCode.ServiceUnavailable,
                             $"safe-path: {code}");
+                        continue;
+                    }
+
+                    if (r.RequestMessage?.RequestUri?.AbsolutePath.Contains("/routing/safe-path/options", StringComparison.Ordinal) == true &&
+                        r.RequestMessage.Method == HttpMethod.Post)
+                    {
+                        Assert.True(
+                            code is HttpStatusCode.OK or HttpStatusCode.Accepted or HttpStatusCode.ServiceUnavailable,
+                            $"safe-path/options: {code}");
                         continue;
                     }
 
@@ -282,8 +291,17 @@ public class ApiSuperStressTests : IClassFixture<AccessCityApiFactory>
                         !r.RequestMessage.RequestUri.AbsolutePath.Contains("options", StringComparison.Ordinal))
                     {
                         Assert.True(
-                            code is HttpStatusCode.OK or HttpStatusCode.NotFound or HttpStatusCode.ServiceUnavailable,
+                            code is HttpStatusCode.OK or HttpStatusCode.Accepted or HttpStatusCode.NotFound or HttpStatusCode.ServiceUnavailable,
                             $"safe-path (auth): {code}");
+                        continue;
+                    }
+
+                    if (r.RequestMessage?.RequestUri?.AbsolutePath.Contains("/routing/safe-path/options", StringComparison.Ordinal) == true &&
+                        r.RequestMessage.Method == HttpMethod.Post)
+                    {
+                        Assert.True(
+                            code is HttpStatusCode.OK or HttpStatusCode.Accepted or HttpStatusCode.ServiceUnavailable,
+                            $"safe-path/options (auth): {code}");
                         continue;
                     }
 

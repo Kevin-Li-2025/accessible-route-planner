@@ -181,12 +181,46 @@ public class RoutingController : ControllerBase
     /// </summary>
     [HttpPost("safe-path/options")]
     [ProducesResponseType(typeof(SafePathOptionsResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status202Accepted)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiError), StatusCodes.Status503ServiceUnavailable)]
     public async Task<ActionResult<SafePathOptionsResponse>> GetSafePathOptions(
         [FromBody] RouteRequest request,
         CancellationToken cancellationToken = default)
     {
         var stopwatch = Stopwatch.StartNew();
+
+        if (_routingOptions.AsyncFirstForCacheMiss)
+        {
+            var cacheKey = _routeCache.BuildKey(
+                request.Start.Y,
+                request.Start.X,
+                request.End.Y,
+                request.End.X,
+                request.Profile ?? "standard",
+                request.SafetyWeight);
+            var cached = await _routeCache.TryGetAsync(cacheKey);
+            if (cached is not null)
+            {
+                RecordSafePathOptions(stopwatch, "cache_hit_primary");
+                return Ok(new SafePathOptionsResponse
+                {
+                    Recommended = cached,
+                    Variants = new List<RoutedOptionVariant>()
+                });
+            }
+
+            var jobId = await _jobs.SubmitAsync(request, cancellationToken: cancellationToken);
+            RecordSafePathOptions(stopwatch, "async_accepted");
+            return Accepted(new
+            {
+                jobId,
+                status = "pending",
+                pollUrl = $"/api/v1/routing/jobs/{jobId}",
+                detail = "Primary route queued; route options are returned after the primary route is cached."
+            });
+        }
+
         var queueTimeout = TimeSpan.FromSeconds(Math.Max(1, _routingOptions.ComputationQueueTimeoutSeconds));
         await using var lease = await _routeLimiter.TryAcquireAsync(queueTimeout, cancellationToken);
         if (lease is null)
