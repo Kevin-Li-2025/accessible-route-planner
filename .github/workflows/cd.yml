@@ -119,7 +119,7 @@ jobs:
           test -s artifacts/accesscity-kubernetes.yaml
 
       - name: Upload rendered manifests
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: production-kubernetes-manifests
           path: artifacts/accesscity-kubernetes.yaml
