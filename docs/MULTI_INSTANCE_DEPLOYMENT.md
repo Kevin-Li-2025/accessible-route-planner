@@ -12,20 +12,27 @@ In this mode queued jobs are process-local and should not be used for scaled API
 
 ## Worker/Kafka Mode
 
-Run API replicas with Kafka enabled and OSM/tile workers disabled on API containers:
+Run the one-shot schema migration first, then run API replicas with Kafka enabled and OSM/tile
+workers disabled on API containers:
 
 ```bash
+docker compose --profile migrate run --rm migrate
+
 MESSAGING_USE_KAFKA=true \
 Routing__DispatchJobsToWorker=true \
+Postgres__AutoMigrate=false \
+Postgres__AutoSchemaMaintenance=false \
 API_OSM_WORKER_ENABLED=false \
 API_ROUTING_WORKER_ENABLED=false \
 API_TILE_WORKER_ENABLED=false \
-docker compose --profile worker up --scale api=2 api worker kafka redis db
+docker compose --profile worker up --scale api=2 --scale worker=2 api api-gateway worker kafka redis db
 ```
 
 The API publishes `RouteJobRequestedEvent` and `OsmImportStartedEvent` messages to Kafka. Worker
 containers consume the topics through the shared `accesscity-workers` consumer group, so only one
 worker processes each route/import job even when multiple workers are running.
+The Kafka container uses the official `apache/kafka` image in single-node KRaft mode for local
+smoke tests; the app also ensures main/retry/DLQ topics exist before publishing or consuming.
 
 Kafka consumers now use bounded retry and DLQ routing:
 

@@ -1,5 +1,10 @@
+using AccessCity.API.Serialization;
 using Confluent.Kafka;
+using Confluent.Kafka.Admin;
 using Microsoft.Extensions.Options;
+using NetTopologySuite.IO.Converters;
+using System.Collections.Concurrent;
+using System.Text.Json.Serialization;
 using System.Text.Json;
 
 namespace AccessCity.API.Messaging.Kafka;
@@ -11,6 +16,8 @@ public class KafkaMessageBus : IMessageBus, IDisposable
     private readonly Services.AccessCityMetrics _metrics;
     private readonly ILogger<KafkaMessageBus> _logger;
     private readonly KafkaOptions _options;
+    private readonly ConcurrentDictionary<string, Task> _topicCreationTasks = new();
+    private static readonly JsonSerializerOptions EventJsonOptions = CreateEventJsonOptions();
 
     public KafkaMessageBus(
         IOptions<KafkaOptions> options,
@@ -36,13 +43,14 @@ public class KafkaMessageBus : IMessageBus, IDisposable
     public async Task PublishAsync<T>(T @event, CancellationToken cancellationToken = default) where T : IntegrationEvent
     {
         var topic = TopicFor<T>();
+        await EnsureTopicsAsync([topic], cancellationToken).ConfigureAwait(false);
         var key = @event is IKeyedIntegrationEvent keyedEvent && !string.IsNullOrWhiteSpace(keyedEvent.PartitionKey)
             ? keyedEvent.PartitionKey
             : @event.Id.ToString();
         var message = new Message<string, string>
         {
             Key = key,
-            Value = JsonSerializer.Serialize(@event),
+            Value = JsonSerializer.Serialize(@event, EventJsonOptions),
             Headers = new Headers
             {
                 { "accesscity-event-type", System.Text.Encoding.UTF8.GetBytes(typeof(T).FullName ?? typeof(T).Name) },
@@ -71,6 +79,7 @@ public class KafkaMessageBus : IMessageBus, IDisposable
     {
         var retryTopic = RetryTopic(topic);
         var deadLetterTopic = DeadLetterTopic(topic);
+        await EnsureTopicsAsync([topic, retryTopic, deadLetterTopic], cancellationToken).ConfigureAwait(false);
         var config = new ConsumerConfig
         {
             BootstrapServers = _options.BootstrapServers,
@@ -113,7 +122,7 @@ public class KafkaMessageBus : IMessageBus, IDisposable
                     continue;
                 }
 
-                var @event = JsonSerializer.Deserialize<T>(result.Message.Value);
+                var @event = JsonSerializer.Deserialize<T>(result.Message.Value, EventJsonOptions);
                 if (@event is null)
                 {
                     _logger.LogWarning("Skipping null Kafka event on {Topic} at {Offset}", topic, result.Offset);
@@ -207,6 +216,58 @@ public class KafkaMessageBus : IMessageBus, IDisposable
         }
 
         consumer.Close();
+    }
+
+    private Task EnsureTopicsAsync(IEnumerable<string> topics, CancellationToken cancellationToken)
+    {
+        var tasks = topics
+            .Where(topic => !string.IsNullOrWhiteSpace(topic))
+            .Distinct(StringComparer.Ordinal)
+            .Select(topic => _topicCreationTasks.GetOrAdd(topic, _ => CreateTopicAsync(topic, cancellationToken)));
+
+        return Task.WhenAll(tasks);
+    }
+
+    private async Task CreateTopicAsync(string topic, CancellationToken cancellationToken)
+    {
+        var adminConfig = new AdminClientConfig
+        {
+            BootstrapServers = _options.BootstrapServers
+        };
+
+        using var adminClient = new AdminClientBuilder(adminConfig).Build();
+        try
+        {
+            await adminClient.CreateTopicsAsync(
+                [
+                    new TopicSpecification
+                    {
+                        Name = topic,
+                        NumPartitions = Math.Max(1, _options.TopicPartitions),
+                        ReplicationFactor = Math.Max((short)1, _options.TopicReplicationFactor)
+                    }
+                ],
+                new CreateTopicsOptions
+                {
+                    RequestTimeout = TimeSpan.FromSeconds(10),
+                    OperationTimeout = TimeSpan.FromSeconds(10)
+                }).WaitAsync(cancellationToken).ConfigureAwait(false);
+
+            _logger.LogInformation(
+                "Ensured Kafka topic {Topic} with {Partitions} partitions and replication factor {ReplicationFactor}.",
+                topic,
+                Math.Max(1, _options.TopicPartitions),
+                Math.Max((short)1, _options.TopicReplicationFactor));
+        }
+        catch (CreateTopicsException ex) when (ex.Results.All(result => result.Error.Code == ErrorCode.TopicAlreadyExists))
+        {
+            _logger.LogDebug("Kafka topic {Topic} already exists.", topic);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _topicCreationTasks.TryRemove(topic, out _);
+            _logger.LogWarning(ex, "Could not ensure Kafka topic {Topic}; continuing and relying on broker-side topic policy.", topic);
+        }
     }
 
     private async Task RouteFailedMessageAsync<T>(
@@ -333,4 +394,15 @@ public class KafkaMessageBus : IMessageBus, IDisposable
     private string TopicFor<T>() => _options.TopicPrefix + typeof(T).Name.ToLowerInvariant();
     private string RetryTopic(string topic) => topic + _options.RetryTopicSuffix;
     private string DeadLetterTopic(string topic) => topic + _options.DeadLetterTopicSuffix;
+
+    private static JsonSerializerOptions CreateEventJsonOptions()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals
+        };
+        options.Converters.Add(new CoordinateJsonConverter());
+        options.Converters.Add(new GeoJsonConverterFactory());
+        return options;
+    }
 }

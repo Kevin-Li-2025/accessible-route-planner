@@ -4,6 +4,7 @@ using System.Text.Json;
 using AccessCity.API.Configuration;
 using AccessCity.API.Data;
 using AccessCity.API.Models;
+using AccessCity.API.Serialization;
 using AccessCity.API.Services;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
@@ -26,12 +27,51 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
     {
         NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals,
         PropertyNameCaseInsensitive = true,
-        Converters = { new NetTopologySuite.IO.Converters.GeoJsonConverterFactory() }
+        Converters = { new CoordinateJsonConverter(), new NetTopologySuite.IO.Converters.GeoJsonConverterFactory() }
     };
 
     public RoutingTests(AccessCityApiFactory factory)
     {
         _factory = factory;
+    }
+
+    [Fact]
+    public void RouteRequest_Coordinates_RoundTrip_Without_NaN_Or_Z()
+    {
+        var request = JsonSerializer.Deserialize<RouteRequest>(
+            """
+            {
+              "start": {"x": -1.8985, "y": 52.4814},
+              "end": [-1.93, 52.451],
+              "preferences": ["wheelchair"],
+              "safetyWeight": 0.6,
+              "profile": "manual-wheelchair"
+            }
+            """,
+            JsonOptions);
+
+        Assert.NotNull(request);
+        Assert.Equal(-1.8985, request!.Start.X, precision: 4);
+        Assert.Equal(52.451, request.End.Y, precision: 4);
+
+        var json = JsonSerializer.Serialize(request, JsonOptions);
+        Assert.Contains("\"x\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"z\"", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("NaN", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void CoordinateJsonConverter_Accepts_GeoJson_Point()
+    {
+        var coordinate = JsonSerializer.Deserialize<Coordinate>(
+            """
+            {"type":"Point","coordinates":[-1.8985,52.4814]}
+            """,
+            JsonOptions);
+
+        Assert.NotNull(coordinate);
+        Assert.Equal(-1.8985, coordinate!.X, precision: 4);
+        Assert.Equal(52.4814, coordinate.Y, precision: 4);
     }
 
     [Fact]

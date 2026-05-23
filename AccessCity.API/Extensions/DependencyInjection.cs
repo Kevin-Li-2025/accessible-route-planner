@@ -11,6 +11,7 @@ using AccessCity.API.Models.Identity;
 using AccessCity.API.Modules;
 using AccessCity.API.Services;
 using AccessCity.API.Services.Security;
+using AccessCity.API.Serialization;
 using AccessCity.API.Validators;
 using FluentValidation;
 using FluentValidation.AspNetCore;
@@ -344,6 +345,7 @@ public static class DependencyInjection
         })
         .AddJsonOptions(options =>
         {
+            options.JsonSerializerOptions.Converters.Add(new CoordinateJsonConverter());
             var factory = new NetTopologySuite.IO.Converters.GeoJsonConverterFactory();
             options.JsonSerializerOptions.Converters.Add(factory);
             options.JsonSerializerOptions.NumberHandling =

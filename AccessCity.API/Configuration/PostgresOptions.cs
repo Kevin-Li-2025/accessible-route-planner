@@ -10,6 +10,7 @@ public sealed class PostgresOptions
     public bool UseDirectDatabaseUrl { get; set; }
     public bool AutoMigrate { get; set; } = true;
     public bool AutoSchemaMaintenance { get; set; } = true;
+    public bool MigrateAndExit { get; set; }
     public int CommandTimeoutSeconds { get; set; } = 30;
     public bool UseStartupSessionParameters { get; set; }
     public int? StatementTimeoutMs { get; set; }

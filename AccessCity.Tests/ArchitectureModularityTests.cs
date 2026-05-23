@@ -171,6 +171,24 @@ public sealed class ArchitectureModularityTests
         Assert.Contains("return $\"{canonicalTopic}:{rawId}\";", kafkaBus, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Distributed_startup_paths_avoid_schema_and_topic_races()
+    {
+        var root = FindRepositoryRoot();
+        var program = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Program.cs"));
+        var startup = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Extensions", "WebApplicationExtensions.cs"));
+        var kafkaBus = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Messaging", "Kafka", "KafkaMessageBus.cs"));
+        var migrationJob = File.ReadAllText(Path.Combine(root, "deploy", "kubernetes", "migration-job.yaml"));
+        var compose = File.ReadAllText(Path.Combine(root, "docker-compose.yml"));
+
+        Assert.Contains("Postgres:MigrateAndExit", program, StringComparison.Ordinal);
+        Assert.Contains("pg_advisory_lock", startup, StringComparison.Ordinal);
+        Assert.Contains("EnsureTopicsAsync", kafkaBus, StringComparison.Ordinal);
+        Assert.Contains("Postgres__MigrateAndExit", migrationJob, StringComparison.Ordinal);
+        Assert.Contains("profiles: [\"migrate\"]", compose, StringComparison.Ordinal);
+        Assert.Contains("apache/kafka", compose, StringComparison.Ordinal);
+    }
+
     private static bool IsConcreteAccessCityService(Type type)
     {
         if (type == typeof(AccessCityMetrics))

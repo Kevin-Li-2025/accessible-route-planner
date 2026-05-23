@@ -36,12 +36,19 @@ try
             .AddWebServices(builder.Configuration, builder.Environment);
 
     var app = builder.Build();
+    var migrateAndExit = builder.Configuration.GetValue<bool>("Postgres:MigrateAndExit")
+        || args.Any(arg => string.Equals(arg, "--migrate-and-exit", StringComparison.OrdinalIgnoreCase));
 
     // Configure Pipeline
     app.ConfigurePipeline();
 
     // Initialize Database
     await app.InitializeDatabaseAsync();
+    if (migrateAndExit)
+    {
+        Log.Information("Database migration completed; exiting because Postgres:MigrateAndExit is enabled.");
+        return;
+    }
 
     app.Run();
 }

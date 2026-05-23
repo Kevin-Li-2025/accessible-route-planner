@@ -5,6 +5,7 @@ using AccessCity.API.Configuration;
 using AccessCity.API.Exceptions;
 using AccessCity.API.Messaging;
 using AccessCity.API.Models;
+using AccessCity.API.Serialization;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
@@ -292,6 +293,7 @@ public sealed class RouteJobService : IRouteJobService
         {
             NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals
         };
+        options.Converters.Add(new CoordinateJsonConverter());
         options.Converters.Add(new GeoJsonConverterFactory());
         return options;
     }

@@ -66,19 +66,61 @@ public static class WebApplicationExtensions
 
     public static async Task InitializeDatabaseAsync(this WebApplication app)
     {
-        await MigrateDatabaseAsync(app);
-
-        if (!UsesInMemoryDatabase(app))
+        if (UsesInMemoryDatabase(app))
         {
-            using var scope = app.Services.CreateScope();
-            var postgresOptions = scope.ServiceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<PostgresOptions>>();
-            if (postgresOptions.Value.AutoSchemaMaintenance)
-            {
-                await NormalizeSchemaAsync(app);
-                await EnsurePerformanceIndexesAsync(app);
-            }
+            await MigrateDatabaseAsync(app);
+            return;
+        }
 
-            await RunOptionalOsmImportAsync(app);
+        using (var scope = app.Services.CreateScope())
+        {
+            var postgresOptions = scope.ServiceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<PostgresOptions>>().Value;
+            if (postgresOptions.AutoMigrate || postgresOptions.AutoSchemaMaintenance)
+            {
+                await ExecuteWithPostgresSchemaStartupLockAsync(
+                    app,
+                    async () =>
+                    {
+                        await MigrateDatabaseAsync(app);
+                        if (postgresOptions.AutoSchemaMaintenance)
+                        {
+                            await NormalizeSchemaAsync(app);
+                            await EnsurePerformanceIndexesAsync(app);
+                        }
+                    });
+            }
+            else
+            {
+                await MigrateDatabaseAsync(app);
+            }
+        }
+
+        await RunOptionalOsmImportAsync(app);
+    }
+
+    private static async Task ExecuteWithPostgresSchemaStartupLockAsync(WebApplication app, Func<Task> schemaWork)
+    {
+        await using var scope = app.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        if (!string.Equals(dbContext.Database.ProviderName, "Npgsql.EntityFrameworkCore.PostgreSQL", StringComparison.Ordinal))
+        {
+            await schemaWork();
+            return;
+        }
+
+        var logger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("DatabaseMigration");
+        logger.LogInformation("Waiting for PostgreSQL schema startup advisory lock.");
+        await dbContext.Database.ExecuteSqlRawAsync("SELECT pg_advisory_lock(hashtext('accesscity:schema-startup'));");
+
+        try
+        {
+            logger.LogInformation("Acquired PostgreSQL schema startup advisory lock.");
+            await schemaWork();
+        }
+        finally
+        {
+            await dbContext.Database.ExecuteSqlRawAsync("SELECT pg_advisory_unlock(hashtext('accesscity:schema-startup'));");
+            logger.LogInformation("Released PostgreSQL schema startup advisory lock.");
         }
     }
 
