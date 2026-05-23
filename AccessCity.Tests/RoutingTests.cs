@@ -336,6 +336,32 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
     }
 
     [Fact]
+    public async Task SafePath_WithAccessibilityProfile_Warns_When_Osm_Accessibility_Tags_Are_Missing()
+    {
+        var client = await _factory.CreateAuthenticatedClientAsync();
+        await _factory.ImportOsmAsync(client);
+
+        var request = new
+        {
+            Start = new { X = -1.8904, Y = 52.4862 }, // Node 1001
+            End = new { X = -1.8899, Y = 52.48645 }, // Node 1004 via way 2002, which lacks width/smoothness
+            Profile = "manual-wheelchair",
+            Preferences = new List<string> { "wheelchair" },
+            SafetyWeight = 0.6
+        };
+
+        var response = await client.PostAsJsonAsync("/api/v1/routing/safe-path", request, JsonOptions);
+        response.EnsureSuccessStatusCode();
+
+        var result = await response.Content.ReadFromJsonAsync<RouteResponse>(JsonOptions);
+        Assert.NotNull(result);
+        Assert.Contains(result!.Warnings, warning =>
+            warning.Contains("Accessibility data confidence is lower", StringComparison.OrdinalIgnoreCase)
+            && warning.Contains("missing width", StringComparison.OrdinalIgnoreCase)
+            && warning.Contains("missing smoothness", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task RouteGraphRepository_Hydrates_Shard_From_Distributed_Snapshot()
     {
         var client = await _factory.CreateAuthenticatedClientAsync();
@@ -578,6 +604,7 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
                     ["OsmImport:ImportOnStartup"] = "false",
                     ["Messaging:UseKafka"] = "false",
                     ["Routing:AsyncFirstForCacheMiss"] = "true",
+                    ["Routing:AsyncFirstCacheProbeMilliseconds"] = "0",
                     ["Routing:DispatchJobsToWorker"] = "true",
                     ["Workers:OsmImport:Enabled"] = "false",
                     ["Workers:Routing:Enabled"] = "true",

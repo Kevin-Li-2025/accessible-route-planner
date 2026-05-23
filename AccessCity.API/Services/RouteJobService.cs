@@ -74,6 +74,7 @@ public sealed class RouteJobService : IRouteJobService, IRouteJobDispatchQueue
 {
     private readonly ConcurrentDictionary<string, RouteJobResult> _jobs = new();
     private readonly ConcurrentDictionary<string, Lazy<Task<string>>> _inflightSubmissions = new();
+    private readonly ConcurrentDictionary<string, string> _completedJobsByDedupeKey = new();
     private readonly Channel<RouteJobDispatchWorkItem> _dispatchQueue;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IMessageBus _messageBus;
@@ -172,6 +173,17 @@ public sealed class RouteJobService : IRouteJobService, IRouteJobDispatchQueue
     {
         var jobId = BuildDeterministicJobId(dedupeKey);
         var dedupeAlreadyReserved = false;
+        if (_completedJobsByDedupeKey.TryGetValue(dedupeKey, out var completedJobId))
+        {
+            var completed = await GetResultAsync(completedJobId, cancellationToken);
+            if (completed?.Status == RouteJobStatus.Completed)
+            {
+                return completedJobId;
+            }
+
+            _completedJobsByDedupeKey.TryRemove(dedupeKey, out _);
+        }
+
         if (_redis is { IsConnected: true })
         {
             var database = _redis.GetDatabase();
@@ -323,9 +335,24 @@ public sealed class RouteJobService : IRouteJobService, IRouteJobDispatchQueue
     {
         if (_jobs.TryGetValue(jobId, out var result))
         {
+            if (result.Status is RouteJobStatus.Pending or RouteJobStatus.Processing)
+            {
+                var refreshed = await TryReadPersistedJobAsync(jobId, cancellationToken);
+                if (refreshed is not null && refreshed.Status != result.Status)
+                {
+                    _jobs[jobId] = refreshed;
+                    return refreshed;
+                }
+            }
+
             return result;
         }
 
+        return await TryReadPersistedJobAsync(jobId, cancellationToken);
+    }
+
+    private async Task<RouteJobResult?> TryReadPersistedJobAsync(string jobId, CancellationToken cancellationToken)
+    {
         var json = await _distributedCache.GetStringAsync(JobCacheKey(jobId), cancellationToken);
         if (string.IsNullOrWhiteSpace(json))
         {
@@ -394,6 +421,10 @@ public sealed class RouteJobService : IRouteJobService, IRouteJobDispatchQueue
 
         result.CompletedAt = DateTime.UtcNow;
         await PersistAsync(result, CancellationToken.None);
+        if (result.Status == RouteJobStatus.Completed)
+        {
+            await RememberCompletedJobAsync(kind, request, jobId, stoppingToken);
+        }
 
         // Auto-expire completed jobs after 5 minutes.
         _ = CleanupAfterDelay(jobId, JobTtl, stoppingToken);
@@ -528,6 +559,52 @@ public sealed class RouteJobService : IRouteJobService, IRouteJobDispatchQueue
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Route job {JobId} could not be removed from distributed cache", jobId);
+        }
+    }
+
+    private async Task RememberCompletedJobAsync(
+        RouteJobKind kind,
+        RouteRequest request,
+        string jobId,
+        CancellationToken stoppingToken)
+    {
+        var dedupeKey = BuildJobDedupeKey(kind, request);
+        _completedJobsByDedupeKey[dedupeKey] = jobId;
+
+        if (_redis is { IsConnected: true })
+        {
+            try
+            {
+                await _redis.GetDatabase().StringSetAsync(dedupeKey, jobId, JobDedupeTtl);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Completed route job {JobId} could not refresh dedupe key.", jobId);
+            }
+        }
+
+        _ = CleanupCompletedDedupeAfterDelay(dedupeKey, jobId, JobDedupeTtl, stoppingToken);
+    }
+
+    private async Task CleanupCompletedDedupeAfterDelay(
+        string dedupeKey,
+        string jobId,
+        TimeSpan delay,
+        CancellationToken stoppingToken)
+    {
+        try
+        {
+            await Task.Delay(delay, stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (_completedJobsByDedupeKey.TryGetValue(dedupeKey, out var current)
+            && string.Equals(current, jobId, StringComparison.Ordinal))
+        {
+            _completedJobsByDedupeKey.TryRemove(dedupeKey, out _);
         }
     }
 

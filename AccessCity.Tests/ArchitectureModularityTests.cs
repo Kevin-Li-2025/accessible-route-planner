@@ -156,6 +156,9 @@ public sealed class ArchitectureModularityTests
         Assert.Contains("SafePathOptionsResponse? Options", routeJobService, StringComparison.Ordinal);
         Assert.Contains("SubmitOptionsAsync", routeJobService, StringComparison.Ordinal);
         Assert.Contains("SubmitOptionsAsync", routingController, StringComparison.Ordinal);
+        Assert.Contains("completed_job_hit", routingController, StringComparison.Ordinal);
+        Assert.Contains("_completedJobsByDedupeKey", routeJobService, StringComparison.Ordinal);
+        Assert.Contains("TryReadPersistedJobAsync", routeJobService, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -189,6 +192,19 @@ public sealed class ArchitectureModularityTests
         Assert.Contains("Routing__RouteGraphWarmupEnabled: \"false\"", configMap, StringComparison.Ordinal);
         Assert.Contains("Routing__RouteGraphWarmupEnabled: \"true\"", configMap, StringComparison.Ordinal);
         Assert.Contains("Routing__RouteGraphWarmupRoutes__0__Name: \"birmingham-core\"", configMap, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Accessibility_routing_penalizes_and_explains_incomplete_osm_tags()
+    {
+        var root = FindRepositoryRoot();
+        var routing = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "RoutingService.cs"));
+
+        Assert.Contains("ComputeAccessibilityDataGapPenalty", routing, StringComparison.Ordinal);
+        Assert.Contains("BuildAccessibilityDataQualitySummary", routing, StringComparison.Ordinal);
+        Assert.Contains("Accessibility data confidence is lower", routing, StringComparison.Ordinal);
+        Assert.Contains("missing width", routing, StringComparison.Ordinal);
+        Assert.Contains("missing smoothness", routing, StringComparison.Ordinal);
     }
 
     [Fact]

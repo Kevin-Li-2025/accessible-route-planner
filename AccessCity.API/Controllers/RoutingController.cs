@@ -124,6 +124,13 @@ public class RoutingController : ControllerBase
                 }
 
                 var jobId = await _jobs.SubmitAsync(request, hazards, cancellationToken);
+                var completedJob = await _jobs.GetResultAsync(jobId, cancellationToken);
+                if (completedJob?.Status == RouteJobStatus.Completed && completedJob.Route is not null)
+                {
+                    RecordSafePath(stopwatch, "completed_job_hit");
+                    return Ok(completedJob.Route);
+                }
+
                 RecordSafePath(stopwatch, "async_accepted");
                 return Accepted(new { jobId, status = "pending", pollUrl = $"/api/v1/routing/jobs/{jobId}" });
             }
@@ -259,6 +266,13 @@ public class RoutingController : ControllerBase
             }
 
             var jobId = await _jobs.SubmitOptionsAsync(request, asyncHazards, cancellationToken);
+            var completedJob = await _jobs.GetResultAsync(jobId, cancellationToken);
+            if (completedJob?.Status == RouteJobStatus.Completed && completedJob.Options is not null)
+            {
+                RecordSafePathOptions(stopwatch, "completed_job_hit");
+                return Ok(completedJob.Options);
+            }
+
             RecordSafePathOptions(stopwatch, "async_accepted");
             return Accepted(new
             {

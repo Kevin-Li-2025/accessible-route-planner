@@ -395,12 +395,14 @@ public class RoutingService : IRoutingService
         double safetySum = 0;
         var steps = new List<RouteStep>();
         var warnings = new List<string>();
+        var traversedEdges = new List<GraphEdge>();
 
         for (int i = 0; i < path.Count - 1; i++)
         {
             var fromNode = graph[path[i]];
             var toNode = graph[path[i + 1]];
             var edge = fromNode.Edges[path[i + 1]];
+            traversedEdges.Add(edge);
 
             double segDist = edge.DistanceMetres;
             totalDist += segDist;
@@ -460,6 +462,11 @@ public class RoutingService : IRoutingService
         }
 
         double avgSafety = totalDist > 0 ? safetySum / totalDist : 1.0;
+        var dataQualityWarning = BuildAccessibilityDataQualitySummary(traversedEdges, request.Profile);
+        if (dataQualityWarning is not null)
+        {
+            warnings.Add(dataQualityWarning);
+        }
 
         if (allCoordinates.Count < 2)
         {
@@ -523,6 +530,59 @@ public class RoutingService : IRoutingService
         string.Equals(profile, "manual-wheelchair", StringComparison.OrdinalIgnoreCase)
         || string.Equals(profile, "power-wheelchair", StringComparison.OrdinalIgnoreCase)
         || string.Equals(profile, "stroller", StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasUnknownSurface(GraphEdge edge) =>
+        string.IsNullOrWhiteSpace(edge.SurfaceType)
+        || string.Equals(edge.SurfaceType, "unknown", StringComparison.OrdinalIgnoreCase);
+
+    private static double ComputeAccessibilityDataGapPenalty(GraphEdge edge, string? profile)
+    {
+        var strict = IsAccessibilityProfile(profile);
+        double penalty = 0;
+
+        if (HasUnknownSurface(edge))
+        {
+            penalty += strict ? 0.20 : 0.05;
+        }
+
+        if (strict && !edge.WidthMetres.HasValue)
+        {
+            penalty += 0.20;
+        }
+
+        if (strict && string.IsNullOrWhiteSpace(edge.Smoothness))
+        {
+            penalty += 0.15;
+        }
+
+        return penalty;
+    }
+
+    private static string? BuildAccessibilityDataQualitySummary(IEnumerable<GraphEdge> edges, string? profile)
+    {
+        var edgeList = edges as IReadOnlyCollection<GraphEdge> ?? edges.ToList();
+        if (edgeList.Count == 0)
+        {
+            return null;
+        }
+
+        var strict = IsAccessibilityProfile(profile);
+        var missingSurface = edgeList.Count(HasUnknownSurface);
+        var missingWidth = strict ? edgeList.Count(edge => !edge.WidthMetres.HasValue) : 0;
+        var missingSmoothness = strict ? edgeList.Count(edge => string.IsNullOrWhiteSpace(edge.Smoothness)) : 0;
+
+        var issues = new List<string>();
+        if (missingSurface > 0) issues.Add($"{missingSurface} missing surface");
+        if (missingWidth > 0) issues.Add($"{missingWidth} missing width");
+        if (missingSmoothness > 0) issues.Add($"{missingSmoothness} missing smoothness");
+
+        if (issues.Count == 0)
+        {
+            return null;
+        }
+
+        return $"Accessibility data confidence is lower: {string.Join(", ", issues)} tag(s) on the selected route rely on inferred defaults.";
+    }
 
     private static bool IsWheelFriendly(GraphEdge edge, double maxKerbHeightMetres, bool allowCobblestone)
     {
@@ -747,6 +807,7 @@ public class RoutingService : IRoutingService
                 if (edge.IsSteep) penalty += 0.4;
                 if (edge.KerbHeight > 0.05) penalty += 0.6;
                 if (edge.WidthMetres.HasValue && edge.WidthMetres < 0.9) penalty += 0.4;
+                penalty += ComputeAccessibilityDataGapPenalty(edge, profile);
             }
         }
 
@@ -999,6 +1060,7 @@ public class RoutingService : IRoutingService
     {
         var warnings = new List<string>();
         var checkedNodes = new HashSet<long>();
+        var incompleteNearbyAccessibilityData = false;
 
         // Sample the segment at midpoint and endpoints
         var samplePoints = new List<Coordinate>();
@@ -1027,8 +1089,20 @@ public class RoutingService : IRoutingService
                     if (edge.SurfaceType is "cobblestone" or "gravel" or "unpaved" &&
                         profile is "manual-wheelchair" or "power-wheelchair")
                         warnings.Add($"Step {stepNumber}: {edge.SurfaceType} surface nearby — difficult for {profile}.");
+                    if (IsAccessibilityProfile(profile)
+                        && (HasUnknownSurface(edge)
+                            || !edge.WidthMetres.HasValue
+                            || string.IsNullOrWhiteSpace(edge.Smoothness)))
+                    {
+                        incompleteNearbyAccessibilityData = true;
+                    }
                 }
             }
+        }
+
+        if (incompleteNearbyAccessibilityData)
+        {
+            warnings.Add($"Step {stepNumber}: Nearby accessibility tags are incomplete; verify surface, width, or smoothness before relying on this route.");
         }
 
         return warnings;
@@ -1369,12 +1443,14 @@ public class RoutingService : IRoutingService
         var warnings = new List<string> {
             "Real road data is unavailable for this area. An approximate mesh-based route is shown."
         };
+        var traversedEdges = new List<GraphEdge>();
 
         for (int i = 0; i < path.Count - 1; i++)
         {
             var fromNode = graph[path[i]];
             var toNode = graph[path[i + 1]];
             var edge = fromNode.Edges[path[i + 1]];
+            traversedEdges.Add(edge);
 
             double segDist = edge.DistanceMetres;
             totalDist += segDist;
@@ -1407,6 +1483,11 @@ public class RoutingService : IRoutingService
         }
 
         double avgSafety = totalDist > 0 ? safetySum / totalDist : 1.0;
+        var dataQualityWarning = BuildAccessibilityDataQualitySummary(traversedEdges, request.Profile);
+        if (dataQualityWarning is not null)
+        {
+            warnings.Add(dataQualityWarning);
+        }
 
         return new RouteResponse
         {
