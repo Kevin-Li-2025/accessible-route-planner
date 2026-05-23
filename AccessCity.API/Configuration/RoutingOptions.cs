@@ -8,6 +8,7 @@ public sealed class RoutingOptions
     public int SyncSafePathTimeoutSeconds { get; set; } = 4;
     public int ComputationQueueTimeoutSeconds { get; set; } = 2;
     public int JobComputationQueueTimeoutSeconds { get; set; } = 30;
+    public int RouteJobDispatchConcurrency { get; set; } = 2;
     public int HazardQueryPaddingMetres { get; set; } = 250;
     public int MaxHazardsPerRequest { get; set; } = 500;
     public int MaxRiskQueryRadiusMetres { get; set; } = 2_500;

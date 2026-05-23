@@ -14,7 +14,7 @@ services:
       Jwt__PreviousKeys: ${JWT_PREVIOUS_KEYS:-}
       Jwt__Issuer: AccessCity.API
       Jwt__Audience: AccessCity.App
-      Messaging__UseKafka: ${MESSAGING_USE_KAFKA:-false}
+      Messaging__UseKafka: ${MESSAGING_USE_KAFKA:-true}
       Kafka__BootstrapServers: kafka:9092
       Kafka__ConsumerGroupId: accesscity-workers
       Kafka__TopicPrefix: accesscity_
@@ -41,6 +41,7 @@ services:
       Routing__AsyncFirstForCacheMiss: ${Routing__AsyncFirstForCacheMiss:-true}
       Routing__AsyncFirstCacheProbeMilliseconds: ${Routing__AsyncFirstCacheProbeMilliseconds:-0}
       Routing__DispatchJobsToWorker: ${Routing__DispatchJobsToWorker:-true}
+      Routing__RouteJobDispatchConcurrency: ${Routing__RouteJobDispatchConcurrency:-4}
       Routing__RequireRouteGraphForReadiness: ${Routing__RequireRouteGraphForReadiness:-false}
       Routing__RouteGraphCacheTtlSeconds: ${Routing__RouteGraphCacheTtlSeconds:-300}
       Routing__RouteGraphShardSizeDegrees: ${Routing__RouteGraphShardSizeDegrees:-0.01}
@@ -86,6 +87,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
     mem_limit: 4g
   api-gateway:
     image: nginx:1.27-alpine
@@ -129,6 +132,7 @@ services:
       Routing__SyncSafePathTimeoutSeconds: ${Routing__SyncSafePathTimeoutSeconds:-4}
       Routing__JobComputationQueueTimeoutSeconds: ${Routing__JobComputationQueueTimeoutSeconds:-60}
       Routing__DispatchJobsToWorker: ${Routing__DispatchJobsToWorker:-true}
+      Routing__RouteJobDispatchConcurrency: ${Routing__RouteJobDispatchConcurrency:-2}
       Routing__RouteGraphCacheTtlSeconds: ${Routing__RouteGraphCacheTtlSeconds:-300}
       Routing__RouteGraphShardSizeDegrees: ${Routing__RouteGraphShardSizeDegrees:-0.01}
       Routing__RouteGraphDistributedLoadCoalescingEnabled: ${Routing__RouteGraphDistributedLoadCoalescingEnabled:-true}
@@ -219,7 +223,6 @@ services:
       retries: 5
 
   kafka:
-    profiles: ["worker", "kafka"]
     image: apache/kafka:4.2.0
     container_name: accesscity_dev_kafka
     ports:

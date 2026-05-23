@@ -140,8 +140,12 @@ public sealed class ArchitectureModularityTests
         var routingController = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Controllers", "RoutingController.cs"));
 
         Assert.Contains("RouteJobBackgroundService", routingModule, StringComparison.Ordinal);
+        Assert.Contains("RouteJobDispatchBackgroundService", routingModule, StringComparison.Ordinal);
+        Assert.Contains("Channel<RouteJobDispatchWorkItem>", routeJobService, StringComparison.Ordinal);
+        Assert.DoesNotContain("Task.Run", routeJobService, StringComparison.Ordinal);
         Assert.Contains("RouteJobRequestedEvent", routeJobService, StringComparison.Ordinal);
         Assert.Contains("Routing__DispatchJobsToWorker: \"true\"", configMap, StringComparison.Ordinal);
+        Assert.Contains("Messaging__UseKafka: ${MESSAGING_USE_KAFKA:-true}", File.ReadAllText(Path.Combine(root, "docker-compose.yml")), StringComparison.Ordinal);
         Assert.Contains("Workers__Routing__Enabled: \"false\"", configMap, StringComparison.Ordinal);
         Assert.Contains("Workers__Routing__Enabled: \"true\"", configMap, StringComparison.Ordinal);
         Assert.Contains("Kafka__TopicPartitions: \"12\"", configMap, StringComparison.Ordinal);

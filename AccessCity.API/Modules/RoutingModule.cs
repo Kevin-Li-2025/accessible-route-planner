@@ -11,7 +11,10 @@ public static class RoutingModule
 
         services.AddSingleton<IRouteCoalescingService, RouteCoalescingService>();
         services.AddSingleton<IRouteComputationLimiter, RouteComputationLimiter>();
-        services.AddSingleton<IRouteJobService, RouteJobService>();
+        services.AddSingleton<RouteJobService>();
+        services.AddSingleton<IRouteJobService>(sp => sp.GetRequiredService<RouteJobService>());
+        services.AddSingleton<IRouteJobDispatchQueue>(sp => sp.GetRequiredService<RouteJobService>());
+        services.AddHostedService<AccessCity.API.Services.Background.RouteJobDispatchBackgroundService>();
 
         services.AddScoped<IRouteGraphRepository, RouteGraphRepository>();
         services.AddScoped<IRouteGraphStatusService, RouteGraphStatusService>();

@@ -321,7 +321,7 @@ public sealed class OsmImportService : IOsmImportService
             "sidewalk:left:surface",
             "sidewalk:right:surface",
             "left:surface",
-            "right:surface") ?? "asphalt";
+            "right:surface") ?? "unknown";
         var smoothness = GetFirstTag(tags,
             "smoothness",
             "sidewalk:smoothness",
@@ -689,6 +689,7 @@ public sealed class OsmImportService : IOsmImportService
             "paved" => 0.1,
             "paving_stones" => 0.14,
             "concrete" => 0.1,
+            "unknown" => 0.22,
             "cobblestone" => 0.35,
             "sett" => 0.35,
             "gravel" => 0.4,
@@ -696,6 +697,11 @@ public sealed class OsmImportService : IOsmImportService
             "sand" or "dirt" or "earth" or "grass" => 0.5,
             _ => 0.2
         };
+
+        if (string.IsNullOrWhiteSpace(smoothness))
+        {
+            score += 0.03;
+        }
 
         score += smoothness?.ToLowerInvariant() switch
         {
@@ -736,6 +742,10 @@ public sealed class OsmImportService : IOsmImportService
         {
             score += 0.25;
         }
+        else if (!widthMetres.HasValue && IsPedestrianInfrastructure(highway))
+        {
+            score += 0.06;
+        }
 
         if (string.Equals(wheelchair, "no", StringComparison.OrdinalIgnoreCase))
         {
@@ -748,6 +758,9 @@ public sealed class OsmImportService : IOsmImportService
 
         return Math.Clamp(score, 0.01, 0.95);
     }
+
+    private static bool IsPedestrianInfrastructure(string? highway) =>
+        !string.IsNullOrWhiteSpace(highway) && WalkableHighways.Contains(highway);
 
     private static bool IsSteep(string? incline)
     {

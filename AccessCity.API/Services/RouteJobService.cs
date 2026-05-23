@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.Channels;
 using AccessCity.API.Configuration;
 using AccessCity.API.Exceptions;
 using AccessCity.API.Messaging;
@@ -53,10 +54,27 @@ public sealed class RouteJobResult
 
 public enum RouteJobStatus { Pending, Processing, Completed, Failed }
 
-public sealed class RouteJobService : IRouteJobService
+public sealed record RouteJobDispatchWorkItem(
+    string JobId,
+    RouteJobKind Kind,
+    RouteRequest Request,
+    List<HazardReport>? Hazards,
+    RouteJobResult Result,
+    string DedupeKey,
+    bool DedupeAlreadyReserved);
+
+public interface IRouteJobDispatchQueue
+{
+    ValueTask<RouteJobDispatchWorkItem> DequeueDispatchAsync(CancellationToken cancellationToken);
+
+    Task DispatchSubmissionAsync(RouteJobDispatchWorkItem workItem, CancellationToken cancellationToken);
+}
+
+public sealed class RouteJobService : IRouteJobService, IRouteJobDispatchQueue
 {
     private readonly ConcurrentDictionary<string, RouteJobResult> _jobs = new();
     private readonly ConcurrentDictionary<string, Lazy<Task<string>>> _inflightSubmissions = new();
+    private readonly Channel<RouteJobDispatchWorkItem> _dispatchQueue;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IMessageBus _messageBus;
     private readonly IRouteCoalescingService _coalescing;
@@ -93,6 +111,12 @@ public sealed class RouteJobService : IRouteJobService
         _redis = services.GetService<IConnectionMultiplexer>();
         _dispatchJobsToWorker = _options.DispatchJobsToWorker || configuration.GetValue<bool>("Messaging:UseKafka");
         _logger = logger;
+        _dispatchQueue = Channel.CreateUnbounded<RouteJobDispatchWorkItem>(new UnboundedChannelOptions
+        {
+            AllowSynchronousContinuations = false,
+            SingleReader = false,
+            SingleWriter = false
+        });
     }
 
     public async Task<string> SubmitAsync(
@@ -139,7 +163,7 @@ public sealed class RouteJobService : IRouteJobService
         }
     }
 
-    private Task<string> SubmitCoreUncoalescedAsync(
+    private async Task<string> SubmitCoreUncoalescedAsync(
         RouteJobKind kind,
         RouteRequest request,
         List<HazardReport>? hazards,
@@ -147,6 +171,27 @@ public sealed class RouteJobService : IRouteJobService
         CancellationToken cancellationToken)
     {
         var jobId = BuildDeterministicJobId(dedupeKey);
+        var dedupeAlreadyReserved = false;
+        if (_redis is { IsConnected: true })
+        {
+            var database = _redis.GetDatabase();
+            var existingJobId = await database.StringGetAsync(dedupeKey);
+            if (existingJobId.HasValue)
+            {
+                return existingJobId.ToString();
+            }
+
+            dedupeAlreadyReserved = await database.StringSetAsync(dedupeKey, jobId, JobDedupeTtl, When.NotExists);
+            if (!dedupeAlreadyReserved)
+            {
+                existingJobId = await database.StringGetAsync(dedupeKey);
+                if (existingJobId.HasValue)
+                {
+                    return existingJobId.ToString();
+                }
+            }
+        }
+
         var result = new RouteJobResult
         {
             JobId = jobId,
@@ -156,54 +201,88 @@ public sealed class RouteJobService : IRouteJobService
         };
 
         _jobs[jobId] = result;
-        _ = Task.Run(
-            () => PersistAndDispatchAsync(jobId, kind, request, hazards, result, dedupeKey, CancellationToken.None),
-            CancellationToken.None);
+        await PersistAsync(result, cancellationToken);
+        if (!_dispatchQueue.Writer.TryWrite(new RouteJobDispatchWorkItem(
+                jobId,
+                kind,
+                request,
+                hazards,
+                result,
+                dedupeKey,
+                dedupeAlreadyReserved)))
+        {
+            throw new RouteCapacityExceededException();
+        }
 
-        return Task.FromResult(jobId);
+        return jobId;
     }
 
-    private async Task PersistAndDispatchAsync(
-        string jobId,
-        RouteJobKind kind,
-        RouteRequest request,
-        List<HazardReport>? hazards,
-        RouteJobResult result,
-        string dedupeKey,
+    public ValueTask<RouteJobDispatchWorkItem> DequeueDispatchAsync(CancellationToken cancellationToken) =>
+        _dispatchQueue.Reader.ReadAsync(cancellationToken);
+
+    public async Task DispatchSubmissionAsync(
+        RouteJobDispatchWorkItem workItem,
         CancellationToken cancellationToken)
     {
         try
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken);
-
             if (_redis is { IsConnected: true })
             {
-                var reserved = await _redis.GetDatabase().StringSetAsync(dedupeKey, jobId, JobDedupeTtl, When.NotExists);
-                if (!reserved)
+                var database = _redis.GetDatabase();
+                var currentReservation = await database.StringGetAsync(workItem.DedupeKey);
+                if (currentReservation.HasValue
+                    && !string.Equals(currentReservation.ToString(), workItem.JobId, StringComparison.Ordinal))
                 {
                     return;
                 }
+
+                if (!currentReservation.HasValue && !workItem.DedupeAlreadyReserved)
+                {
+                    var reserved = await database.StringSetAsync(
+                        workItem.DedupeKey,
+                        workItem.JobId,
+                        JobDedupeTtl,
+                        When.NotExists);
+                    if (!reserved)
+                    {
+                        return;
+                    }
+                }
             }
 
-            await PersistAsync(result, cancellationToken);
+            await PersistAsync(workItem.Result, cancellationToken);
 
             if (_dispatchJobsToWorker)
             {
                 await _messageBus.PublishAsync(
-                    new RouteJobRequestedEvent(jobId, request, result.SubmittedAt, kind),
+                    new RouteJobRequestedEvent(
+                        workItem.JobId,
+                        workItem.Request,
+                        workItem.Result.SubmittedAt,
+                        workItem.Kind),
                     cancellationToken);
                 return;
             }
 
-            await ComputeAsync(jobId, kind, request, hazards, result.SubmittedAt, _lifetime.ApplicationStopping);
+            await ComputeAsync(
+                workItem.JobId,
+                workItem.Kind,
+                workItem.Request,
+                workItem.Hazards,
+                workItem.Result.SubmittedAt,
+                _lifetime.ApplicationStopping);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Host shutdown; leave the job pending so a retried Kafka message or client retry can recover.
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Route job {JobId} could not be queued", jobId);
-            result.Status = RouteJobStatus.Failed;
-            result.Error = "Route job could not be queued.";
-            result.CompletedAt = DateTime.UtcNow;
-            await PersistAsync(result, CancellationToken.None);
+            _logger.LogError(ex, "Route job {JobId} could not be queued", workItem.JobId);
+            workItem.Result.Status = RouteJobStatus.Failed;
+            workItem.Result.Error = "Route job could not be queued.";
+            workItem.Result.CompletedAt = DateTime.UtcNow;
+            await PersistAsync(workItem.Result, CancellationToken.None);
         }
     }
 

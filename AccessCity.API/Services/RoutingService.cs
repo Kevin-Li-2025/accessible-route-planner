@@ -1329,11 +1329,14 @@ public class RoutingService : IRoutingService
         if (edge.HasStairs) penalty += strict ? 600 : 90;
         if (edge.HasBarrier) penalty += strict ? 600 : 60;
         if (edge.KerbHeight > 0.03) penalty += strict ? 300 : 30;
+        if (surface is "unknown") penalty += baseSeconds * (strict ? 0.6 : 0.15);
         if (surface is "cobblestone" or "sett") penalty += baseSeconds * (strict ? 2.0 : 0.4);
         if (surface is "gravel" or "unpaved" or "sand" or "dirt" or "earth" or "grass")
             penalty += baseSeconds * (strict ? 4.0 : 0.8);
         if (!SmoothnessAllowsWheels(edge.Smoothness)) penalty += strict ? 300 : 45;
+        else if (strict && string.IsNullOrWhiteSpace(edge.Smoothness)) penalty += baseSeconds * 0.25;
         if (edge.WidthMetres.HasValue && edge.WidthMetres < 0.9) penalty += strict ? 300 : 30;
+        else if (strict && !edge.WidthMetres.HasValue) penalty += baseSeconds * 0.35;
         if (edge.IsSteep) penalty += baseSeconds * (strict ? 1.5 : 0.5);
 
         return penalty;

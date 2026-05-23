@@ -582,9 +582,9 @@ namespace AccessCity.API.Services
                         SELECT *
                         FROM route_edges
                         WHERE ST_DWithin(
-                            "Geometry",
-                            ST_SetSRID(ST_MakePoint({lng}, {lat}), 4326),
-                            {radiusMetres / 111_320.0})
+                            "Geometry"::geography,
+                            ST_SetSRID(ST_MakePoint({lng}, {lat}), 4326)::geography,
+                            {radiusMetres})
                         ORDER BY "Geometry" <-> ST_SetSRID(ST_MakePoint({lng}, {lat}), 4326)
                         LIMIT 50
                         """)
