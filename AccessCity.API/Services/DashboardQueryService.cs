@@ -2,6 +2,7 @@ using AccessCity.API.Data;
 using AccessCity.API.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Hybrid;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace AccessCity.API.Services;
 
@@ -38,15 +39,23 @@ public sealed class DashboardQueryService : IDashboardQueryService
         Expiration = TimeSpan.FromSeconds(10)
     };
 
+    private static readonly TimeSpan ReadModelCacheTtl = TimeSpan.FromSeconds(15);
+
     private readonly IRealHazardDataService _realHazardData;
     private readonly AppDbContext _dbContext;
     private readonly HybridCache _cache;
+    private readonly IMemoryCache _memoryCache;
 
-    public DashboardQueryService(IRealHazardDataService realHazardData, AppDbContext dbContext, HybridCache cache)
+    public DashboardQueryService(
+        IRealHazardDataService realHazardData,
+        AppDbContext dbContext,
+        HybridCache cache,
+        IMemoryCache memoryCache)
     {
         _realHazardData = realHazardData;
         _dbContext = dbContext;
         _cache = cache;
+        _memoryCache = memoryCache;
     }
 
     public async Task<DashboardSummary> GetSummaryAsync(CancellationToken cancellationToken)
@@ -138,6 +147,11 @@ public sealed class DashboardQueryService : IDashboardQueryService
     public async Task<object> GetHeatMapAsync(CancellationToken cancellationToken)
     {
         _ = cancellationToken;
+        if (_memoryCache.TryGetValue("dashboard:heat-map:v1", out object? cached) && cached is not null)
+        {
+            return cached;
+        }
+
         var hazards = await _realHazardData.GetActiveHazardsAsync();
         var features = new List<object>();
 
@@ -163,11 +177,13 @@ public sealed class DashboardQueryService : IDashboardQueryService
             });
         }
 
-        return new
+        var response = new
         {
             type = "FeatureCollection",
             features,
         };
+        _memoryCache.Set("dashboard:heat-map:v1", response, ReadModelCacheTtl);
+        return response;
     }
 
     public async Task<IReadOnlyList<InfrastructureFeedItem>> GetInfrastructureFeedAsync(
@@ -175,11 +191,18 @@ public sealed class DashboardQueryService : IDashboardQueryService
         CancellationToken cancellationToken)
     {
         _ = cancellationToken;
+        var clampedLimit = Math.Clamp(limit, 1, 100);
+        var cacheKey = $"dashboard:infrastructure-feed:v1:{clampedLimit}";
+        if (_memoryCache.TryGetValue(cacheKey, out IReadOnlyList<InfrastructureFeedItem>? cached) && cached is not null)
+        {
+            return cached;
+        }
+
         var hazards = await _realHazardData.GetActiveHazardsAsync();
 
-        return hazards
+        var feed = hazards
             .OrderByDescending(h => h.ReportedAt)
-            .Take(Math.Clamp(limit, 1, 100))
+            .Take(clampedLimit)
             .Select(h => new InfrastructureFeedItem(
                 h.Id,
                 h.Type,
@@ -188,6 +211,8 @@ public sealed class DashboardQueryService : IDashboardQueryService
                 h.ReportedAt,
                 h.Location != null ? new[] { h.Location.X, h.Location.Y } : null))
             .ToList();
+        _memoryCache.Set(cacheKey, feed, ReadModelCacheTtl);
+        return feed;
     }
 
     private sealed record HazardStatusCount(HazardStatus Status, int Count);

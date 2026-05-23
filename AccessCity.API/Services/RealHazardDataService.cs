@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using AccessCity.API.Models;
 using AccessCity.API.Models.External;
@@ -29,6 +30,7 @@ public class RealHazardDataService : IRealHazardDataService
     private readonly ILogger<RealHazardDataService> _logger;
     private readonly bool _realtimeOverpassEnabled;
     private readonly TimeSpan _osmFetchBudget;
+    private static readonly ConcurrentDictionary<string, Lazy<Task<List<HazardReport>>>> InFlightLoads = new();
 
     private const string CacheKeyPrefix = "real_hazards:";
     /// <summary>Overpass is slow; longer cache reduces cold-cache storms on /hazards.</summary>
@@ -81,6 +83,43 @@ public class RealHazardDataService : IRealHazardDataService
 
         var cacheKey = $"{CacheKeyPrefix}{minLatVal:F4}_{minLngVal:F4}_{maxLatVal:F4}_{maxLngVal:F4}_{status?.ToString() ?? "all"}_osm:{_realtimeOverpassEnabled}";
 
+        if (_cache.TryGetValue(cacheKey, out List<HazardReport>? cached))
+            return cached ?? new List<HazardReport>();
+
+        var lazyLoad = InFlightLoads.GetOrAdd(
+            cacheKey,
+            _ => new Lazy<Task<List<HazardReport>>>(
+                () => LoadAndCacheHazardsAsync(
+                    cacheKey,
+                    minLatVal,
+                    minLngVal,
+                    maxLatVal,
+                    maxLngVal,
+                    status),
+                LazyThreadSafetyMode.ExecutionAndPublication));
+
+        var loadTask = lazyLoad.Value;
+        try
+        {
+            return await loadTask.ConfigureAwait(false);
+        }
+        finally
+        {
+            if (loadTask.IsCompleted)
+            {
+                InFlightLoads.TryRemove(cacheKey, out _);
+            }
+        }
+    }
+
+    private async Task<List<HazardReport>> LoadAndCacheHazardsAsync(
+        string cacheKey,
+        double minLatVal,
+        double minLngVal,
+        double maxLatVal,
+        double maxLngVal,
+        HazardStatus? status)
+    {
         if (_cache.TryGetValue(cacheKey, out List<HazardReport>? cached))
             return cached ?? new List<HazardReport>();
 

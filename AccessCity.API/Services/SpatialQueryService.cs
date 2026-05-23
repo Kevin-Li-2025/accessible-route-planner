@@ -3,6 +3,7 @@ using AccessCity.API.Data;
 using AccessCity.API.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Hybrid;
+using Microsoft.Extensions.Caching.Memory;
 using NetTopologySuite.Geometries;
 
 namespace AccessCity.API.Services;
@@ -26,14 +27,17 @@ public sealed class SpatialQueryService : ISpatialQueryService
     };
 
     private static readonly GeometryFactory Wgs84 = new(new PrecisionModel(), 4326);
+    private static readonly TimeSpan OverlayCacheTtl = TimeSpan.FromSeconds(30);
 
     private readonly AppDbContext _dbContext;
     private readonly HybridCache _cache;
+    private readonly IMemoryCache _memoryCache;
 
-    public SpatialQueryService(AppDbContext dbContext, HybridCache cache)
+    public SpatialQueryService(AppDbContext dbContext, HybridCache cache, IMemoryCache memoryCache)
     {
         _dbContext = dbContext;
         _cache = cache;
+        _memoryCache = memoryCache;
     }
 
     public async Task<IReadOnlyList<PointOfInterest>> GetPointsOfInterestAsync(
@@ -62,15 +66,16 @@ public sealed class SpatialQueryService : ISpatialQueryService
     {
         var assets = await _dbContext.InfrastructureAssets
             .FromSqlInterpolated($"""
-                SELECT *
-                FROM infrastructure_assets
+                WITH query AS (
+                    SELECT ST_SetSRID(ST_MakePoint({lng}, {lat}), 4326) AS geom
+                )
+                SELECT infrastructure_assets.*
+                FROM infrastructure_assets, query
                 WHERE ST_DWithin(
                     "Geometry"::geography,
-                    ST_SetSRID(ST_MakePoint({lng}, {lat}), 4326)::geography,
+                    query.geom::geography,
                     {radius})
-                ORDER BY ST_Distance(
-                    "Geometry"::geography,
-                    ST_SetSRID(ST_MakePoint({lng}, {lat}), 4326)::geography)
+                ORDER BY "Geometry" <-> query.geom
                 LIMIT 100
                 """)
             .AsNoTracking()
@@ -91,6 +96,13 @@ public sealed class SpatialQueryService : ISpatialQueryService
 
     public async Task<MapOverlayResponse?> GetMapOverlayAsync(string layerName, CancellationToken cancellationToken)
     {
+        var normalizedLayer = layerName.Trim().ToLowerInvariant();
+        var cacheKey = $"spatial:overlay:v1:{normalizedLayer}";
+        if (_memoryCache.TryGetValue(cacheKey, out MapOverlayResponse? cached) && cached is not null)
+        {
+            return cached;
+        }
+
         if (string.Equals(layerName, "hazards", StringComparison.OrdinalIgnoreCase))
         {
             var hazards = await _dbContext.Hazards
@@ -99,7 +111,7 @@ public sealed class SpatialQueryService : ISpatialQueryService
                 .Take(250)
                 .ToListAsync(cancellationToken);
 
-            return new MapOverlayResponse
+            var response = new MapOverlayResponse
             {
                 Layer = "hazards",
                 Features = hazards.Select(hazard => new MapOverlayFeature
@@ -115,6 +127,8 @@ public sealed class SpatialQueryService : ISpatialQueryService
                     }
                 }).ToList()
             };
+            _memoryCache.Set(cacheKey, response, OverlayCacheTtl);
+            return response;
         }
 
         if (string.Equals(layerName, "infrastructure", StringComparison.OrdinalIgnoreCase))
@@ -125,7 +139,7 @@ public sealed class SpatialQueryService : ISpatialQueryService
                 .Take(250)
                 .ToListAsync(cancellationToken);
 
-            return new MapOverlayResponse
+            var response = new MapOverlayResponse
             {
                 Layer = "infrastructure",
                 Features = assets.Select(asset => new MapOverlayFeature
@@ -141,6 +155,8 @@ public sealed class SpatialQueryService : ISpatialQueryService
                     }
                 }).ToList()
             };
+            _memoryCache.Set(cacheKey, response, OverlayCacheTtl);
+            return response;
         }
 
         return null;

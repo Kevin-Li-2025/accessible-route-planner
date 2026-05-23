@@ -5,6 +5,7 @@ using AccessCity.API.Configuration;
 using AccessCity.API.Exceptions;
 using AccessCity.API.Models;
 using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using NetTopologySuite.IO.Converters;
 
@@ -45,6 +46,7 @@ public sealed class RouteJobService : IRouteJobService
     private readonly IRouteCoalescingService _coalescing;
     private readonly IRouteComputationLimiter _routeLimiter;
     private readonly IDistributedCache _distributedCache;
+    private readonly IHostApplicationLifetime _lifetime;
     private readonly ILogger<RouteJobService> _logger;
     private readonly RoutingOptions _options;
     private static readonly TimeSpan JobTtl = TimeSpan.FromMinutes(5);
@@ -55,6 +57,7 @@ public sealed class RouteJobService : IRouteJobService
         IRouteCoalescingService coalescing,
         IRouteComputationLimiter routeLimiter,
         IDistributedCache distributedCache,
+        IHostApplicationLifetime lifetime,
         IOptions<RoutingOptions> options,
         ILogger<RouteJobService> logger)
     {
@@ -62,6 +65,7 @@ public sealed class RouteJobService : IRouteJobService
         _coalescing = coalescing;
         _routeLimiter = routeLimiter;
         _distributedCache = distributedCache;
+        _lifetime = lifetime;
         _options = options.Value;
         _logger = logger;
     }
@@ -83,7 +87,9 @@ public sealed class RouteJobService : IRouteJobService
         await PersistAsync(result, cancellationToken);
 
         // Fire-and-forget the computation on the thread pool.
-        _ = ComputeAsync(jobId, request, hazards);
+        _ = Task.Run(
+            () => ComputeAsync(jobId, request, hazards, _lifetime.ApplicationStopping),
+            CancellationToken.None);
 
         return jobId;
     }
@@ -112,7 +118,11 @@ public sealed class RouteJobService : IRouteJobService
         }
     }
 
-    private async Task ComputeAsync(string jobId, RouteRequest request, List<HazardReport>? hazards)
+    private async Task ComputeAsync(
+        string jobId,
+        RouteRequest request,
+        List<HazardReport>? hazards,
+        CancellationToken stoppingToken)
     {
         var result = _jobs[jobId];
         result.Status = RouteJobStatus.Processing;
@@ -127,7 +137,7 @@ public sealed class RouteJobService : IRouteJobService
                 request,
                 async () =>
                 {
-                    await using var lease = await _routeLimiter.TryAcquireAsync(waitTimeout, CancellationToken.None)
+                    await using var lease = await _routeLimiter.TryAcquireAsync(waitTimeout, stoppingToken)
                         ?? throw new RouteCapacityExceededException();
 
                     // Create a scoped DI container to resolve scoped routing dependencies.
@@ -136,11 +146,11 @@ public sealed class RouteJobService : IRouteJobService
                     if (scopedHazards is null)
                     {
                         var hazardQueries = scope.ServiceProvider.GetRequiredService<IHazardQueryService>();
-                        scopedHazards = await hazardQueries.LoadHazardsForRouteAsync(request, CancellationToken.None);
+                        scopedHazards = await hazardQueries.LoadHazardsForRouteAsync(request, stoppingToken);
                     }
 
                     var routing = scope.ServiceProvider.GetRequiredService<IRoutingService>();
-                    return await routing.FindSafePathAsync(request, scopedHazards);
+                    return await routing.FindSafePathAsync(request, scopedHazards, stoppingToken);
                 });
 
             result.Route = route;
@@ -153,6 +163,11 @@ public sealed class RouteJobService : IRouteJobService
             result.Status = RouteJobStatus.Failed;
             result.Error = "Route computation capacity is saturated. Retry later.";
         }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            result.Status = RouteJobStatus.Failed;
+            result.Error = "Route computation was cancelled during application shutdown.";
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Route job {JobId} failed", jobId);
@@ -164,12 +179,20 @@ public sealed class RouteJobService : IRouteJobService
         await PersistAsync(result, CancellationToken.None);
 
         // Auto-expire completed jobs after 5 minutes.
-        _ = CleanupAfterDelay(jobId, JobTtl);
+        _ = CleanupAfterDelay(jobId, JobTtl, stoppingToken);
     }
 
-    private async Task CleanupAfterDelay(string jobId, TimeSpan delay)
+    private async Task CleanupAfterDelay(string jobId, TimeSpan delay, CancellationToken stoppingToken)
     {
-        await Task.Delay(delay);
+        try
+        {
+            await Task.Delay(delay, stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            return;
+        }
+
         _jobs.TryRemove(jobId, out _);
         try
         {
