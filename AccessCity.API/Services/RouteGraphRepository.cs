@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Text.Json;
 using AccessCity.API.Configuration;
 using AccessCity.API.Data;
 using AccessCity.API.Models;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
@@ -22,19 +24,23 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
 
     private readonly AppDbContext _dbContext;
     private readonly IMemoryCache _cache;
+    private readonly IDistributedCache _distributedCache;
     private readonly AccessCityMetrics _metrics;
     private readonly ILogger<RouteGraphRepository> _logger;
     private readonly RoutingOptions _options;
+    private static readonly JsonSerializerOptions SnapshotJsonOptions = new(JsonSerializerDefaults.Web);
 
     public RouteGraphRepository(
         AppDbContext dbContext,
         IMemoryCache cache,
+        IDistributedCache distributedCache,
         AccessCityMetrics metrics,
         IOptions<RoutingOptions> options,
         ILogger<RouteGraphRepository> logger)
     {
         _dbContext = dbContext;
         _cache = cache;
+        _distributedCache = distributedCache;
         _metrics = metrics;
         _options = options.Value;
         _logger = logger;
@@ -85,10 +91,73 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         string cacheKey,
         CancellationToken cancellationToken)
     {
+        var distributed = await TryGetDistributedSnapshotAsync(cacheKey, cancellationToken);
+        if (distributed is not null)
+        {
+            var distributedTtl = TimeSpan.FromSeconds(Math.Max(30, _options.RouteGraphCacheTtlSeconds));
+            _cache.Set(cacheKey, distributed, distributedTtl);
+            return distributed;
+        }
+
         var graphData = await LoadGraphRegionAsync(region, edgeLimit, cacheKey, cancellationToken);
         var ttl = TimeSpan.FromSeconds(Math.Max(30, _options.RouteGraphCacheTtlSeconds));
         _cache.Set(cacheKey, graphData, ttl);
+        await TrySetDistributedSnapshotAsync(cacheKey, graphData, ttl, cancellationToken);
         return graphData;
+    }
+
+    private async Task<RouteGraphData?> TryGetDistributedSnapshotAsync(
+        string cacheKey,
+        CancellationToken cancellationToken)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            var json = await _distributedCache.GetStringAsync(cacheKey, cancellationToken);
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                _metrics.CacheLookup("route_graph_l2", hit: false, stopwatch.Elapsed.TotalMilliseconds);
+                return null;
+            }
+
+            var snapshot = JsonSerializer.Deserialize<RouteGraphSnapshot>(json, SnapshotJsonOptions);
+            if (snapshot is null)
+            {
+                _metrics.CacheLookup("route_graph_l2", hit: false, stopwatch.Elapsed.TotalMilliseconds);
+                return null;
+            }
+
+            var graphData = FromSnapshot(snapshot);
+            _metrics.CacheLookup("route_graph_l2", hit: true, stopwatch.Elapsed.TotalMilliseconds);
+            return graphData;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex, "Route graph shard {ShardKey} could not be read from distributed cache", cacheKey);
+            _metrics.CacheLookup("route_graph_l2", hit: false, stopwatch.Elapsed.TotalMilliseconds);
+            return null;
+        }
+    }
+
+    private async Task TrySetDistributedSnapshotAsync(
+        string cacheKey,
+        RouteGraphData graphData,
+        TimeSpan ttl,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(ToSnapshot(graphData), SnapshotJsonOptions);
+            await _distributedCache.SetStringAsync(
+                cacheKey,
+                json,
+                new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = ttl },
+                cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex, "Route graph shard {ShardKey} could not be written to distributed cache", cacheKey);
+        }
     }
 
     private async Task<RouteGraphData> LoadGraphRegionAsync(
@@ -233,5 +302,115 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         }
     }
 
+    private static RouteGraphSnapshot ToSnapshot(RouteGraphData graphData)
+    {
+        var nodes = graphData.Nodes.Values
+            .Select(node => new RouteGraphNodeSnapshot(
+                node.Id,
+                node.Location.X,
+                node.Location.Y,
+                node.Edges.Values.Select(edge => new RouteGraphEdgeSnapshot(
+                    edge.TargetNodeId,
+                    edge.DistanceMetres,
+                    edge.BaseSafetyCost,
+                    edge.SurfaceType,
+                    edge.HasStairs,
+                    edge.HasCrossing,
+                    edge.IsUnderConstruction,
+                    edge.LightingQuality,
+                    edge.IsSteep,
+                    edge.KerbHeight,
+                    edge.Smoothness,
+                    edge.WidthMetres,
+                    edge.HasTactilePaving,
+                    edge.HasBarrier,
+                    edge.Access,
+                    edge.Geometry?.Select(coord => new RouteGraphCoordinateSnapshot(coord.X, coord.Y)).ToArray()))
+                    .ToArray()))
+            .ToArray();
+
+        return new RouteGraphSnapshot(
+            graphData.ShardKey,
+            graphData.LoadedEdgeCount,
+            graphData.IsTruncated,
+            graphData.SpatialBucketSizeDegrees,
+            nodes);
+    }
+
+    private static RouteGraphData FromSnapshot(RouteGraphSnapshot snapshot)
+    {
+        var nodes = snapshot.Nodes.ToDictionary(
+            node => node.Id,
+            node => new GraphNode
+            {
+                Id = node.Id,
+                Location = new Coordinate(node.X, node.Y),
+                Edges = node.Edges.ToDictionary(
+                    edge => edge.TargetNodeId,
+                    edge => new GraphEdge
+                    {
+                        TargetNodeId = edge.TargetNodeId,
+                        DistanceMetres = edge.DistanceMetres,
+                        BaseSafetyCost = edge.BaseSafetyCost,
+                        SurfaceType = edge.SurfaceType,
+                        HasStairs = edge.HasStairs,
+                        HasCrossing = edge.HasCrossing,
+                        IsUnderConstruction = edge.IsUnderConstruction,
+                        LightingQuality = edge.LightingQuality,
+                        IsSteep = edge.IsSteep,
+                        KerbHeight = edge.KerbHeight,
+                        Smoothness = edge.Smoothness,
+                        WidthMetres = edge.WidthMetres,
+                        HasTactilePaving = edge.HasTactilePaving,
+                        HasBarrier = edge.HasBarrier,
+                        Access = edge.Access,
+                        Geometry = edge.Geometry?.Select(coord => new Coordinate(coord.X, coord.Y)).ToArray()
+                    })
+            });
+
+        var graphData = new RouteGraphData
+        {
+            Nodes = nodes,
+            IsTruncated = snapshot.IsTruncated,
+            ShardKey = snapshot.ShardKey,
+            LoadedEdgeCount = snapshot.LoadedEdgeCount,
+            SpatialBucketSizeDegrees = snapshot.SpatialBucketSizeDegrees
+        };
+        BuildSpatialBuckets(graphData);
+        return graphData;
+    }
+
     private sealed record GraphShardRegion(double MinLon, double MinLat, double MaxLon, double MaxLat);
+    private sealed record RouteGraphSnapshot(
+        string? ShardKey,
+        int LoadedEdgeCount,
+        bool IsTruncated,
+        double SpatialBucketSizeDegrees,
+        RouteGraphNodeSnapshot[] Nodes);
+
+    private sealed record RouteGraphNodeSnapshot(
+        long Id,
+        double X,
+        double Y,
+        RouteGraphEdgeSnapshot[] Edges);
+
+    private sealed record RouteGraphEdgeSnapshot(
+        long TargetNodeId,
+        double DistanceMetres,
+        double BaseSafetyCost,
+        string SurfaceType,
+        bool HasStairs,
+        bool HasCrossing,
+        bool IsUnderConstruction,
+        double LightingQuality,
+        bool IsSteep,
+        double KerbHeight,
+        string? Smoothness,
+        double? WidthMetres,
+        bool HasTactilePaving,
+        bool HasBarrier,
+        string? Access,
+        RouteGraphCoordinateSnapshot[]? Geometry);
+
+    private sealed record RouteGraphCoordinateSnapshot(double X, double Y);
 }

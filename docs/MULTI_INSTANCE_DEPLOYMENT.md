@@ -47,7 +47,9 @@ OSM import jobs are persisted in `osm_import_jobs`; poll
 Set `REDIS_CONNECTION=redis:6379` for API and worker containers. HybridCache then uses Redis as
 the shared L2 cache for tile, route, and risk lookups instead of per-process memory only.
 Risk scoring also uses `IDistributedCache` for external crime/environment data, with IMemoryCache
-kept only as a short-lived L1 cache.
+kept only as a short-lived L1 cache. Imported route graph shards use the same pattern: each worker
+keeps a local pre-indexed shard in memory and writes a compact Redis snapshot so newly scaled
+workers can hydrate hot graph shards without immediately repeating the PostGIS edge/node load.
 
 ## Kubernetes Path
 

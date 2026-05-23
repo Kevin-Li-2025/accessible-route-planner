@@ -152,7 +152,9 @@ public sealed class ArchitectureModularityTests
         var routing = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "RoutingService.cs"));
 
         Assert.Contains("IMemoryCache", repository, StringComparison.Ordinal);
+        Assert.Contains("IDistributedCache", repository, StringComparison.Ordinal);
         Assert.Contains("InFlightGraphLoads", repository, StringComparison.Ordinal);
+        Assert.Contains("RouteGraphSnapshot", repository, StringComparison.Ordinal);
         Assert.Contains("ComputeShardRegion", repository, StringComparison.Ordinal);
         Assert.Contains("BuildSpatialBuckets", repository, StringComparison.Ordinal);
         Assert.Contains("SpatialBuckets", models, StringComparison.Ordinal);

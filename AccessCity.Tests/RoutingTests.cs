@@ -1,13 +1,19 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using AccessCity.API.Configuration;
 using AccessCity.API.Data;
 using AccessCity.API.Models;
 using AccessCity.API.Services;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using NetTopologySuite.Geometries;
 using Xunit;
 
@@ -200,6 +206,54 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
         var result = await response.Content.ReadFromJsonAsync<RouteResponse>(JsonOptions);
         Assert.NotNull(result);
         Assert.NotNull(result.Path);
+    }
+
+    [Fact]
+    public async Task RouteGraphRepository_Hydrates_Shard_From_Distributed_Snapshot()
+    {
+        var client = await _factory.CreateAuthenticatedClientAsync();
+        await _factory.ImportOsmAsync(client);
+
+        using var scope = _factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var distributedCache = scope.ServiceProvider.GetRequiredService<IDistributedCache>();
+        var metrics = scope.ServiceProvider.GetRequiredService<AccessCityMetrics>();
+        var options = scope.ServiceProvider.GetRequiredService<IOptions<RoutingOptions>>();
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<RouteGraphRepository>>();
+        var start = new Coordinate(-1.8904, 52.4862);
+        var end = new Coordinate(-1.8894, 52.4862);
+
+        using var firstMemory = new MemoryCache(new MemoryCacheOptions());
+        var firstRepository = new RouteGraphRepository(
+            dbContext,
+            firstMemory,
+            distributedCache,
+            metrics,
+            options,
+            logger);
+
+        var first = await firstRepository.LoadGraphAsync(start, end);
+        Assert.True(first.HasCoverage);
+
+        await using var transaction = await dbContext.Database.BeginTransactionAsync();
+        await dbContext.RouteEdges.ExecuteDeleteAsync();
+        await dbContext.RouteNodes.ExecuteDeleteAsync();
+
+        using var secondMemory = new MemoryCache(new MemoryCacheOptions());
+        var secondRepository = new RouteGraphRepository(
+            dbContext,
+            secondMemory,
+            distributedCache,
+            metrics,
+            options,
+            logger);
+
+        var second = await secondRepository.LoadGraphAsync(start, end);
+        Assert.True(second.HasCoverage);
+        Assert.Equal(first.LoadedEdgeCount, second.LoadedEdgeCount);
+        Assert.Equal(first.Nodes.Count, second.Nodes.Count);
+
+        await transaction.RollbackAsync();
     }
 
     [Fact]
