@@ -297,6 +297,52 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
     }
 
     [Fact]
+    public async Task RouteGraphRepository_Does_Not_Persist_Empty_Shard_Snapshots()
+    {
+        var client = await _factory.CreateAuthenticatedClientAsync();
+
+        using var scope = _factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var distributedCache = scope.ServiceProvider.GetRequiredService<IDistributedCache>();
+        var metrics = scope.ServiceProvider.GetRequiredService<AccessCityMetrics>();
+        var options = scope.ServiceProvider.GetRequiredService<IOptions<RoutingOptions>>();
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<RouteGraphRepository>>();
+        var start = new Coordinate(-1.8904, 52.4862);
+        var end = new Coordinate(-1.8894, 52.4862);
+
+        await dbContext.RouteEdges.ExecuteDeleteAsync();
+        await dbContext.RouteNodes.ExecuteDeleteAsync();
+
+        using (var emptyMemory = new MemoryCache(new MemoryCacheOptions()))
+        {
+            var emptyRepository = new RouteGraphRepository(
+                dbContext,
+                emptyMemory,
+                distributedCache,
+                metrics,
+                options,
+                logger);
+
+            var empty = await emptyRepository.LoadGraphAsync(start, end);
+            Assert.False(empty.HasCoverage);
+        }
+
+        await _factory.ImportOsmAsync(client);
+
+        using var loadedMemory = new MemoryCache(new MemoryCacheOptions());
+        var loadedRepository = new RouteGraphRepository(
+            dbContext,
+            loadedMemory,
+            distributedCache,
+            metrics,
+            options,
+            logger);
+
+        var loaded = await loadedRepository.LoadGraphAsync(start, end);
+        Assert.True(loaded.HasCoverage);
+    }
+
+    [Fact]
     public async Task SafePathOptions_Returns_Recommended_And_Optional_Variants()
     {
         var client = await _factory.CreateAuthenticatedClientAsync();

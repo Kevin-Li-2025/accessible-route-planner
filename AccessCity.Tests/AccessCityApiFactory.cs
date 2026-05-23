@@ -108,7 +108,7 @@ public class AccessCityApiFactory : WebApplicationFactory<Program>
         await _importLock.WaitAsync();
         try
         {
-            if (_osmImported && await HasImportedRouteGraphAsync())
+            if (_osmImported && await HasImportedFixtureRouteGraphAsync())
             {
                 return;
             }
@@ -133,15 +133,27 @@ public class AccessCityApiFactory : WebApplicationFactory<Program>
         base.Dispose(disposing);
     }
 
-    private async Task<bool> HasImportedRouteGraphAsync()
+    private async Task<bool> HasImportedFixtureRouteGraphAsync()
     {
         await using var connection = new NpgsqlConnection(ConnectionString);
         await connection.OpenAsync();
 
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT EXISTS (SELECT 1 FROM route_nodes LIMIT 1)
-               AND EXISTS (SELECT 1 FROM route_edges LIMIT 1);
+            SELECT EXISTS (
+                       SELECT 1
+                       FROM route_nodes
+                       WHERE ST_Intersects(
+                           "Location",
+                           ST_MakeEnvelope(-1.9004, 52.4762, -1.8794, 52.4962, 4326))
+                   )
+               AND EXISTS (
+                       SELECT 1
+                       FROM route_edges
+                       WHERE ST_Intersects(
+                           "Geometry",
+                           ST_MakeEnvelope(-1.9004, 52.4762, -1.8794, 52.4962, 4326))
+                   );
             """;
 
         try

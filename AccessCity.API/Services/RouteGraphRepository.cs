@@ -101,8 +101,12 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
 
         var graphData = await LoadGraphRegionAsync(region, edgeLimit, cacheKey, cancellationToken);
         var ttl = TimeSpan.FromSeconds(Math.Max(30, _options.RouteGraphCacheTtlSeconds));
-        _cache.Set(cacheKey, graphData, ttl);
-        await TrySetDistributedSnapshotAsync(cacheKey, graphData, ttl, cancellationToken);
+        if (graphData.HasCoverage)
+        {
+            _cache.Set(cacheKey, graphData, ttl);
+            await TrySetDistributedSnapshotAsync(cacheKey, graphData, ttl, cancellationToken);
+        }
+
         return graphData;
     }
 
@@ -128,6 +132,13 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
             }
 
             var graphData = FromSnapshot(snapshot);
+            if (!graphData.HasCoverage)
+            {
+                await _distributedCache.RemoveAsync(cacheKey, cancellationToken);
+                _metrics.CacheLookup("route_graph_l2", hit: false, stopwatch.Elapsed.TotalMilliseconds);
+                return null;
+            }
+
             _metrics.CacheLookup("route_graph_l2", hit: true, stopwatch.Elapsed.TotalMilliseconds);
             return graphData;
         }
@@ -145,6 +156,11 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         TimeSpan ttl,
         CancellationToken cancellationToken)
     {
+        if (!graphData.HasCoverage)
+        {
+            return;
+        }
+
         try
         {
             var json = JsonSerializer.Serialize(ToSnapshot(graphData), SnapshotJsonOptions);
