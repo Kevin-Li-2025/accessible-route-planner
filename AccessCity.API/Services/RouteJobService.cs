@@ -190,7 +190,15 @@ public sealed class RouteJobService : IRouteJobService, IRouteJobDispatchQueue
             var existingJobId = await database.StringGetAsync(dedupeKey);
             if (existingJobId.HasValue)
             {
-                return existingJobId.ToString();
+                var existingJobIdString = existingJobId.ToString();
+                await TryRecoverPendingJobDispatchAsync(
+                    kind,
+                    request,
+                    hazards,
+                    existingJobIdString,
+                    dedupeKey,
+                    cancellationToken);
+                return existingJobIdString;
             }
 
             dedupeAlreadyReserved = await database.StringSetAsync(dedupeKey, jobId, JobDedupeTtl, When.NotExists);
@@ -199,7 +207,15 @@ public sealed class RouteJobService : IRouteJobService, IRouteJobDispatchQueue
                 existingJobId = await database.StringGetAsync(dedupeKey);
                 if (existingJobId.HasValue)
                 {
-                    return existingJobId.ToString();
+                    var existingJobIdString = existingJobId.ToString();
+                    await TryRecoverPendingJobDispatchAsync(
+                        kind,
+                        request,
+                        hazards,
+                        existingJobIdString,
+                        dedupeKey,
+                        cancellationToken);
+                    return existingJobIdString;
                 }
             }
         }
@@ -266,13 +282,13 @@ public sealed class RouteJobService : IRouteJobService, IRouteJobDispatchQueue
 
             if (_dispatchJobsToWorker)
             {
-                await _messageBus.PublishAsync(
-                    new RouteJobRequestedEvent(
-                        workItem.JobId,
-                        workItem.Request,
-                        workItem.Result.SubmittedAt,
-                        workItem.Kind),
+                await PublishRouteJobRequestAsync(
+                    workItem.JobId,
+                    workItem.Kind,
+                    workItem.Request,
+                    workItem.Result.SubmittedAt,
                     cancellationToken);
+                _logger.LogDebug("Published route job {JobId} to worker queue.", workItem.JobId);
                 return;
             }
 
@@ -298,12 +314,87 @@ public sealed class RouteJobService : IRouteJobService, IRouteJobDispatchQueue
         }
     }
 
+    private Task PublishRouteJobRequestAsync(
+        string jobId,
+        RouteJobKind kind,
+        RouteRequest request,
+        DateTime submittedAt,
+        CancellationToken cancellationToken) =>
+        _messageBus.PublishAsync(
+            new RouteJobRequestedEvent(
+                jobId,
+                request,
+                submittedAt,
+                kind),
+            cancellationToken);
+
     private static string BuildJobDedupeKey(RouteJobKind kind, RouteRequest request)
     {
         var prefs = RouteRequestFingerprint.CanonicalPreferences(request.Preferences);
         return string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
             $"route_job:dedupe:{kind}:{request.Start?.X:F5},{request.Start?.Y:F5}->{request.End?.X:F5},{request.End?.Y:F5}|{request.Profile}|{request.SafetyWeight:F2}|prefs:{prefs}|{RouteRequestFingerprint.AlgorithmVersion}");
+    }
+
+    private async Task TryRecoverPendingJobDispatchAsync(
+        RouteJobKind kind,
+        RouteRequest request,
+        List<HazardReport>? hazards,
+        string jobId,
+        string dedupeKey,
+        CancellationToken cancellationToken)
+    {
+        var result = await GetResultAsync(jobId, cancellationToken);
+        if (result is null || result.Status is not (RouteJobStatus.Pending or RouteJobStatus.Processing))
+        {
+            return;
+        }
+
+        if (_redis is { IsConnected: true })
+        {
+            var database = _redis.GetDatabase();
+            var reserved = await database.StringSetAsync(
+                $"route_job:redispatch:{jobId}",
+                "1",
+                TimeSpan.FromSeconds(5),
+                When.NotExists);
+            if (!reserved)
+            {
+                return;
+            }
+        }
+
+        _jobs[jobId] = result;
+        if (_dispatchJobsToWorker)
+        {
+            try
+            {
+                await PersistAsync(result, cancellationToken);
+                await PublishRouteJobRequestAsync(jobId, kind, request, result.SubmittedAt, cancellationToken);
+                _logger.LogInformation("Re-published pending route job {JobId} for dispatch recovery.", jobId);
+                return;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Pending route job {JobId} could not be directly re-published; falling back to local dispatch queue.", jobId);
+            }
+        }
+
+        if (!_dispatchQueue.Writer.TryWrite(new RouteJobDispatchWorkItem(
+                jobId,
+                kind,
+                request,
+                hazards,
+                result,
+                dedupeKey,
+                DedupeAlreadyReserved: true)))
+        {
+            _logger.LogWarning("Pending route job {JobId} could not be requeued for dispatch recovery.", jobId);
+        }
     }
 
     private static string BuildDeterministicJobId(string dedupeKey)

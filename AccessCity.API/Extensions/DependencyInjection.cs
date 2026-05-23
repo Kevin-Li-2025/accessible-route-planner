@@ -52,7 +52,10 @@ public static class DependencyInjection
 
         if (useKafka)
         {
-            services.AddSingleton<IMessageBus, KafkaMessageBus>();
+            services.AddSingleton<KafkaMessageBus>();
+            services.AddSingleton<IMessageBus>(sp => sp.GetRequiredService<KafkaMessageBus>());
+            services.AddSingleton<IKafkaTopicInitializer>(sp => sp.GetRequiredService<KafkaMessageBus>());
+            services.AddHostedService<KafkaTopicWarmupBackgroundService>();
         }
         else
         {
@@ -334,6 +337,7 @@ public static class DependencyInjection
                     : HealthStatus.Degraded,
                 tags: new[] { "ready" });
         services.AddSingleton<CachedReadinessService>();
+        services.AddHostedService<ReadinessWarmupBackgroundService>();
 
         return services;
     }

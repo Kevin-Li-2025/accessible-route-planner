@@ -9,7 +9,12 @@ using System.Text.Json;
 
 namespace AccessCity.API.Messaging.Kafka;
 
-public class KafkaMessageBus : IMessageBus, IDisposable
+public interface IKafkaTopicInitializer
+{
+    Task EnsureInfrastructureAsync(CancellationToken cancellationToken = default);
+}
+
+public class KafkaMessageBus : IMessageBus, IKafkaTopicInitializer, IDisposable
 {
     private readonly IProducer<string, string> _producer;
     private readonly IIntegrationMessageStore _messageStore;
@@ -43,7 +48,7 @@ public class KafkaMessageBus : IMessageBus, IDisposable
     public async Task PublishAsync<T>(T @event, CancellationToken cancellationToken = default) where T : IntegrationEvent
     {
         var topic = TopicFor<T>();
-        await EnsureTopicsAsync([topic], cancellationToken).ConfigureAwait(false);
+        await EnsureTopicBeforePublishAsync(topic, cancellationToken).ConfigureAwait(false);
         var key = @event is IKeyedIntegrationEvent keyedEvent && !string.IsNullOrWhiteSpace(keyedEvent.PartitionKey)
             ? keyedEvent.PartitionKey
             : @event.Id.ToString();
@@ -59,6 +64,22 @@ public class KafkaMessageBus : IMessageBus, IDisposable
         };
 
         await _producer.ProduceAsync(topic, message, cancellationToken);
+    }
+
+    public Task EnsureInfrastructureAsync(CancellationToken cancellationToken = default)
+    {
+        var routeJobTopic = TopicFor<RouteJobRequestedEvent>();
+        var osmImportTopic = TopicFor<OsmImportStartedEvent>();
+        return EnsureTopicsAsync(
+            [
+                routeJobTopic,
+                RetryTopic(routeJobTopic),
+                DeadLetterTopic(routeJobTopic),
+                osmImportTopic,
+                RetryTopic(osmImportTopic),
+                DeadLetterTopic(osmImportTopic)
+            ],
+            cancellationToken);
     }
 
     public Task SubscribeAsync<T>(Func<T, Task> handler, CancellationToken cancellationToken = default) where T : IntegrationEvent
@@ -228,10 +249,38 @@ public class KafkaMessageBus : IMessageBus, IDisposable
         return Task.WhenAll(tasks);
     }
 
+    private async Task EnsureTopicBeforePublishAsync(string topic, CancellationToken cancellationToken)
+    {
+        var adminTimeout = TimeSpan.FromSeconds(Math.Clamp(_options.TopicAdminTimeoutSeconds, 1, 30));
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(adminTimeout);
+
+        try
+        {
+            await EnsureTopicsAsync([topic], CancellationToken.None)
+                .WaitAsync(timeoutCts.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            _topicCreationTasks.TryRemove(topic, out _);
+            _logger.LogWarning(
+                "Kafka topic {Topic} ensure exceeded {TimeoutSeconds}s before publish; publishing optimistically.",
+                topic,
+                adminTimeout.TotalSeconds);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _topicCreationTasks.TryRemove(topic, out _);
+            _logger.LogWarning(ex, "Kafka topic {Topic} could not be ensured before publish; publishing optimistically.", topic);
+        }
+    }
+
     private async Task CreateTopicAsync(string topic, CancellationToken cancellationToken)
     {
         var desiredPartitions = Math.Max(1, _options.TopicPartitions);
         var desiredReplicationFactor = Math.Max((short)1, _options.TopicReplicationFactor);
+        var adminTimeout = TimeSpan.FromSeconds(Math.Clamp(_options.TopicAdminTimeoutSeconds, 1, 30));
         var adminConfig = new AdminClientConfig
         {
             BootstrapServers = _options.BootstrapServers
@@ -251,8 +300,8 @@ public class KafkaMessageBus : IMessageBus, IDisposable
                 ],
                 new CreateTopicsOptions
                 {
-                    RequestTimeout = TimeSpan.FromSeconds(10),
-                    OperationTimeout = TimeSpan.FromSeconds(10)
+                    RequestTimeout = adminTimeout,
+                    OperationTimeout = adminTimeout
                 }).WaitAsync(cancellationToken).ConfigureAwait(false);
 
             _logger.LogInformation(
@@ -266,6 +315,11 @@ public class KafkaMessageBus : IMessageBus, IDisposable
             _logger.LogDebug("Kafka topic {Topic} already exists.", topic);
             await EnsureTopicPartitionCountAsync(adminClient, topic, desiredPartitions, cancellationToken)
                 .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _topicCreationTasks.TryRemove(topic, out _);
+            throw;
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
@@ -282,7 +336,8 @@ public class KafkaMessageBus : IMessageBus, IDisposable
     {
         try
         {
-            var metadata = adminClient.GetMetadata(topic, TimeSpan.FromSeconds(10));
+            var adminTimeout = TimeSpan.FromSeconds(Math.Clamp(_options.TopicAdminTimeoutSeconds, 1, 30));
+            var metadata = adminClient.GetMetadata(topic, adminTimeout);
             var topicMetadata = metadata.Topics.FirstOrDefault(t => string.Equals(t.Topic, topic, StringComparison.Ordinal));
             var currentPartitions = topicMetadata?.Partitions.Count ?? 0;
             if (currentPartitions >= desiredPartitions)
@@ -300,8 +355,8 @@ public class KafkaMessageBus : IMessageBus, IDisposable
                 ],
                 new CreatePartitionsOptions
                 {
-                    RequestTimeout = TimeSpan.FromSeconds(10),
-                    OperationTimeout = TimeSpan.FromSeconds(10)
+                    RequestTimeout = adminTimeout,
+                    OperationTimeout = adminTimeout
                 }).WaitAsync(cancellationToken).ConfigureAwait(false);
 
             _logger.LogInformation(
@@ -309,6 +364,11 @@ public class KafkaMessageBus : IMessageBus, IDisposable
                 topic,
                 currentPartitions,
                 desiredPartitions);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _topicCreationTasks.TryRemove(topic, out _);
+            throw;
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {

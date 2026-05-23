@@ -22,6 +22,8 @@ services:
       Kafka__RetryDelaySeconds: ${Kafka__RetryDelaySeconds:-5}
       Kafka__TopicPartitions: ${Kafka__TopicPartitions:-3}
       Kafka__TopicReplicationFactor: ${Kafka__TopicReplicationFactor:-1}
+      Kafka__TopicAdminTimeoutSeconds: ${Kafka__TopicAdminTimeoutSeconds:-3}
+      Kafka__TopicWarmupTimeoutSeconds: ${Kafka__TopicWarmupTimeoutSeconds:-10}
       Postgres__AutoMigrate: ${Postgres__AutoMigrate:-true}
       Postgres__AutoSchemaMaintenance: ${Postgres__AutoSchemaMaintenance:-true}
       Postgres__MigrateAndExit: "false"
@@ -121,6 +123,8 @@ services:
       Kafka__RetryDelaySeconds: ${Kafka__RetryDelaySeconds:-5}
       Kafka__TopicPartitions: ${Kafka__TopicPartitions:-3}
       Kafka__TopicReplicationFactor: ${Kafka__TopicReplicationFactor:-1}
+      Kafka__TopicAdminTimeoutSeconds: ${Kafka__TopicAdminTimeoutSeconds:-3}
+      Kafka__TopicWarmupTimeoutSeconds: ${Kafka__TopicWarmupTimeoutSeconds:-10}
       Postgres__AutoMigrate: ${Worker_Postgres__AutoMigrate:-false}
       Postgres__AutoSchemaMaintenance: ${Worker_Postgres__AutoSchemaMaintenance:-false}
       Postgres__MigrateAndExit: "false"

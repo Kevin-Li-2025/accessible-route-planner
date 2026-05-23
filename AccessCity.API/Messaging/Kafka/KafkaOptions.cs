@@ -11,6 +11,8 @@ public sealed class KafkaOptions
     public int RetryDelaySeconds { get; set; } = 5;
     public int TopicPartitions { get; set; } = 3;
     public short TopicReplicationFactor { get; set; } = 1;
+    public int TopicAdminTimeoutSeconds { get; set; } = 3;
+    public int TopicWarmupTimeoutSeconds { get; set; } = 10;
     public string RetryTopicSuffix { get; set; } = ".retry";
     public string DeadLetterTopicSuffix { get; set; } = ".dlq";
 }

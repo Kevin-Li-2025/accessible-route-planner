@@ -118,6 +118,22 @@ public sealed class ArchitectureModularityTests
     }
 
     [Fact]
+    public void Readiness_probe_uses_background_refreshed_snapshot()
+    {
+        var root = FindRepositoryRoot();
+        var dependencyInjection = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Extensions", "DependencyInjection.cs"));
+        var cachedReadiness = File.ReadAllText(Path.Combine(root, "AccessCity.API", "HealthChecks", "CachedReadinessService.cs"));
+        var warmupService = File.ReadAllText(Path.Combine(root, "AccessCity.API", "HealthChecks", "ReadinessWarmupBackgroundService.cs"));
+        var configMap = File.ReadAllText(Path.Combine(root, "deploy", "kubernetes", "configmap.yaml"));
+
+        Assert.Contains("AddHostedService<ReadinessWarmupBackgroundService>", dependencyInjection, StringComparison.Ordinal);
+        Assert.Contains("QueueBackgroundRefresh", cachedReadiness, StringComparison.Ordinal);
+        Assert.Contains("return cached.Report", cachedReadiness, StringComparison.Ordinal);
+        Assert.Contains("ReadinessBackgroundRefreshMilliseconds", warmupService, StringComparison.Ordinal);
+        Assert.Contains("HealthChecks__ReadinessBackgroundRefreshMilliseconds: \"2000\"", configMap, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Route_jobs_publish_status_to_distributed_cache_for_multi_replica_polling()
     {
         var root = FindRepositoryRoot();
@@ -137,6 +153,8 @@ public sealed class ArchitectureModularityTests
         var routingModule = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Modules", "RoutingModule.cs"));
         var routeJobService = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "RouteJobService.cs"));
         var kafkaBus = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Messaging", "Kafka", "KafkaMessageBus.cs"));
+        var kafkaWarmup = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Messaging", "Kafka", "KafkaTopicWarmupBackgroundService.cs"));
+        var dependencyInjection = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Extensions", "DependencyInjection.cs"));
         var routingController = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Controllers", "RoutingController.cs"));
 
         Assert.Contains("RouteJobBackgroundService", routingModule, StringComparison.Ordinal);
@@ -159,6 +177,19 @@ public sealed class ArchitectureModularityTests
         Assert.Contains("completed_job_hit", routingController, StringComparison.Ordinal);
         Assert.Contains("_completedJobsByDedupeKey", routeJobService, StringComparison.Ordinal);
         Assert.Contains("TryReadPersistedJobAsync", routeJobService, StringComparison.Ordinal);
+        Assert.Contains("TryRecoverPendingJobDispatchAsync", routeJobService, StringComparison.Ordinal);
+        Assert.Contains("route_job:redispatch", routeJobService, StringComparison.Ordinal);
+        Assert.Contains("PublishRouteJobRequestAsync", routeJobService, StringComparison.Ordinal);
+        Assert.Contains("directly re-published", routeJobService, StringComparison.Ordinal);
+        Assert.Contains("IKafkaTopicInitializer", kafkaBus, StringComparison.Ordinal);
+        Assert.Contains("EnsureInfrastructureAsync", kafkaBus, StringComparison.Ordinal);
+        Assert.Contains("EnsureTopicBeforePublishAsync", kafkaBus, StringComparison.Ordinal);
+        Assert.Contains("publishing optimistically", kafkaBus, StringComparison.Ordinal);
+        Assert.Contains("TopicAdminTimeoutSeconds", kafkaBus, StringComparison.Ordinal);
+        Assert.Contains("KafkaTopicWarmupBackgroundService", kafkaWarmup, StringComparison.Ordinal);
+        Assert.Contains("WaitAsync(timeoutCts.Token)", kafkaWarmup, StringComparison.Ordinal);
+        Assert.Contains("AddHostedService<KafkaTopicWarmupBackgroundService>", dependencyInjection, StringComparison.Ordinal);
+        Assert.Contains("Kafka__TopicWarmupTimeoutSeconds: \"10\"", configMap, StringComparison.Ordinal);
     }
 
     [Fact]
