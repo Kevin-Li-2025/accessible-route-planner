@@ -273,7 +273,7 @@ public class RoutingController : ControllerBase
     }
 
     /// <summary>
-    /// Returns a predictive risk score using the AI/ML logistic model with time-of-day and weather factors.
+    /// Returns a deterministic predictive risk score with time-of-day and weather factors.
     /// </summary>
     [HttpGet("ai-risk-score")]
     [ProducesResponseType(typeof(PredictiveRiskResult), StatusCodes.Status200OK)]
@@ -289,7 +289,7 @@ public class RoutingController : ControllerBase
 
     /// <summary>
     /// Alternative blend: full risk breakdown plus time-of-day and live weather weights.
-    /// Prefer <c>ai-risk-score</c> for the logistic multi-factor model used in routing.
+    /// Prefer <c>ai-risk-score</c> for the deterministic multi-factor model used in routing.
     /// </summary>
     [HttpGet("hazard-blend-risk")]
     [ProducesResponseType(typeof(PredictiveRiskResult), StatusCodes.Status200OK)]

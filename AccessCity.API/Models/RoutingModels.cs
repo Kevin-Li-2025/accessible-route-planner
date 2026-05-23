@@ -122,7 +122,7 @@ namespace AccessCity.API.Models
         public List<NearbyHazard> NearbyHazards { get; set; } = new();
     }
 
-    /// <summary>AI-driven predictive risk breakdown.</summary>
+    /// <summary>Deterministic predictive risk breakdown.</summary>
     public class PredictiveRiskResult
     {
         public double OverallRisk { get; set; }

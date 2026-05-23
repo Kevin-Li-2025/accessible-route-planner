@@ -173,6 +173,19 @@ public sealed class ArchitectureModularityTests
     }
 
     [Fact]
+    public void Ai_assist_does_not_enter_route_decision_path()
+    {
+        var root = FindRepositoryRoot();
+        var routing = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "RoutingService.cs"));
+        var aiAssist = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "AiAssistService.cs"));
+
+        Assert.DoesNotContain("IAiAssistService", routing, StringComparison.Ordinal);
+        Assert.DoesNotContain("AiAssistService", routing, StringComparison.Ordinal);
+        Assert.Contains("ForRouteDecision = false", aiAssist, StringComparison.Ordinal);
+        Assert.Contains("CanAutoApply = false", aiAssist, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Kafka_processed_message_identity_includes_topic()
     {
         var root = FindRepositoryRoot();

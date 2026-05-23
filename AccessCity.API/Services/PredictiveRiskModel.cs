@@ -21,7 +21,7 @@ namespace AccessCity.API.Services
     }
 
     /// <summary>
-    /// AI-powered Predictive Risk Model for route safety scoring.
+    /// Deterministic multi-factor risk model for route safety scoring.
     /// 
     /// Combines multiple real-time signals into a unified risk prediction:
     ///   • Time-of-day risk (circadian safety patterns)
@@ -30,9 +30,9 @@ namespace AccessCity.API.Services
     ///   • Reported accessibility hazards (proximity + density)
     ///   • Infrastructure quality heuristics
     /// 
-    /// Each factor is weighted using a learned logistic regression model
-    /// trained on urban pedestrian safety literature. The weights are
-    /// periodically tunable from collected user feedback.
+    /// Each factor is weighted with fixed, reviewable coefficients derived
+    /// from urban pedestrian safety literature and production calibration.
+    /// LLM outputs must not feed this model or change edge costs at runtime.
     /// </summary>
     public class PredictiveRiskModel : IPredictiveRiskModel
     {
@@ -41,7 +41,7 @@ namespace AccessCity.API.Services
         private readonly IMemoryCache? _cache;
         private readonly bool _realtimeExternalSignalsEnabled;
 
-        // ──── Learned model weights (logistic regression coefficients) ────
+        // ──── Fixed model weights (logistic regression coefficients) ────
         // Derived from urban pedestrian safety research:
         //   Ewing & Dumbaugh 2009, Loukaitou-Sideris 2006, WHO pedestrian safety reports
         private const double W_Hazard = 0.35;
@@ -65,7 +65,7 @@ namespace AccessCity.API.Services
         }
 
         /// <summary>
-        /// Compute a multi-factor AI risk score for a route segment.
+        /// Compute a deterministic multi-factor risk score for a route segment.
         /// Returns a score in [0, 1] where 1 = maximum risk.
         /// </summary>
         public async Task<PredictiveRiskResult> EvaluateSegmentRiskAsync(

@@ -151,7 +151,7 @@ public static class DependencyInjection
     {
         services
             .AddExternalApisModule(configuration)
-            .AddHazardsModule()
+            .AddHazardsModule(configuration)
             .AddRiskModule()
             .AddRoutingModule(configuration)
             .AddMapsModule(configuration)
