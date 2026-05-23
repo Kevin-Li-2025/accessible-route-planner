@@ -16,6 +16,8 @@ spec:
               value: "true"
             - name: Postgres__AutoSchemaMaintenance
               value: "true"
+            - name: Postgres__UseDirectDatabaseUrl
+              value: "true"
             - name: Workers__OsmImport__Enabled
               value: "false"
             - name: Workers__TileWarming__Enabled

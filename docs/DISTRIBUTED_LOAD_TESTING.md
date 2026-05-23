@@ -7,6 +7,7 @@ This repo includes a Kubernetes-native k6 job for testing the real multi-replica
 - Kafka-backed messaging
 - Redis-backed distributed cache
 - Postgres/PostGIS connection pools
+- PgBouncer/CloudNativePG pooler when `DATABASE_URL` points at the pooler service
 
 The load test is intentionally not part of the default kustomization, so normal deploys do not create traffic.
 
@@ -43,6 +44,8 @@ If `safe-path` returns `503` or `504` during high bursts, that is capacity prote
 ## Tuning Knobs
 
 - `Postgres__MaxPoolSize`: Npgsql physical connection pool per pod.
+  Keep this low when the app points at PgBouncer; total client connections should scale with API
+  replicas without turning into hundreds of direct Postgres backends.
 - `Postgres__DbContextPoolSize`: EF Core context pool per pod.
 - `Routing__MaxConcurrentComputations`: per-pod CPU gate for A*/route scoring work.
 - `Routing__MaxRouteGraphEdges`: cap on route graph fanout before falling back.

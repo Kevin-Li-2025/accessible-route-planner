@@ -6,6 +6,8 @@ public sealed class PostgresOptions
 
     public string? ConnectionString { get; set; }
     public string? DatabaseUrl { get; set; }
+    public string? DirectDatabaseUrl { get; set; }
+    public bool UseDirectDatabaseUrl { get; set; }
     public bool AutoMigrate { get; set; } = true;
     public bool AutoSchemaMaintenance { get; set; } = true;
     public int CommandTimeoutSeconds { get; set; } = 30;

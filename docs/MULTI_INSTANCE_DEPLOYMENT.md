@@ -52,12 +52,14 @@ Production manifests live in `deploy/kubernetes`:
 - `hpa.yaml`: API CPU/memory autoscaling
 - `keda-scaledobject.yaml`: worker autoscaling from Kafka lag
 - `external-secret.example.yaml`: template for External Secrets Operator
+- `cnpg-pooler.example.yaml`: optional CloudNativePG PgBouncer pooler for the app runtime path
 
 Create the real `accesscity-api-secrets` Secret from your cloud secret manager before applying the
 kustomization. The checked-in `secret.example.yaml` is a template only.
 
 ```bash
 kubectl apply -f deploy/kubernetes/external-secret.example.yaml
+kubectl apply -f deploy/kubernetes/cnpg-pooler.example.yaml
 kubectl apply -k deploy/kubernetes
 kubectl -n accesscity create job --from=job/accesscity-db-migrate accesscity-db-migrate-manual
 ```
@@ -65,6 +67,11 @@ kubectl -n accesscity create job --from=job/accesscity-db-migrate accesscity-db-
 API and worker pods set `Postgres__AutoMigrate=false` and
 `Postgres__AutoSchemaMaintenance=false`; schema work belongs to the migration job to avoid multiple
 replicas racing on DDL.
+Set `DATABASE_URL` to the PgBouncer/pooler service for API and worker traffic, and set
+`DIRECT_DATABASE_URL` to the primary Postgres service. The migration job sets
+`Postgres__UseDirectDatabaseUrl=true`, so DDL and schema normalization bypass transaction pooling
+while regular traffic stays behind PgBouncer. Keep per-pod `Postgres__MaxPoolSize` small when a
+pooler is present; the checked-in manifests use 20 for API pods and 10 for workers.
 `Postgres__UseStartupSessionParameters` defaults to `false` because providers such as Neon reject
 `statement_timeout` startup options on pooled connections; use database-level settings there.
 

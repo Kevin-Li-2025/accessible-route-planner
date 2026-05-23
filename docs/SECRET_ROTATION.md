@@ -41,6 +41,7 @@ configuration keys.
 Minimum production secrets:
 
 - `DATABASE_URL`
+- `DIRECT_DATABASE_URL`
 - `ConnectionStrings__Redis`
 - `Jwt__Key`
 - `Jwt__PreviousKeys`
@@ -53,6 +54,10 @@ Rotation sequence for platform secrets:
 3. Restart pods or let the secret driver refresh mounted files.
 4. Check `/health/ready`, auth login, and token refresh.
 5. Remove retired keys after the expiration window.
+
+For Kubernetes, `DATABASE_URL` should normally point at the runtime pooler service and
+`DIRECT_DATABASE_URL` should point at the primary Postgres service for the one-shot migration job.
+Rotate both together when database credentials change.
 
 ## Refresh Tokens
 

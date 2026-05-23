@@ -1,4 +1,45 @@
-# k6 Load Test Results — AccessCity API (Final v1.2)
+# k6 Load Test Results — AccessCity API
+
+## Distributed Kubernetes + PgBouncer Run
+
+**Date**: 2026-05-23
+**Cluster**: `kind-accesscity-multi` / `accesscity-ha`
+**Topology**: 3 Kubernetes nodes, 6 API pods, 2 worker pods, 3 Postgres instances, 3 CNPG PgBouncer pooler pods, 3 Kafka brokers, Redis cache
+**Database path**: API and worker pods use `accesscity-postgres-rw-pooler`; migration jobs keep a direct primary URL.
+
+### Load Profile
+
+| Phase | Duration | Virtual Users |
+|-------|----------|---------------|
+| Ramp-up | 30s | 0 -> 20 |
+| Sustained | 2m | 20 |
+| Ramp-up | 30s | 20 -> 50 |
+| Sustained | 2m | 50 |
+| Cool-down | 30s | 50 -> 0 |
+
+### Summary
+
+| Metric | Value |
+|--------|-------|
+| Total requests | 145,334 |
+| Throughput | 440.36 req/s |
+| Check success | 100.00% |
+| HTTP failures | 0.00% |
+| Overall latency p95 | 51.59 ms |
+| Risk-score p95 | 8.25 ms |
+| Safe-path p95 | 167.56 ms |
+| Iterations | 44,718 |
+| Postgres backend connections during run | 35-37 |
+
+### Result
+
+The distributed path passed with zero failed checks and zero HTTP failures while keeping direct
+Postgres backend connections bounded behind PgBouncer. This verifies the current multi-replica API,
+worker, Kafka, Redis, PostGIS, and pooler path under the checked-in k6 scenario.
+
+---
+
+# Historical Local k6 Load Test Results — AccessCity API (Final v1.2)
 
 **Date**: 2026-03-23
 **Base URL**: `http://localhost:8080`

@@ -11,6 +11,15 @@ public static class PostgresConnectionStringResolver
 
     public static string Resolve(IConfiguration configuration, PostgresOptions options)
     {
+        var directDatabaseUrl = configuration["DIRECT_DATABASE_URL"]
+            ?? configuration[$"{PostgresOptions.SectionName}:DirectDatabaseUrl"]
+            ?? Environment.GetEnvironmentVariable("DIRECT_DATABASE_URL");
+
+        if (options.UseDirectDatabaseUrl && !string.IsNullOrWhiteSpace(directDatabaseUrl))
+        {
+            return ApplyRuntimeOptions(FromDatabaseUrl(directDatabaseUrl), options);
+        }
+
         var databaseUrl = configuration["DATABASE_URL"]
             ?? configuration[$"{PostgresOptions.SectionName}:DatabaseUrl"]
             ?? Environment.GetEnvironmentVariable("DATABASE_URL");
