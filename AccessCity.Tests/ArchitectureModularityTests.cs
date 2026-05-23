@@ -137,6 +137,7 @@ public sealed class ArchitectureModularityTests
         var routingModule = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Modules", "RoutingModule.cs"));
         var routeJobService = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "RouteJobService.cs"));
         var kafkaBus = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Messaging", "Kafka", "KafkaMessageBus.cs"));
+        var routingController = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Controllers", "RoutingController.cs"));
 
         Assert.Contains("RouteJobBackgroundService", routingModule, StringComparison.Ordinal);
         Assert.Contains("RouteJobRequestedEvent", routeJobService, StringComparison.Ordinal);
@@ -148,6 +149,9 @@ public sealed class ArchitectureModularityTests
         Assert.Contains("minReplicaCount: 2", scaledObject, StringComparison.Ordinal);
         Assert.Contains("maxReplicaCount: 12", scaledObject, StringComparison.Ordinal);
         Assert.Contains("CreatePartitionsAsync", kafkaBus, StringComparison.Ordinal);
+        Assert.Contains("SafePathOptionsResponse? Options", routeJobService, StringComparison.Ordinal);
+        Assert.Contains("SubmitOptionsAsync", routeJobService, StringComparison.Ordinal);
+        Assert.Contains("SubmitOptionsAsync", routingController, StringComparison.Ordinal);
     }
 
     [Fact]

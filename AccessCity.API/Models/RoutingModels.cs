@@ -50,6 +50,13 @@ namespace AccessCity.API.Models
         public List<RoutedOptionVariant> Variants { get; set; } = new();
     }
 
+    /// <summary>Async routing job kind. Determines the response envelope workers compute and cache.</summary>
+    public enum RouteJobKind
+    {
+        SafePath = 0,
+        SafePathOptions = 1
+    }
+
     /// <summary>One labelled alternative route for client choice (Pareto-style trade-offs).</summary>
     public class RoutedOptionVariant
     {

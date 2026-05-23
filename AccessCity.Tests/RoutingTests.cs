@@ -459,4 +459,82 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
         Assert.NotNull(final.Route);
         Assert.True(final.Route!.Distance > 0);
     }
+
+    [Fact]
+    public async Task SafePathOptionsAsync_Dispatches_To_Route_Worker_And_Caches_Options()
+    {
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Development");
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["DATABASE_URL"] = string.Empty,
+                    ["Postgres:ConnectionString"] = _factory.ConnectionString,
+                    ["Postgres:AutoMigrate"] = "true",
+                    ["OsmImport:ImportOnStartup"] = "false",
+                    ["Messaging:UseKafka"] = "false",
+                    ["Routing:AsyncFirstForCacheMiss"] = "true",
+                    ["Routing:DispatchJobsToWorker"] = "true",
+                    ["Workers:OsmImport:Enabled"] = "false",
+                    ["Workers:Routing:Enabled"] = "true",
+                    ["Workers:TileWarming:Enabled"] = "false"
+                });
+            });
+            builder.ConfigureServices(services =>
+            {
+                services.AddHostedService<AccessCity.API.Services.Background.RouteJobBackgroundService>();
+            });
+        });
+
+        var client = factory.CreateClient();
+        var request = new
+        {
+            Start = new { X = -1.8904, Y = 52.4862 },
+            End = new { X = -1.8894, Y = 52.4862 },
+            Preferences = new List<string>(),
+            SafetyWeight = 0.5,
+            Profile = "standard"
+        };
+
+        var accepted = await client.PostAsJsonAsync("/api/v1/routing/safe-path/options", request, JsonOptions);
+        Assert.Equal(HttpStatusCode.Accepted, accepted.StatusCode);
+
+        using var payload = JsonDocument.Parse(await accepted.Content.ReadAsStringAsync());
+        var jobId = payload.RootElement.GetProperty("jobId").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(jobId));
+        Assert.Equal(nameof(RouteJobKind.SafePathOptions), payload.RootElement.GetProperty("kind").GetString());
+
+        RouteJobResult? final = null;
+        for (var attempt = 0; attempt < 30; attempt++)
+        {
+            var poll = await client.GetAsync($"/api/v1/routing/jobs/{jobId}");
+            poll.EnsureSuccessStatusCode();
+            final = await poll.Content.ReadFromJsonAsync<RouteJobResult>(JsonOptions);
+
+            if (final?.Status is RouteJobStatus.Completed or RouteJobStatus.Failed)
+            {
+                break;
+            }
+
+            await Task.Delay(250);
+        }
+
+        Assert.NotNull(final);
+        Assert.Equal(RouteJobStatus.Completed, final!.Status);
+        Assert.Equal(RouteJobKind.SafePathOptions, final.Kind);
+        Assert.NotNull(final.Options);
+        Assert.NotNull(final.Route);
+        Assert.True(final.Options!.Recommended.Distance > 0);
+        Assert.Equal(final.Options.Recommended.Distance, final.Route!.Distance);
+
+        var cached = await client.PostAsJsonAsync("/api/v1/routing/safe-path/options", request, JsonOptions);
+        cached.EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.OK, cached.StatusCode);
+
+        var cachedEnvelope = await cached.Content.ReadFromJsonAsync<SafePathOptionsResponse>(JsonOptions);
+        Assert.NotNull(cachedEnvelope);
+        Assert.True(cachedEnvelope!.Recommended.Distance > 0);
+    }
 }

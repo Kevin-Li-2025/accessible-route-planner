@@ -15,6 +15,7 @@ public static class RoutingModule
 
         services.AddScoped<IRouteGraphRepository, RouteGraphRepository>();
         services.AddScoped<IRouteCacheService, RouteCacheService>();
+        services.AddScoped<IRouteOptionsCacheService, RouteOptionsCacheService>();
         services.AddScoped<IHazardQueryService, HazardQueryService>();
 
         services.AddScoped<RoutingService>();

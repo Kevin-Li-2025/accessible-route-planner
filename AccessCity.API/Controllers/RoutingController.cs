@@ -29,6 +29,7 @@ public class RoutingController : ControllerBase
     private readonly IRouteCoalescingService _coalescing;
     private readonly IRouteComputationLimiter _routeLimiter;
     private readonly IRouteCacheService _routeCache;
+    private readonly IRouteOptionsCacheService _routeOptionsCache;
     private readonly IRiskScoreCacheService _riskScoreCache;
     private readonly AccessCityMetrics _metrics;
     private readonly RoutingOptions _routingOptions;
@@ -42,6 +43,7 @@ public class RoutingController : ControllerBase
         IRouteCoalescingService coalescing,
         IRouteComputationLimiter routeLimiter,
         IRouteCacheService routeCache,
+        IRouteOptionsCacheService routeOptionsCache,
         IRiskScoreCacheService riskScoreCache,
         AccessCityMetrics metrics,
         IOptions<RoutingOptions> routingOptions)
@@ -54,6 +56,7 @@ public class RoutingController : ControllerBase
         _coalescing = coalescing;
         _routeLimiter = routeLimiter;
         _routeCache = routeCache;
+        _routeOptionsCache = routeOptionsCache;
         _riskScoreCache = riskScoreCache;
         _metrics = metrics;
         _routingOptions = routingOptions.Value;
@@ -192,32 +195,29 @@ public class RoutingController : ControllerBase
 
         if (_routingOptions.AsyncFirstForCacheMiss)
         {
-            var cacheKey = _routeCache.BuildKey(
+            var cacheKey = _routeOptionsCache.BuildKey(
                 request.Start.Y,
                 request.Start.X,
                 request.End.Y,
                 request.End.X,
                 request.Profile ?? "standard",
                 request.SafetyWeight);
-            var cached = await _routeCache.TryGetAsync(cacheKey);
+            var cached = await _routeOptionsCache.TryGetAsync(cacheKey);
             if (cached is not null)
             {
-                RecordSafePathOptions(stopwatch, "cache_hit_primary");
-                return Ok(new SafePathOptionsResponse
-                {
-                    Recommended = cached,
-                    Variants = new List<RoutedOptionVariant>()
-                });
+                RecordSafePathOptions(stopwatch, "cache_hit");
+                return Ok(cached);
             }
 
-            var jobId = await _jobs.SubmitAsync(request, cancellationToken: cancellationToken);
+            var jobId = await _jobs.SubmitOptionsAsync(request, cancellationToken: cancellationToken);
             RecordSafePathOptions(stopwatch, "async_accepted");
             return Accepted(new
             {
                 jobId,
+                kind = RouteJobKind.SafePathOptions.ToString(),
                 status = "pending",
                 pollUrl = $"/api/v1/routing/jobs/{jobId}",
-                detail = "Primary route queued; route options are returned after the primary route is cached."
+                detail = "Route options queued; poll the job endpoint for recommended and variant routes."
             });
         }
 
@@ -233,6 +233,7 @@ public class RoutingController : ControllerBase
 
         var hazards = await _hazardQueries.LoadHazardsForRouteAsync(request, cancellationToken);
         var result = await _routing.FindSafePathWithVariantsAsync(request, hazards, cancellationToken);
+        await CacheOptionsAsync(request, result);
         RecordSafePathOptions(stopwatch, "success");
         return Ok(result);
     }
@@ -305,4 +306,23 @@ public class RoutingController : ControllerBase
             "/api/v{version}/routing/safe-path/options",
             outcome,
             stopwatch.Elapsed.TotalMilliseconds);
+
+    private async Task CacheOptionsAsync(RouteRequest request, SafePathOptionsResponse response)
+    {
+        try
+        {
+            var cacheKey = _routeOptionsCache.BuildKey(
+                request.Start.Y,
+                request.Start.X,
+                request.End.Y,
+                request.End.X,
+                request.Profile ?? "standard",
+                request.SafetyWeight);
+            await _routeOptionsCache.SetAsync(cacheKey, response);
+        }
+        catch
+        {
+            // Options cache failures must not turn a successful route computation into a 5xx response.
+        }
+    }
 }

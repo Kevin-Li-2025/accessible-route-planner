@@ -24,6 +24,9 @@ public interface IRouteJobService
     /// <summary>Submits a route computation and returns a job ID immediately.</summary>
     Task<string> SubmitAsync(RouteRequest request, List<HazardReport>? hazards = null, CancellationToken cancellationToken = default);
 
+    /// <summary>Submits route-options computation and returns a job ID immediately.</summary>
+    Task<string> SubmitOptionsAsync(RouteRequest request, List<HazardReport>? hazards = null, CancellationToken cancellationToken = default);
+
     /// <summary>Processes a queued route job. Called by the route worker consumer.</summary>
     Task ProcessQueuedJobAsync(RouteJobRequestedEvent @event, CancellationToken cancellationToken = default);
 
@@ -35,8 +38,10 @@ public interface IRouteJobService
 public sealed class RouteJobResult
 {
     public required string JobId { get; init; }
+    public RouteJobKind Kind { get; set; }
     public RouteJobStatus Status { get; set; }
     public RouteResponse? Route { get; set; }
+    public SafePathOptionsResponse? Options { get; set; }
     public string? Error { get; set; }
     public DateTime SubmittedAt { get; init; }
     public DateTime? CompletedAt { get; set; }
@@ -86,10 +91,28 @@ public sealed class RouteJobService : IRouteJobService
         List<HazardReport>? hazards = null,
         CancellationToken cancellationToken = default)
     {
+        return await SubmitCoreAsync(RouteJobKind.SafePath, request, hazards, cancellationToken);
+    }
+
+    public async Task<string> SubmitOptionsAsync(
+        RouteRequest request,
+        List<HazardReport>? hazards = null,
+        CancellationToken cancellationToken = default)
+    {
+        return await SubmitCoreAsync(RouteJobKind.SafePathOptions, request, hazards, cancellationToken);
+    }
+
+    private async Task<string> SubmitCoreAsync(
+        RouteJobKind kind,
+        RouteRequest request,
+        List<HazardReport>? hazards,
+        CancellationToken cancellationToken)
+    {
         var jobId = Guid.NewGuid().ToString("N")[..12];
         var result = new RouteJobResult
         {
             JobId = jobId,
+            Kind = kind,
             Status = RouteJobStatus.Pending,
             SubmittedAt = DateTime.UtcNow
         };
@@ -100,14 +123,14 @@ public sealed class RouteJobService : IRouteJobService
         if (_dispatchJobsToWorker)
         {
             await _messageBus.PublishAsync(
-                new RouteJobRequestedEvent(jobId, request, result.SubmittedAt),
+                new RouteJobRequestedEvent(jobId, request, result.SubmittedAt, kind),
                 cancellationToken);
             return jobId;
         }
 
         // Local-dev fallback: compute in-process when Kafka worker dispatch is disabled.
         _ = Task.Run(
-            () => ComputeAsync(jobId, request, hazards, result.SubmittedAt, _lifetime.ApplicationStopping),
+            () => ComputeAsync(jobId, kind, request, hazards, result.SubmittedAt, _lifetime.ApplicationStopping),
             CancellationToken.None);
 
         return jobId;
@@ -124,6 +147,7 @@ public sealed class RouteJobService : IRouteJobService
 
         await ComputeAsync(
             @event.JobId,
+            @event.Kind,
             @event.Request,
             hazards: null,
             @event.SubmittedAtUtc,
@@ -156,43 +180,34 @@ public sealed class RouteJobService : IRouteJobService
 
     private async Task ComputeAsync(
         string jobId,
+        RouteJobKind kind,
         RouteRequest request,
         List<HazardReport>? hazards,
         DateTime submittedAt,
         CancellationToken stoppingToken)
     {
-        var result = await LoadOrCreateJobResultAsync(jobId, submittedAt, CancellationToken.None);
+        var result = await LoadOrCreateJobResultAsync(jobId, kind, submittedAt, CancellationToken.None);
+        result.Kind = kind;
         result.Status = RouteJobStatus.Processing;
         await PersistAsync(result, CancellationToken.None);
 
         try
         {
-            var waitTimeout = TimeSpan.FromSeconds(Math.Max(1, _options.JobComputationQueueTimeoutSeconds));
-
-            // Try the coalescing layer first; identical requests share a single computation and one limiter lease.
-            var route = await _coalescing.GetOrComputeAsync(
-                request,
-                async () =>
-                {
-                    await using var lease = await _routeLimiter.TryAcquireAsync(waitTimeout, stoppingToken)
-                        ?? throw new RouteCapacityExceededException();
-
-                    // Create a scoped DI container to resolve scoped routing dependencies.
-                    await using var scope = _scopeFactory.CreateAsyncScope();
-                    var scopedHazards = hazards;
-                    if (scopedHazards is null)
-                    {
-                        var hazardQueries = scope.ServiceProvider.GetRequiredService<IHazardQueryService>();
-                        scopedHazards = await hazardQueries.LoadHazardsForRouteAsync(request, stoppingToken);
-                    }
-
-                    var routing = scope.ServiceProvider.GetRequiredService<IRoutingService>();
-                    return await routing.FindSafePathAsync(request, scopedHazards, stoppingToken);
-                });
-
-            result.Route = route;
-            result.Status = route is not null ? RouteJobStatus.Completed : RouteJobStatus.Failed;
-            result.Error = route is null ? "No route found." : null;
+            if (kind == RouteJobKind.SafePathOptions)
+            {
+                var options = await ComputeOptionsAsync(request, hazards, stoppingToken);
+                result.Options = options;
+                result.Route = options?.Recommended;
+                result.Status = options?.Recommended is not null ? RouteJobStatus.Completed : RouteJobStatus.Failed;
+                result.Error = options?.Recommended is null ? "No route options found." : null;
+            }
+            else
+            {
+                var route = await ComputeRouteAsync(request, hazards, stoppingToken);
+                result.Route = route;
+                result.Status = route is not null ? RouteJobStatus.Completed : RouteJobStatus.Failed;
+                result.Error = route is null ? "No route found." : null;
+            }
         }
         catch (RouteCapacityExceededException ex)
         {
@@ -219,8 +234,85 @@ public sealed class RouteJobService : IRouteJobService
         _ = CleanupAfterDelay(jobId, JobTtl, stoppingToken);
     }
 
+    private async Task<RouteResponse?> ComputeRouteAsync(
+        RouteRequest request,
+        List<HazardReport>? hazards,
+        CancellationToken stoppingToken)
+    {
+        var waitTimeout = TimeSpan.FromSeconds(Math.Max(1, _options.JobComputationQueueTimeoutSeconds));
+
+        // Try the coalescing layer first; identical requests share a single computation and one limiter lease.
+        return await _coalescing.GetOrComputeAsync(
+            request,
+            async () =>
+            {
+                await using var lease = await _routeLimiter.TryAcquireAsync(waitTimeout, stoppingToken)
+                    ?? throw new RouteCapacityExceededException();
+
+                await using var scope = _scopeFactory.CreateAsyncScope();
+                var scopedHazards = await LoadHazardsAsync(scope.ServiceProvider, request, hazards, stoppingToken);
+                var routing = scope.ServiceProvider.GetRequiredService<IRoutingService>();
+                return await routing.FindSafePathAsync(request, scopedHazards, stoppingToken);
+            });
+    }
+
+    private async Task<SafePathOptionsResponse?> ComputeOptionsAsync(
+        RouteRequest request,
+        List<HazardReport>? hazards,
+        CancellationToken stoppingToken)
+    {
+        var waitTimeout = TimeSpan.FromSeconds(Math.Max(1, _options.JobComputationQueueTimeoutSeconds));
+        await using var lease = await _routeLimiter.TryAcquireAsync(waitTimeout, stoppingToken)
+            ?? throw new RouteCapacityExceededException();
+
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var scopedHazards = await LoadHazardsAsync(scope.ServiceProvider, request, hazards, stoppingToken);
+        var routing = scope.ServiceProvider.GetRequiredService<IRoutingService>();
+        var options = await routing.FindSafePathWithVariantsAsync(request, scopedHazards, stoppingToken);
+
+        await CacheOptionsResultAsync(scope.ServiceProvider, request, options);
+        return options;
+    }
+
+    private static async Task<List<HazardReport>> LoadHazardsAsync(
+        IServiceProvider serviceProvider,
+        RouteRequest request,
+        List<HazardReport>? hazards,
+        CancellationToken cancellationToken)
+    {
+        if (hazards is not null)
+        {
+            return hazards;
+        }
+
+        var hazardQueries = serviceProvider.GetRequiredService<IHazardQueryService>();
+        return await hazardQueries.LoadHazardsForRouteAsync(request, cancellationToken);
+    }
+
+    private async Task CacheOptionsResultAsync(
+        IServiceProvider serviceProvider,
+        RouteRequest request,
+        SafePathOptionsResponse options)
+    {
+        try
+        {
+            var routeCache = serviceProvider.GetRequiredService<IRouteCacheService>();
+            var routeCacheKey = BuildRouteCacheKey(routeCache, request);
+            await routeCache.SetAsync(routeCacheKey, options.Recommended);
+
+            var optionsCache = serviceProvider.GetRequiredService<IRouteOptionsCacheService>();
+            var optionsCacheKey = BuildOptionsCacheKey(optionsCache, request);
+            await optionsCache.SetAsync(optionsCacheKey, options);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Route options result could not be written to cache.");
+        }
+    }
+
     private async Task<RouteJobResult> LoadOrCreateJobResultAsync(
         string jobId,
+        RouteJobKind kind,
         DateTime submittedAt,
         CancellationToken cancellationToken)
     {
@@ -239,6 +331,7 @@ public sealed class RouteJobService : IRouteJobService
         var created = new RouteJobResult
         {
             JobId = jobId,
+            Kind = kind,
             Status = RouteJobStatus.Pending,
             SubmittedAt = submittedAt
         };
@@ -286,6 +379,24 @@ public sealed class RouteJobService : IRouteJobService
     }
 
     private static string JobCacheKey(string jobId) => $"route_job:{jobId}";
+
+    private static string BuildRouteCacheKey(IRouteCacheService routeCache, RouteRequest request) =>
+        routeCache.BuildKey(
+            request.Start.Y,
+            request.Start.X,
+            request.End.Y,
+            request.End.X,
+            request.Profile ?? "standard",
+            request.SafetyWeight);
+
+    private static string BuildOptionsCacheKey(IRouteOptionsCacheService optionsCache, RouteRequest request) =>
+        optionsCache.BuildKey(
+            request.Start.Y,
+            request.Start.X,
+            request.End.Y,
+            request.End.X,
+            request.Profile ?? "standard",
+            request.SafetyWeight);
 
     private static JsonSerializerOptions CreateJobJsonOptions()
     {
