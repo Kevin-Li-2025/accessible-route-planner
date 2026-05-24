@@ -63,6 +63,9 @@ docker compose run --rm --no-deps \
   -e Routing__RouteGraphFileArtifactStoreEnabled="${Routing__RouteGraphFileArtifactStoreEnabled:-true}" \
   -e Routing__RouteGraphFileArtifactDirectory="${Routing__RouteGraphFileArtifactDirectory:-/app/route-graph-artifacts}" \
   -e Routing__RouteGraphFileArtifactWriteThroughEnabled="${Routing__RouteGraphFileArtifactWriteThroughEnabled:-true}" \
+  -e Routing__RouteGraphFileArtifactManifestEnabled="${Routing__RouteGraphFileArtifactManifestEnabled:-true}" \
+  -e Routing__RouteGraphFileArtifactManifestFileName="${Routing__RouteGraphFileArtifactManifestFileName:-manifest.json}" \
+  -e Routing__RouteGraphMaxFileArtifactShardLoadCount="${Routing__RouteGraphMaxFileArtifactShardLoadCount:-64}" \
   -e Routing__RouteGraphOfflineShardArtifactBuildEnabled="${Routing__RouteGraphOfflineShardArtifactBuildEnabled:-true}" \
   -e Routing__RouteGraphOfflineShardArtifactBuildLimit="${Routing__RouteGraphOfflineShardArtifactBuildLimit:-0}" \
   -e Routing__RouteGraphAltPreprocessingEnabled=true \

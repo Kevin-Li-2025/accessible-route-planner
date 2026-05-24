@@ -70,6 +70,55 @@ public sealed class RouteGraphArtifactStoreTests
     }
 
     [Fact]
+    public async Task File_artifact_store_round_trips_manifest()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"accesscity-artifacts-{Guid.NewGuid():N}");
+        var store = new RouteGraphArtifactStore(
+            Options.Create(new RoutingOptions
+            {
+                RouteGraphPackedArtifactsEnabled = true,
+                RouteGraphFileArtifactStoreEnabled = true,
+                RouteGraphFileArtifactDirectory = directory,
+                RouteGraphFileArtifactManifestEnabled = true
+            }),
+            NullLogger<RouteGraphArtifactStore>.Instance);
+
+        var manifest = new RouteGraphArtifactManifest(
+            RouteGraphArtifactCodec.SchemaVersion,
+            RouteEdgeCostModel.Version,
+            RouteEdgeCostModel.EdgeWeightVersion,
+            RouteGraphPreprocessor.AltAlgorithmVersion,
+            0.01,
+            "fixture.osm",
+            DateTime.UtcNow,
+            new[]
+            {
+                new RouteGraphArtifactManifestShard(
+                    "route-graph:test",
+                    -1.90,
+                    52.48,
+                    -1.89,
+                    52.49,
+                    2,
+                    1,
+                    128,
+                    DateTime.UtcNow,
+                    "unit-test",
+                    "route-graph-test.acrg")
+            });
+
+        var written = await store.WriteManifestAsync(manifest);
+        Assert.NotNull(written);
+        var bytes = await File.ReadAllBytesAsync(written!.ArtifactPath);
+        Assert.False(bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF);
+
+        var restored = await store.TryReadManifestAsync();
+        Assert.NotNull(restored);
+        Assert.Single(restored!.Shards);
+        Assert.Equal("route-graph:test", restored.Shards[0].CacheKey);
+    }
+
+    [Fact]
     public async Task File_artifact_store_rejects_metadata_key_mismatch()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"accesscity-artifacts-{Guid.NewGuid():N}");

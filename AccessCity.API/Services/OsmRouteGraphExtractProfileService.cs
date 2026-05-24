@@ -45,7 +45,7 @@ public sealed class OsmRouteGraphExtractProfileService : IOsmRouteGraphExtractPr
         var hotReads = Math.Clamp(request.HotReadsPerRoute, 0, 5);
         var results = new List<RouteGraphProfileRouteResult>(routes.Count);
         var shardReferences = new List<string>();
-        var persistedShardArtifacts = await PersistOfflineShardArtifactsAsync(build.ShardIndex, cancellationToken);
+        var persistedShardArtifacts = await PersistOfflineShardArtifactsAsync(filePath, build.ShardIndex, cancellationToken);
 
         foreach (var route in routes)
         {
@@ -189,6 +189,7 @@ public sealed class OsmRouteGraphExtractProfileService : IOsmRouteGraphExtractPr
     }
 
     private async Task<OfflineShardArtifactBuildResult> PersistOfflineShardArtifactsAsync(
+        string filePath,
         OfflineShardIndex shardIndex,
         CancellationToken cancellationToken)
     {
@@ -203,6 +204,7 @@ public sealed class OsmRouteGraphExtractProfileService : IOsmRouteGraphExtractPr
         var stopwatch = Stopwatch.StartNew();
         var count = 0;
         var bytes = 0L;
+        var manifestShards = new List<RouteGraphArtifactManifestShard>();
 
         foreach (var shardKey in shardIndex.Shards.Keys.OrderBy(key => key, StringComparer.Ordinal))
         {
@@ -234,6 +236,38 @@ public sealed class OsmRouteGraphExtractProfileService : IOsmRouteGraphExtractPr
 
             count++;
             bytes += write.PayloadBytes;
+            if (shardIndex.ShardRegions.TryGetValue(shardKey, out var region))
+            {
+                manifestShards.Add(new RouteGraphArtifactManifestShard(
+                    shardKey,
+                    region.MinLon,
+                    region.MinLat,
+                    region.MaxLon,
+                    region.MaxLat,
+                    graphData.Nodes.Count,
+                    graphData.LoadedEdgeCount,
+                    write.PayloadBytes,
+                    write.CreatedAtUtc,
+                    "osm-extract-source-shard",
+                    Path.GetFileName(write.ArtifactPath)));
+            }
+        }
+
+        if (manifestShards.Count > 0)
+        {
+            await _artifactStore.WriteManifestAsync(
+                new RouteGraphArtifactManifest(
+                    RouteGraphArtifactCodec.SchemaVersion,
+                    RouteEdgeCostModel.Version,
+                    RouteEdgeCostModel.EdgeWeightVersion,
+                    RouteGraphPreprocessor.AltAlgorithmVersion,
+                    Math.Clamp(_options.RouteGraphShardSizeDegrees, 0.002, 0.05),
+                    Path.GetFileName(filePath),
+                    DateTime.UtcNow,
+                    manifestShards
+                        .OrderBy(shard => shard.CacheKey, StringComparer.Ordinal)
+                        .ToArray()),
+                cancellationToken);
         }
 
         stopwatch.Stop();

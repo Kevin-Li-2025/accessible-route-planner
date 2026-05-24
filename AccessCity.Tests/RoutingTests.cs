@@ -525,6 +525,107 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
             edge => Assert.Equal(RouteEdgeCostModel.EdgeWeightVersion, edge.EdgeWeightVersion));
     }
 
+    [Fact]
+    public async Task RouteGraphRepository_Loads_File_Manifest_Artifact_Before_Postgis()
+    {
+        var client = await _factory.CreateAuthenticatedClientAsync();
+        await _factory.ImportOsmAsync(client);
+
+        using var scope = _factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var distributedCache = scope.ServiceProvider.GetRequiredService<IDistributedCache>();
+        var metrics = scope.ServiceProvider.GetRequiredService<AccessCityMetrics>();
+        var routeGraphStatus = scope.ServiceProvider.GetRequiredService<IRouteGraphStatusService>();
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<RouteGraphRepository>>();
+        var start = new Coordinate(-1.8904, 52.4862);
+        var end = new Coordinate(-1.8894, 52.4862);
+        var artifactDirectory = Path.Combine(Path.GetTempPath(), $"accesscity-route-manifest-{Guid.NewGuid():N}");
+        var options = Options.Create(new RoutingOptions
+        {
+            RouteGraphPackedArtifactsEnabled = true,
+            RouteGraphFileArtifactStoreEnabled = true,
+            RouteGraphFileArtifactDirectory = artifactDirectory,
+            RouteGraphFileArtifactManifestEnabled = true,
+            RouteGraphFileArtifactWriteThroughEnabled = false,
+            RouteGraphPrepartitionedShardsEnabled = false,
+            RouteGraphAltPreprocessingEnabled = true,
+            RouteGraphAltLandmarkCount = 2,
+            RouteGraphMaxAltPreprocessedNodes = 10_000,
+            MaxRouteGraphEdges = 20_000
+        });
+        var artifactStore = new RouteGraphArtifactStore(
+            options,
+            NullLogger<RouteGraphArtifactStore>.Instance);
+
+        using var firstMemory = new MemoryCache(new MemoryCacheOptions());
+        var firstRepository = new RouteGraphRepository(
+            dbContext,
+            firstMemory,
+            distributedCache,
+            metrics,
+            routeGraphStatus,
+            options,
+            logger,
+            artifactStore);
+
+        var first = await firstRepository.LoadGraphAsync(start, end);
+        Assert.True(first.HasCoverage);
+        Assert.False(string.IsNullOrWhiteSpace(first.ShardKey));
+
+        var artifact = RouteGraphArtifactCodec.Pack(first);
+        var payload = RouteGraphArtifactCodec.SerializeRedisPayload(artifact);
+        var written = await artifactStore.WriteAsync(first.ShardKey!, artifact, payload, "unit-test-manifest");
+        Assert.NotNull(written);
+
+        var manifest = new RouteGraphArtifactManifest(
+            RouteGraphArtifactCodec.SchemaVersion,
+            RouteEdgeCostModel.Version,
+            RouteEdgeCostModel.EdgeWeightVersion,
+            RouteGraphPreprocessor.AltAlgorithmVersion,
+            options.Value.RouteGraphShardSizeDegrees,
+            "unit-test.osm",
+            DateTime.UtcNow,
+            new[]
+            {
+                new RouteGraphArtifactManifestShard(
+                    first.ShardKey!,
+                    -1.92,
+                    52.47,
+                    -1.86,
+                    52.50,
+                    first.Nodes.Count,
+                    first.LoadedEdgeCount,
+                    written!.PayloadBytes,
+                    written.CreatedAtUtc,
+                    "unit-test-manifest",
+                    Path.GetFileName(written.ArtifactPath))
+            });
+        Assert.NotNull(await artifactStore.WriteManifestAsync(manifest));
+        await distributedCache.RemoveAsync(first.ShardKey!);
+
+        await using var transaction = await dbContext.Database.BeginTransactionAsync();
+        await dbContext.RouteEdges.ExecuteDeleteAsync();
+        await dbContext.RouteNodes.ExecuteDeleteAsync();
+
+        using var secondMemory = new MemoryCache(new MemoryCacheOptions());
+        var secondRepository = new RouteGraphRepository(
+            dbContext,
+            secondMemory,
+            distributedCache,
+            metrics,
+            routeGraphStatus,
+            options,
+            logger,
+            artifactStore);
+
+        var second = await secondRepository.LoadGraphAsync(start, end);
+        Assert.True(second.HasCoverage);
+        Assert.Equal(first.LoadedEdgeCount, second.LoadedEdgeCount);
+        Assert.Equal(first.Nodes.Count, second.Nodes.Count);
+
+        await transaction.RollbackAsync();
+    }
+
     private static string BuildRouteGraphCacheKey(
         Coordinate start,
         Coordinate end,

@@ -10,6 +10,7 @@ AccessCity now has a staged route graph preprocessing path:
 - binary Redis payloads: packed artifacts are stored as versioned binary bytes in L2 cache while keeping legacy gzip/JSON read compatibility.
 - dense ALT preprocessing: shard preprocessing converts node ids to dense indexes and adjacency arrays before running landmark Dijkstra, avoiding repeated dictionary lookups and per-node edge allocations on city-sized bundles.
 - file artifact store: packed `.acrg` payloads can be written through to a shared filesystem with JSON sidecar metadata, letting workers hot-load versioned graph artifacts after restart without rebuilding from PostGIS.
+- artifact manifest: offline source shard artifacts are indexed by bbox and version, so runtime graph loads can resolve prebuilt cell artifacts from the manifest before falling back to PostGIS.
 
 ## Why ALT First
 
@@ -35,9 +36,9 @@ tools/profile-city-route-graph.sh
 
 The JSON result reports source graph size, source shard count, shard reuse ratio, uncompressed artifact size, binary Redis payload bytes, cold shard merge/preprocessing time, worker hot-load time from Redis payload restore, artifact pack time, and artifact unpack time.
 
-When `Routing__RouteGraphFileArtifactStoreEnabled=true`, the profile also persists packed artifacts under `data/route-graph-artifacts` via the compose mount. With `Routing__RouteGraphOfflineShardArtifactBuildEnabled=true`, it writes one versioned artifact per offline source shard before route-level bundle profiling. Use `Routing__RouteGraphOfflineShardArtifactBuildLimit` for quick smoke runs; `0` means all shards.
+When `Routing__RouteGraphFileArtifactStoreEnabled=true`, the profile also persists packed artifacts under `data/route-graph-artifacts` via the compose mount. With `Routing__RouteGraphOfflineShardArtifactBuildEnabled=true`, it writes one versioned artifact per offline source shard before route-level bundle profiling and publishes `manifest.json` with shard bbox, payload size, and version metadata. Use `Routing__RouteGraphOfflineShardArtifactBuildLimit` for quick smoke runs; `0` means all shards.
 
-Latest Birmingham extract check (`Birmingham.osm.pbf`, 53.6MB, `Routing__MaxRouteGraphEdges=2000000`) built a non-truncated graph of 661,852 nodes and 1,428,512 directed edges into 1,419 shards. The offline shard artifact build persisted all 1,419 source shard artifacts in about 7.0s, totaling about 225.7MB of binary `.acrg` payloads. The four warmup routes reused 53 unique shards across 89 references (`shardReuseRatio=0.4045`), all carried ALT-v1 preprocessing, and the largest route artifact moved from about 69.5MB JSON to about 14.6MB binary Redis payload. With the shard index, compact in-memory ALT tables, dense preprocessing graph, binary payload pre-sizing, and file artifact store in place, max cold shard merge/preprocessing time was about 170ms, max production pack/binary serialize time was about 104ms, max artifact unpack time was about 96ms, max Redis hot-load restore was about 39ms, and max file artifact hot-load was about 91ms on the local offline extract profile.
+Latest Birmingham extract check (`Birmingham.osm.pbf`, 53.6MB, `Routing__MaxRouteGraphEdges=2000000`) built a non-truncated graph of 661,852 nodes and 1,428,512 directed edges into 1,419 shards. The offline shard artifact build persisted all 1,419 source shard artifacts plus `manifest.json` in about 7.4s, totaling about 225.7MB of binary `.acrg` payloads. The four warmup routes reused 53 unique shards across 89 references (`shardReuseRatio=0.4045`), all carried ALT-v1 preprocessing, and the largest route artifact moved from about 69.5MB JSON to about 14.6MB binary Redis payload. With the shard index, compact in-memory ALT tables, dense preprocessing graph, binary payload pre-sizing, file artifact store, and manifest in place, max cold shard merge/preprocessing time was about 150ms, max production pack/binary serialize time was about 73ms, max artifact unpack time was about 54ms, max Redis hot-load restore was about 46ms, and max file artifact hot-load was about 56ms on the local offline extract profile.
 
 ## Runtime PostGIS Import Profile
 
@@ -68,7 +69,7 @@ If runtime import regresses, check `feed_ingestion_runs` duration, Postgres WAL/
 
 For 1M+ DAU, the next substantial step is a dedicated city graph build artifact outside request workers:
 
-1. Run the offline shard artifact build in CI/CD or a data pipeline, publish the `.acrg` directory to a shared volume/object store, then start API/worker pods with `RouteGraphFileArtifactStoreEnabled=true`.
+1. Run the offline shard artifact build in CI/CD or a data pipeline, publish the `.acrg` directory and `manifest.json` to a shared volume/object store, then start API/worker pods with `RouteGraphFileArtifactStoreEnabled=true`.
 2. Store immutable graph/weight artifacts with explicit version ids and warm them in workers before traffic.
 3. Add a customization phase for accessibility costs, temporary closures, and hazard overlays.
 4. Move from ALT to CCH or CRP for larger city/region graphs once the weight customization model is stable.

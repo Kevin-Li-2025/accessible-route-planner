@@ -179,6 +179,14 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
             return distributed;
         }
 
+        var fileArtifact = await TryLoadGraphRegionFromManifestAsync(region, edgeLimit, cacheKey, cancellationToken);
+        if (fileArtifact is not null)
+        {
+            _cache.Set(cacheKey, fileArtifact, ttl);
+            await TrySetDistributedSnapshotAsync(cacheKey, fileArtifact, ttl, cancellationToken);
+            return fileArtifact;
+        }
+
         var graphData = await LoadGraphRegionWithDistributedCoalescingAsync(region, edgeLimit, cacheKey, ttl, cancellationToken);
         if (graphData.HasCoverage)
         {
@@ -187,6 +195,59 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         }
 
         return graphData;
+    }
+
+    private async Task<RouteGraphData?> TryLoadGraphRegionFromManifestAsync(
+        GraphShardRegion region,
+        int edgeLimit,
+        string cacheKey,
+        CancellationToken cancellationToken)
+    {
+        var manifest = await _artifactStore.TryReadManifestAsync(cancellationToken);
+        if (manifest is null)
+        {
+            return null;
+        }
+
+        var matchingShards = manifest.Shards
+            .Where(shard => Overlaps(region, new GraphShardRegion(shard.MinLon, shard.MinLat, shard.MaxLon, shard.MaxLat)))
+            .OrderBy(shard => shard.CacheKey, StringComparer.Ordinal)
+            .ToArray();
+        if (matchingShards.Length == 0
+            || matchingShards.Length > Math.Max(1, _options.RouteGraphMaxFileArtifactShardLoadCount))
+        {
+            return null;
+        }
+
+        var shards = new List<RouteGraphData>(matchingShards.Length);
+        foreach (var shard in matchingShards)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var artifact = await _artifactStore.TryReadManifestShardAsync(shard, cancellationToken);
+            if (artifact is null)
+            {
+                return null;
+            }
+
+            var graphData = RouteGraphArtifactCodec.Unpack(artifact.Artifact);
+            if (!graphData.HasCoverage)
+            {
+                return null;
+            }
+
+            shards.Add(graphData);
+        }
+
+        var loaded = shards.Count == 1
+            ? shards[0]
+            : MergeGraphShards(shards, cacheKey, edgeLimit);
+        _logger.LogDebug(
+            "Loaded route graph shard {ShardKey} from {ShardCount} manifest artifacts ({NodeCount} nodes, {EdgeCount} edges)",
+            cacheKey,
+            shards.Count,
+            loaded.Nodes.Count,
+            loaded.LoadedEdgeCount);
+        return loaded;
     }
 
     private async Task<RouteGraphData> LoadGraphRegionWithDistributedCoalescingAsync(
@@ -611,6 +672,12 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         var longitudeDelta = Math.Abs(start.X - end.X);
         return Math.Max(0.01, Math.Max(latitudeDelta, longitudeDelta) * 0.35);
     }
+
+    private static bool Overlaps(GraphShardRegion a, GraphShardRegion b) =>
+        a.MinLon < b.MaxLon
+        && a.MaxLon > b.MinLon
+        && a.MinLat < b.MaxLat
+        && a.MaxLat > b.MinLat;
 
     private GraphShardRegion ComputeShardRegion(Coordinate start, Coordinate end)
     {

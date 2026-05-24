@@ -57,6 +57,9 @@ services:
       Routing__RouteGraphFileArtifactStoreEnabled: ${Routing__RouteGraphFileArtifactStoreEnabled:-false}
       Routing__RouteGraphFileArtifactDirectory: ${Routing__RouteGraphFileArtifactDirectory:-/app/route-graph-artifacts}
       Routing__RouteGraphFileArtifactWriteThroughEnabled: ${Routing__RouteGraphFileArtifactWriteThroughEnabled:-true}
+      Routing__RouteGraphFileArtifactManifestEnabled: ${Routing__RouteGraphFileArtifactManifestEnabled:-true}
+      Routing__RouteGraphFileArtifactManifestFileName: ${Routing__RouteGraphFileArtifactManifestFileName:-manifest.json}
+      Routing__RouteGraphMaxFileArtifactShardLoadCount: ${Routing__RouteGraphMaxFileArtifactShardLoadCount:-64}
       Routing__RouteGraphOfflineShardArtifactBuildEnabled: ${Routing__RouteGraphOfflineShardArtifactBuildEnabled:-false}
       Routing__RouteGraphOfflineShardArtifactBuildLimit: ${Routing__RouteGraphOfflineShardArtifactBuildLimit:-0}
       Routing__RouteGraphAltPreprocessingEnabled: ${Routing__RouteGraphAltPreprocessingEnabled:-true}
@@ -192,6 +195,9 @@ services:
       Routing__RouteGraphFileArtifactStoreEnabled: ${Routing__RouteGraphFileArtifactStoreEnabled:-false}
       Routing__RouteGraphFileArtifactDirectory: ${Routing__RouteGraphFileArtifactDirectory:-/app/route-graph-artifacts}
       Routing__RouteGraphFileArtifactWriteThroughEnabled: ${Routing__RouteGraphFileArtifactWriteThroughEnabled:-true}
+      Routing__RouteGraphFileArtifactManifestEnabled: ${Routing__RouteGraphFileArtifactManifestEnabled:-true}
+      Routing__RouteGraphFileArtifactManifestFileName: ${Routing__RouteGraphFileArtifactManifestFileName:-manifest.json}
+      Routing__RouteGraphMaxFileArtifactShardLoadCount: ${Routing__RouteGraphMaxFileArtifactShardLoadCount:-64}
       Routing__RouteGraphOfflineShardArtifactBuildEnabled: ${Routing__RouteGraphOfflineShardArtifactBuildEnabled:-false}
       Routing__RouteGraphOfflineShardArtifactBuildLimit: ${Routing__RouteGraphOfflineShardArtifactBuildLimit:-0}
       Routing__RouteGraphAltPreprocessingEnabled: ${Routing__RouteGraphAltPreprocessingEnabled:-true}

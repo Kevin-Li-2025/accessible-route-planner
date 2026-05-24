@@ -30,6 +30,9 @@ public sealed class RoutingOptions
     public bool RouteGraphFileArtifactStoreEnabled { get; set; }
     public string RouteGraphFileArtifactDirectory { get; set; } = "/app/route-graph-artifacts";
     public bool RouteGraphFileArtifactWriteThroughEnabled { get; set; } = true;
+    public bool RouteGraphFileArtifactManifestEnabled { get; set; } = true;
+    public string RouteGraphFileArtifactManifestFileName { get; set; } = "manifest.json";
+    public int RouteGraphMaxFileArtifactShardLoadCount { get; set; } = 64;
     public bool RouteGraphOfflineShardArtifactBuildEnabled { get; set; }
     public int RouteGraphOfflineShardArtifactBuildLimit { get; set; }
     public bool RouteGraphAltPreprocessingEnabled { get; set; } = true;
