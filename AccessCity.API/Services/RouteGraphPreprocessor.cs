@@ -15,6 +15,13 @@ public static class RouteGraphPreprocessor
     public static void TryAttachPreprocessing(RouteGraphData graphData, RoutingOptions options)
     {
         graphData.Preprocessing = BuildAltPreprocessing(graphData, options);
+
+        if (options.RouteGraphContractionHierarchyEnabled
+            && graphData.Nodes.Count >= 2
+            && graphData.Nodes.Count <= Math.Max(1, options.RouteGraphMaxContractionHierarchyNodes))
+        {
+            graphData.ContractionHierarchies = ContractionHierarchy.BuildForAllProfiles(graphData.Nodes);
+        }
     }
 
     public static RouteGraphPreprocessingData? BuildAltPreprocessing(RouteGraphData graphData, RoutingOptions options)

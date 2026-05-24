@@ -13,6 +13,7 @@ spec:
   pollingInterval: 15
   cooldownPeriod: 300
   advanced:
+    restoreToOriginalReplicaCount: true
     horizontalPodAutoscalerConfig:
       behavior:
         scaleUp:
@@ -91,8 +92,11 @@ spec:
     name: accesscity-worker
   minReplicaCount: 6
   maxReplicaCount: 100
+  idleReplicaCount: 0
   pollingInterval: 30
   cooldownPeriod: 300
+  advanced:
+    restoreToOriginalReplicaCount: true
   triggers:
     - type: kafka
       metadata:

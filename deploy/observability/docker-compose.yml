@@ -25,6 +25,7 @@ services:
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./slo-alerts.yml:/etc/prometheus/slo-alerts.yml:ro
     ports:
       - "9090:9090"
     depends_on:

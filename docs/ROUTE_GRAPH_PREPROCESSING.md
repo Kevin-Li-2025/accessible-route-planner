@@ -11,10 +11,14 @@ AccessCity now has a staged route graph preprocessing path:
 - dense ALT preprocessing: shard preprocessing converts node ids to dense indexes and adjacency arrays before running landmark Dijkstra, avoiding repeated dictionary lookups and per-node edge allocations on city-sized bundles.
 - file artifact store: packed `.acrg` payloads can be written through to a shared filesystem with JSON sidecar metadata, letting workers hot-load versioned graph artifacts after restart without rebuilding from PostGIS.
 - artifact manifest: offline source shard artifacts are indexed by bbox, version, artifact-set id, byte size, and SHA-256 payload hash, so runtime graph loads can resolve and verify prebuilt cell artifacts from the manifest before falling back to PostGIS.
+- release command: `--build-route-graph-release` builds a bbox into versioned shard artifacts, writes the manifest, and immediately validates every shard before the process exits. `--validate-route-graph-release` verifies an existing release without rebuilding.
+- experimental CH query data: contraction hierarchies can be built for static shortest-path profiling, but safe-path requests keep A*/ALT unless the request has no hazards, no preferences, and `SafetyWeight=0`, because CH artifacts do not encode live risk or per-request comfort modifiers.
 
 ## Why ALT First
 
-CH/CCH/CRP are the long-term target for city and region scale. They need a larger graph build pipeline and careful customization for accessibility, hazards, closures, and profile-specific weights. ALT is the safe intermediate step: it is deterministic, testable, works on directed graphs, preserves exact shortest-path results when the lower bound is admissible, and can be packed into the current shard artifact.
+CH/CCH/CRP are the long-term target for city and region scale. They need a larger graph build pipeline and careful customization for accessibility, hazards, closures, and profile-specific weights. ALT is the safe intermediate step for AccessCity's user-facing safe-path route decisions: it is deterministic, testable, works on directed graphs, preserves exact shortest-path results when the lower bound is admissible, and can be packed into the current shard artifact.
+
+The checked-in CH path is deliberately conservative. It now uses a directed bidirectional query with a reverse upward graph and expands shortcuts back into materialized graph edges, but `RoutingService` only uses it for static shortest-path requests. Dynamic safety routing still uses A*/ALT so hazards, `SafetyWeight`, and request preferences stay reproducible and auditable.
 
 The checked-in implementation computes ALT landmarks over the minimum traversal-time metric (`distance / 2.0m/s`). Runtime route cost is always at least that lower bound, so the heuristic does not change route decisions; it only reduces search work. Landmark distances are rounded to milliseconds and stored as `float` seconds; query-time lower-bound comparisons still promote to `double` and subtract a quantization safety margin, but the shard hot-load path does not double the landmark table footprint.
 
@@ -39,6 +43,23 @@ The JSON result reports source graph size, source shard count, shard reuse ratio
 When `Routing__RouteGraphFileArtifactStoreEnabled=true`, the profile also persists packed artifacts under `data/route-graph-artifacts` via the compose mount. With `Routing__RouteGraphOfflineShardArtifactBuildEnabled=true`, it writes one versioned artifact per offline source shard before route-level bundle profiling and publishes `manifest.json` with shard bbox, payload size, SHA-256 payload hash, artifact-set id, and version metadata. Use `Routing__RouteGraphOfflineShardArtifactBuildLimit` for quick smoke runs; `0` means all shards.
 
 When `Routing__RouteGraphFileArtifactManifestEnabled=true`, readiness checks the manifest version and verifies a bounded sample of the largest shard artifacts with `Routing__RouteGraphFileArtifactReadinessValidationShardLimit` before the pod is considered ready. Worker-side `Routing__RouteGraphFileArtifactWarmupEnabled=true` reads the same manifest and only writes verified payloads into Redis, so a partial or corrupt artifact publish is detected before route traffic depends on it.
+
+To build a release from PostGIS and fail the job if any artifact is corrupt or incompatible:
+
+```bash
+Routing__RouteGraphFileArtifactStoreEnabled=true \
+Routing__RouteGraphReleaseMinLon=-1.95 \
+Routing__RouteGraphReleaseMinLat=52.43 \
+Routing__RouteGraphReleaseMaxLon=-1.86 \
+Routing__RouteGraphReleaseMaxLat=52.51 \
+dotnet run --project AccessCity.API/AccessCity.API.csproj -- --build-route-graph-release
+```
+
+If explicit release bounds are omitted, the command derives a bbox from `Routing__RouteGraphWarmupRoutes` plus `Routing__RouteGraphReleasePaddingDegrees`. Validate an already-published artifact directory with:
+
+```bash
+dotnet run --project AccessCity.API/AccessCity.API.csproj -- --validate-route-graph-release
+```
 
 Latest Birmingham extract check (`Birmingham.osm.pbf`, 53.6MB, `Routing__MaxRouteGraphEdges=2000000`) built a non-truncated graph of 661,852 nodes and 1,428,512 directed edges into 1,419 shards. The offline shard artifact build persisted all 1,419 source shard artifacts plus `manifest.json` in about 7.4s, totaling about 225.7MB of binary `.acrg` payloads. The four warmup routes reused 53 unique shards across 89 references (`shardReuseRatio=0.4045`), all carried ALT-v1 preprocessing, and the largest route artifact moved from about 69.5MB JSON to about 14.6MB binary Redis payload. With the shard index, compact in-memory ALT tables, dense preprocessing graph, binary payload pre-sizing, file artifact store, and manifest in place, max cold shard merge/preprocessing time was about 150ms, max production pack/binary serialize time was about 73ms, max artifact unpack time was about 54ms, max Redis hot-load restore was about 46ms, and max file artifact hot-load was about 56ms on the local offline extract profile.
 

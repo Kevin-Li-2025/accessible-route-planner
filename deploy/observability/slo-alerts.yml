@@ -1,0 +1,330 @@
+# Multi-window, multi-burn-rate SLO alerting rules.
+# Based on Google SRE handbook Chapter 6: Multi-window, Multi-burn-rate alerts.
+#
+# 30-day SLO windows:
+#   - Availability: 99.9% (non-5xx rate)
+#   - Latency:      p95 < 1500ms, p99 < 3000ms (safe-path histogram)
+#   - Cache:        hit ratio > 70%
+#
+# Burn-rate factors (fraction of 30-day budget consumed in the alert window):
+#   Fast burn  → 14.4x over 1h  (confirmed by 5m)  → severity: page
+#   Slow burn  →  6x   over 6h  (confirmed by 30m) → severity: ticket
+
+groups:
+  # ──────────────────────────────────────────────────────────────
+  # Recording rules – pre-compute error and latency budget ratios
+  # ──────────────────────────────────────────────────────────────
+  - name: accesscity-slo-recording
+    interval: 30s
+    rules:
+      # ── Availability (error ratio) windows ──────────────────
+      - record: accesscity:http_error_rate:ratio_rate5m
+        expr: >
+          sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(http_server_request_duration_seconds_count[5m])), 1)
+
+      - record: accesscity:http_error_rate:ratio_rate30m
+        expr: >
+          sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[30m]))
+          /
+          clamp_min(sum(rate(http_server_request_duration_seconds_count[30m])), 1)
+
+      - record: accesscity:http_error_rate:ratio_rate1h
+        expr: >
+          sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[1h]))
+          /
+          clamp_min(sum(rate(http_server_request_duration_seconds_count[1h])), 1)
+
+      - record: accesscity:http_error_rate:ratio_rate6h
+        expr: >
+          sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[6h]))
+          /
+          clamp_min(sum(rate(http_server_request_duration_seconds_count[6h])), 1)
+
+      # ── Availability budget remaining (30-day window) ───────
+      # budget_remaining = 1 − (error_rate / error_budget)
+      # With a 99.9% SLO the error budget is 0.001.
+      - record: accesscity:availability_budget_remaining:ratio
+        expr: >
+          1 - (
+            accesscity:http_error_rate:ratio_rate30m / 0.001
+          )
+
+      # ── Latency p95 and p99 (safe-path histogram, ms) ──────
+      - record: accesscity:safepath_p95_ms:5m
+        expr: >
+          histogram_quantile(0.95,
+            sum(rate(accesscity_route_safe_path_duration_milliseconds_bucket[5m])) by (le)
+          )
+
+      - record: accesscity:safepath_p95_ms:30m
+        expr: >
+          histogram_quantile(0.95,
+            sum(rate(accesscity_route_safe_path_duration_milliseconds_bucket[30m])) by (le)
+          )
+
+      - record: accesscity:safepath_p95_ms:1h
+        expr: >
+          histogram_quantile(0.95,
+            sum(rate(accesscity_route_safe_path_duration_milliseconds_bucket[1h])) by (le)
+          )
+
+      - record: accesscity:safepath_p95_ms:6h
+        expr: >
+          histogram_quantile(0.95,
+            sum(rate(accesscity_route_safe_path_duration_milliseconds_bucket[6h])) by (le)
+          )
+
+      - record: accesscity:safepath_p99_ms:5m
+        expr: >
+          histogram_quantile(0.99,
+            sum(rate(accesscity_route_safe_path_duration_milliseconds_bucket[5m])) by (le)
+          )
+
+      - record: accesscity:safepath_p99_ms:30m
+        expr: >
+          histogram_quantile(0.99,
+            sum(rate(accesscity_route_safe_path_duration_milliseconds_bucket[30m])) by (le)
+          )
+
+      - record: accesscity:safepath_p99_ms:1h
+        expr: >
+          histogram_quantile(0.99,
+            sum(rate(accesscity_route_safe_path_duration_milliseconds_bucket[1h])) by (le)
+          )
+
+      - record: accesscity:safepath_p99_ms:6h
+        expr: >
+          histogram_quantile(0.99,
+            sum(rate(accesscity_route_safe_path_duration_milliseconds_bucket[6h])) by (le)
+          )
+
+      # ── Latency burn rate ───────────────────────────────────
+      # burn_rate = current_latency / slo_target
+      # If burn_rate > 1, we are consuming budget.
+      - record: accesscity:latency_p95_burn_rate:5m
+        expr: accesscity:safepath_p95_ms:5m / 1500
+
+      - record: accesscity:latency_p95_burn_rate:30m
+        expr: accesscity:safepath_p95_ms:30m / 1500
+
+      - record: accesscity:latency_p95_burn_rate:1h
+        expr: accesscity:safepath_p95_ms:1h / 1500
+
+      - record: accesscity:latency_p95_burn_rate:6h
+        expr: accesscity:safepath_p95_ms:6h / 1500
+
+      - record: accesscity:latency_p99_burn_rate:5m
+        expr: accesscity:safepath_p99_ms:5m / 3000
+
+      - record: accesscity:latency_p99_burn_rate:30m
+        expr: accesscity:safepath_p99_ms:30m / 3000
+
+      - record: accesscity:latency_p99_burn_rate:1h
+        expr: accesscity:safepath_p99_ms:1h / 3000
+
+      - record: accesscity:latency_p99_burn_rate:6h
+        expr: accesscity:safepath_p99_ms:6h / 3000
+
+      # ── Cache hit ratio windows ─────────────────────────────
+      - record: accesscity:cache_hit_ratio:ratio_rate5m
+        expr: >
+          sum(rate(accesscity_cache_hit_total[5m]))
+          /
+          clamp_min(sum(rate(accesscity_cache_hit_total[5m])) + sum(rate(accesscity_cache_miss_total[5m])), 1)
+
+      - record: accesscity:cache_hit_ratio:ratio_rate30m
+        expr: >
+          sum(rate(accesscity_cache_hit_total[30m]))
+          /
+          clamp_min(sum(rate(accesscity_cache_hit_total[30m])) + sum(rate(accesscity_cache_miss_total[30m])), 1)
+
+      - record: accesscity:cache_hit_ratio:ratio_rate1h
+        expr: >
+          sum(rate(accesscity_cache_hit_total[1h]))
+          /
+          clamp_min(sum(rate(accesscity_cache_hit_total[1h])) + sum(rate(accesscity_cache_miss_total[1h])), 1)
+
+      - record: accesscity:cache_hit_ratio:ratio_rate6h
+        expr: >
+          sum(rate(accesscity_cache_hit_total[6h]))
+          /
+          clamp_min(sum(rate(accesscity_cache_hit_total[6h])) + sum(rate(accesscity_cache_miss_total[6h])), 1)
+
+  # ──────────────────────────────────────────────────────────────
+  # Burn-rate alerting rules
+  # ──────────────────────────────────────────────────────────────
+  - name: accesscity-slo-burn-rate
+    rules:
+      # ════════════════════════════════════════════════════════
+      # Availability SLO  –  99.9%  (error budget = 0.001)
+      # ════════════════════════════════════════════════════════
+
+      # Fast burn: 14.4x over 1h confirmed by 5m  → page
+      # 14.4x of 0.001 = 0.0144  error rate threshold
+      - alert: AccessCityAvailabilityFastBurn
+        expr: >
+          accesscity:http_error_rate:ratio_rate1h > (14.4 * 0.001)
+          and
+          accesscity:http_error_rate:ratio_rate5m > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: page
+          slo: availability
+          window: fast
+        annotations:
+          summary: "Availability SLO fast burn – 14.4x budget consumption detected"
+          description: >
+            The 1h error rate ({{ $value | printf "%.4f" }}) exceeds the fast-burn
+            threshold of 1.44%. At this rate the entire 30-day error budget will be
+            exhausted in ~2 days.
+          dashboard: "/d/accesscity-slo-overview/accesscity-slo-overview"
+          runbook: "https://wiki.internal/runbooks/accesscity/availability-slo"
+
+      # Slow burn: 6x over 6h confirmed by 30m  → ticket
+      - alert: AccessCityAvailabilitySlowBurn
+        expr: >
+          accesscity:http_error_rate:ratio_rate6h > (6 * 0.001)
+          and
+          accesscity:http_error_rate:ratio_rate30m > (6 * 0.001)
+        for: 5m
+        labels:
+          severity: ticket
+          slo: availability
+          window: slow
+        annotations:
+          summary: "Availability SLO slow burn – 6x budget consumption detected"
+          description: >
+            The 6h error rate ({{ $value | printf "%.4f" }}) exceeds the slow-burn
+            threshold of 0.6%. At this rate the entire 30-day error budget will be
+            exhausted in ~5 days.
+          dashboard: "/d/accesscity-slo-overview/accesscity-slo-overview"
+          runbook: "https://wiki.internal/runbooks/accesscity/availability-slo"
+
+      # ════════════════════════════════════════════════════════
+      # Latency SLO  –  p95 < 1500ms
+      # ════════════════════════════════════════════════════════
+
+      # Fast burn: p95 sustained above 1500ms × 14.4 burn factor
+      # Since the metric is already the ratio (current / target), threshold = 1.
+      # We page when the ratio exceeds 1 in both windows (meaning p95 > 1500ms).
+      - alert: AccessCityLatencyP95FastBurn
+        expr: >
+          accesscity:latency_p95_burn_rate:1h > 1
+          and
+          accesscity:latency_p95_burn_rate:5m > 1
+        for: 2m
+        labels:
+          severity: page
+          slo: latency-p95
+          window: fast
+        annotations:
+          summary: "Latency SLO fast burn – p95 exceeds 1500ms over 1h"
+          description: >
+            Safe-path p95 latency is {{ with printf "accesscity:safepath_p95_ms:1h" }}{{ . }}{{ end }}ms
+            over the 1h window, exceeding the 1500ms SLO target.
+          dashboard: "/d/accesscity-slo-overview/accesscity-slo-overview"
+          runbook: "https://wiki.internal/runbooks/accesscity/latency-slo"
+
+      # Slow burn: p95 sustained above 1500ms over 6h
+      - alert: AccessCityLatencyP95SlowBurn
+        expr: >
+          accesscity:latency_p95_burn_rate:6h > 1
+          and
+          accesscity:latency_p95_burn_rate:30m > 1
+        for: 5m
+        labels:
+          severity: ticket
+          slo: latency-p95
+          window: slow
+        annotations:
+          summary: "Latency SLO slow burn – p95 exceeds 1500ms over 6h"
+          description: >
+            Safe-path p95 latency is sustained above the 1500ms SLO target over
+            the 6h window, confirmed by the 30m window.
+          dashboard: "/d/accesscity-slo-overview/accesscity-slo-overview"
+          runbook: "https://wiki.internal/runbooks/accesscity/latency-slo"
+
+      # ════════════════════════════════════════════════════════
+      # Latency SLO  –  p99 < 3000ms
+      # ════════════════════════════════════════════════════════
+
+      - alert: AccessCityLatencyP99FastBurn
+        expr: >
+          accesscity:latency_p99_burn_rate:1h > 1
+          and
+          accesscity:latency_p99_burn_rate:5m > 1
+        for: 2m
+        labels:
+          severity: page
+          slo: latency-p99
+          window: fast
+        annotations:
+          summary: "Latency SLO fast burn – p99 exceeds 3000ms over 1h"
+          description: >
+            Safe-path p99 latency exceeds the 3000ms SLO target over 1h,
+            confirmed by the 5m window.
+          dashboard: "/d/accesscity-slo-overview/accesscity-slo-overview"
+          runbook: "https://wiki.internal/runbooks/accesscity/latency-slo"
+
+      - alert: AccessCityLatencyP99SlowBurn
+        expr: >
+          accesscity:latency_p99_burn_rate:6h > 1
+          and
+          accesscity:latency_p99_burn_rate:30m > 1
+        for: 5m
+        labels:
+          severity: ticket
+          slo: latency-p99
+          window: slow
+        annotations:
+          summary: "Latency SLO slow burn – p99 exceeds 3000ms over 6h"
+          description: >
+            Safe-path p99 latency is sustained above the 3000ms SLO target
+            over 6h, confirmed by the 30m window.
+          dashboard: "/d/accesscity-slo-overview/accesscity-slo-overview"
+          runbook: "https://wiki.internal/runbooks/accesscity/latency-slo"
+
+      # ════════════════════════════════════════════════════════
+      # Cache Hit Ratio SLO  –  > 70%
+      # ════════════════════════════════════════════════════════
+
+      # Fast burn: cache hit ratio below 70% over 1h confirmed by 5m
+      - alert: AccessCityCacheHitRatioFastBurn
+        expr: >
+          accesscity:cache_hit_ratio:ratio_rate1h < 0.70
+          and
+          accesscity:cache_hit_ratio:ratio_rate5m < 0.70
+        for: 2m
+        labels:
+          severity: page
+          slo: cache-hit-ratio
+          window: fast
+        annotations:
+          summary: "Cache hit ratio SLO fast burn – below 70% over 1h"
+          description: >
+            Cache hit ratio ({{ $value | printf "%.2f" }}) is below the 70%
+            target over both the 1h and 5m windows. Route computations are
+            not being served from cache, increasing latency and CPU load.
+          dashboard: "/d/accesscity-slo-overview/accesscity-slo-overview"
+          runbook: "https://wiki.internal/runbooks/accesscity/cache-slo"
+
+      # Slow burn: cache hit ratio below 70% over 6h confirmed by 30m
+      - alert: AccessCityCacheHitRatioSlowBurn
+        expr: >
+          accesscity:cache_hit_ratio:ratio_rate6h < 0.70
+          and
+          accesscity:cache_hit_ratio:ratio_rate30m < 0.70
+        for: 5m
+        labels:
+          severity: ticket
+          slo: cache-hit-ratio
+          window: slow
+        annotations:
+          summary: "Cache hit ratio SLO slow burn – below 70% over 6h"
+          description: >
+            Cache hit ratio is sustained below the 70% target over 6h,
+            confirmed by the 30m window.
+          dashboard: "/d/accesscity-slo-overview/accesscity-slo-overview"
+          runbook: "https://wiki.internal/runbooks/accesscity/cache-slo"

@@ -1,0 +1,143 @@
+[
+  {
+    "name": "birmingham-core-straight",
+    "description": "Short route through Birmingham city center, flat terrain, good surfaces",
+    "profile": "standard",
+    "startLat": 52.4862,
+    "startLng": -1.8904,
+    "endLat": 52.4862,
+    "endLng": -1.8894,
+    "constraints": {
+      "mustAvoidStairs": false,
+      "mustAvoidBarriers": false,
+      "maxDistanceDeltaPercent": 25
+    }
+  },
+  {
+    "name": "birmingham-wheelchair-stairs-avoidance",
+    "description": "Route must avoid stairs for wheelchair user between two points with stairs in between",
+    "profile": "manual-wheelchair",
+    "startLat": 52.4835,
+    "startLng": -1.8885,
+    "endLat": 52.4862,
+    "endLng": -1.8904,
+    "constraints": {
+      "mustAvoidStairs": true,
+      "mustAvoidBarriers": true,
+      "mustAvoidSteep": true,
+      "maxDistanceDeltaPercent": 50
+    }
+  },
+  {
+    "name": "birmingham-stroller-surface-quality",
+    "description": "Stroller route should prefer smooth surfaces and avoid cobblestone",
+    "profile": "stroller",
+    "startLat": 52.4855,
+    "startLng": -1.9125,
+    "endLat": 52.4805,
+    "endLng": -1.9015,
+    "constraints": {
+      "mustAvoidStairs": true,
+      "mustAvoidBarriers": true,
+      "preferSmoothSurface": true,
+      "maxDistanceDeltaPercent": 40
+    }
+  },
+  {
+    "name": "birmingham-cross-city-long",
+    "description": "Longer cross-city route testing path optimality and consistency",
+    "profile": "standard",
+    "startLat": 52.4814,
+    "startLng": -1.8985,
+    "endLat": 52.4510,
+    "endLng": -1.9300,
+    "constraints": {
+      "mustAvoidStairs": false,
+      "maxDistanceDeltaPercent": 30
+    }
+  },
+  {
+    "name": "birmingham-east-west-wheelchair",
+    "description": "East-west wheelchair route through mixed accessibility area",
+    "profile": "manual-wheelchair",
+    "startLat": 52.4835,
+    "startLng": -1.8885,
+    "endLat": 52.4795,
+    "endLng": -1.8936,
+    "constraints": {
+      "mustAvoidStairs": true,
+      "mustAvoidBarriers": true,
+      "mustAvoidSteep": true,
+      "mustHaveCrossings": true,
+      "maxDistanceDeltaPercent": 50
+    }
+  },
+  {
+    "name": "birmingham-jewellery-quarter",
+    "description": "Route through jewellery quarter, testing urban navigation",
+    "profile": "standard",
+    "startLat": 52.4855,
+    "startLng": -1.9125,
+    "endLat": 52.4805,
+    "endLng": -1.9015,
+    "constraints": {
+      "mustAvoidStairs": false,
+      "maxDistanceDeltaPercent": 25
+    }
+  },
+  {
+    "name": "birmingham-power-wheelchair-kerb-height",
+    "description": "Power wheelchair route checking kerb height and width constraints",
+    "profile": "power-wheelchair",
+    "startLat": 52.4862,
+    "startLng": -1.8904,
+    "endLat": 52.4835,
+    "endLng": -1.8885,
+    "constraints": {
+      "mustAvoidStairs": true,
+      "mustAvoidBarriers": true,
+      "maxKerbHeightCm": 2.5,
+      "minWidthMetres": 1.2,
+      "maxDistanceDeltaPercent": 50
+    }
+  },
+  {
+    "name": "birmingham-construction-avoidance",
+    "description": "Route that should avoid construction zones when present",
+    "profile": "standard",
+    "startLat": 52.4862,
+    "startLng": -1.8904,
+    "endLat": 52.4795,
+    "endLng": -1.8936,
+    "constraints": {
+      "mustAvoidConstruction": true,
+      "maxDistanceDeltaPercent": 35
+    }
+  },
+  {
+    "name": "birmingham-profile-consistency-standard",
+    "description": "Same OD pair as wheelchair test - standard profile should find different route",
+    "profile": "standard",
+    "startLat": 52.4835,
+    "startLng": -1.8885,
+    "endLat": 52.4862,
+    "endLng": -1.8904,
+    "constraints": {
+      "mustAvoidStairs": false,
+      "maxDistanceDeltaPercent": 25
+    },
+    "pairedWith": "birmingham-wheelchair-stairs-avoidance"
+  },
+  {
+    "name": "birmingham-same-point-degenerate",
+    "description": "Degenerate case: origin == destination should return zero-length route",
+    "profile": "standard",
+    "startLat": 52.4862,
+    "startLng": -1.8904,
+    "endLat": 52.4862,
+    "endLng": -1.8904,
+    "constraints": {
+      "expectZeroLength": true
+    }
+  }
+]

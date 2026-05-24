@@ -43,6 +43,17 @@ public sealed class RoutingOptions
     public bool RouteGraphAltPreprocessingEnabled { get; set; } = true;
     public int RouteGraphAltLandmarkCount { get; set; } = 4;
     public int RouteGraphMaxAltPreprocessedNodes { get; set; } = 25_000;
+    public bool RouteGraphContractionHierarchyEnabled { get; set; }
+    public int RouteGraphMaxContractionHierarchyNodes { get; set; } = 25_000;
+    public bool RouteGraphReleaseBuildAndExit { get; set; }
+    public bool RouteGraphReleaseValidateAndExit { get; set; }
+    public double? RouteGraphReleaseMinLon { get; set; }
+    public double? RouteGraphReleaseMinLat { get; set; }
+    public double? RouteGraphReleaseMaxLon { get; set; }
+    public double? RouteGraphReleaseMaxLat { get; set; }
+    public double RouteGraphReleasePaddingDegrees { get; set; } = 0.01;
+    public double RouteGraphReleaseShardSizeDegrees { get; set; }
+    public string RouteGraphReleaseSourceName { get; set; } = "release-pipeline";
     public bool RouteGraphProfileAndExit { get; set; }
     public bool RouteGraphProfileUseOsmExtract { get; set; } = true;
     public bool RouteGraphDistributedLoadCoalescingEnabled { get; set; } = true;

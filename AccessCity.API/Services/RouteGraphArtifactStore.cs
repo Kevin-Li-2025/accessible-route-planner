@@ -474,7 +474,11 @@ public sealed record RouteGraphArtifactManifest(
     DateTime CreatedAtUtc,
     RouteGraphArtifactManifestShard[] Shards,
     string ArtifactSetId = "",
-    long TotalPayloadBytes = 0);
+    long TotalPayloadBytes = 0,
+    string? ReleaseVersion = null,
+    DateTime? OsmExtractTimestamp = null,
+    double CoverageAreaKm2 = 0,
+    double BuildDurationSeconds = 0);
 
 public sealed record RouteGraphArtifactManifestShard(
     string CacheKey,

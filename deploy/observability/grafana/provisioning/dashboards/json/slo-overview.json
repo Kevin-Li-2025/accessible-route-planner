@@ -1,0 +1,560 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "enable": true,
+        "expr": "ALERTS{alertname=~\"AccessCity.*Burn\", alertstate=\"firing\"}",
+        "iconColor": "red",
+        "name": "SLO Burn Alerts",
+        "titleFormat": "{{ alertname }}",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "tags": ["accesscity"],
+      "title": "Related Dashboards",
+      "type": "dashboards"
+    }
+  ],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "🎯 Error Budget & Burn Rate",
+      "type": "row"
+    },
+    {
+      "title": "Error Budget Remaining (30d)",
+      "description": "Percentage of the 30-day error budget remaining. SLO: 99.9% availability (error budget = 0.1%).",
+      "type": "gauge",
+      "id": 1,
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "clamp_min(accesscity:availability_budget_remaining:ratio, 0)",
+          "legendFormat": "budget remaining",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.25 },
+              { "color": "yellow", "value": 0.5 },
+              { "color": "green", "value": 0.75 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "orientation": "auto"
+      }
+    },
+    {
+      "title": "Availability SLI (1 − error_rate)",
+      "description": "Current availability as measured by the non-5xx request rate.",
+      "type": "timeseries",
+      "id": 2,
+      "gridPos": { "h": 8, "w": 12, "x": 6, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "1 - accesscity:http_error_rate:ratio_rate5m",
+          "legendFormat": "availability (5m)",
+          "refId": "A"
+        },
+        {
+          "expr": "1 - accesscity:http_error_rate:ratio_rate1h",
+          "legendFormat": "availability (1h)",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0.99,
+          "max": 1,
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.999 },
+              { "color": "red", "value": 0.9985 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "title": "Cache Hit Ratio",
+      "description": "SLO target: > 70%. Route computation cache effectiveness.",
+      "type": "gauge",
+      "id": 3,
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "accesscity:cache_hit_ratio:ratio_rate5m",
+          "legendFormat": "cache hit ratio",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.5 },
+              { "color": "yellow", "value": 0.65 },
+              { "color": "green", "value": 0.7 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "orientation": "auto"
+      }
+    },
+    {
+      "title": "Availability Burn Rate",
+      "description": "Error rate normalized by the 30-day budget (0.001). Values above 1 mean the budget is being consumed faster than sustainable. Fast burn threshold: 14.4x, slow burn: 6x.",
+      "type": "timeseries",
+      "id": 4,
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "accesscity:http_error_rate:ratio_rate5m / 0.001",
+          "legendFormat": "burn rate (5m)",
+          "refId": "A"
+        },
+        {
+          "expr": "accesscity:http_error_rate:ratio_rate1h / 0.001",
+          "legendFormat": "burn rate (1h)",
+          "refId": "B"
+        },
+        {
+          "expr": "accesscity:http_error_rate:ratio_rate6h / 0.001",
+          "legendFormat": "burn rate (6h)",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 5,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "spanNulls": true,
+            "thresholdsStyle": { "mode": "dashed" }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 6 },
+              { "color": "red", "value": 14.4 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "title": "Cache Hit Ratio Over Time",
+      "description": "Time series of cache hit ratio across multiple windows. SLO target: 70% (0.7).",
+      "type": "timeseries",
+      "id": 5,
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "accesscity:cache_hit_ratio:ratio_rate5m",
+          "legendFormat": "hit ratio (5m)",
+          "refId": "A"
+        },
+        {
+          "expr": "accesscity:cache_hit_ratio:ratio_rate1h",
+          "legendFormat": "hit ratio (1h)",
+          "refId": "B"
+        },
+        {
+          "expr": "accesscity:cache_hit_ratio:ratio_rate6h",
+          "legendFormat": "hit ratio (6h)",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "spanNulls": true,
+            "thresholdsStyle": { "mode": "dashed" }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 0.7 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "id": 101,
+      "title": "⏱ Latency SLI & Burn Rate",
+      "type": "row"
+    },
+    {
+      "title": "Latency Percentiles (safe-path)",
+      "description": "p50, p95, p99 latency from the accesscity_route_safe_path_duration_milliseconds histogram. SLO targets: p95 < 1500ms, p99 < 3000ms.",
+      "type": "timeseries",
+      "id": 6,
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(accesscity_route_safe_path_duration_milliseconds_bucket[5m])) by (le))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "accesscity:safepath_p95_ms:5m",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "accesscity:safepath_p99_ms:5m",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "spanNulls": true,
+            "thresholdsStyle": { "mode": "dashed" }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1500 },
+              { "color": "red", "value": 3000 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "title": "Latency Burn Rate (p95 & p99)",
+      "description": "Current latency relative to SLO targets. Values > 1 mean the SLO is being breached. p95 target: 1500ms, p99 target: 3000ms.",
+      "type": "timeseries",
+      "id": 7,
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "accesscity:latency_p95_burn_rate:5m",
+          "legendFormat": "p95 burn (5m)",
+          "refId": "A"
+        },
+        {
+          "expr": "accesscity:latency_p95_burn_rate:1h",
+          "legendFormat": "p95 burn (1h)",
+          "refId": "B"
+        },
+        {
+          "expr": "accesscity:latency_p99_burn_rate:5m",
+          "legendFormat": "p99 burn (5m)",
+          "refId": "C"
+        },
+        {
+          "expr": "accesscity:latency_p99_burn_rate:1h",
+          "legendFormat": "p99 burn (1h)",
+          "refId": "D"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 5,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "spanNulls": true,
+            "thresholdsStyle": { "mode": "dashed" }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "title": "Latency Heatmap (safe-path)",
+      "description": "Distribution of safe-path route computation durations from the native histogram buckets.",
+      "type": "heatmap",
+      "id": 8,
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 29 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(increase(accesscity_route_safe_path_duration_milliseconds_bucket[5m])) by (le)",
+          "legendFormat": "{{le}}",
+          "format": "heatmap",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "calculate": false,
+        "yAxis": {
+          "unit": "ms"
+        },
+        "color": {
+          "mode": "scheme",
+          "scheme": "Spectral",
+          "steps": 128
+        },
+        "cellGap": 1,
+        "tooltip": { "show": true, "yHistogram": true },
+        "exemplars": { "color": "rgba(255,0,255,0.7)" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "scaleDistribution": { "type": "log", "log": 2 }
+          }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 39 },
+      "id": 102,
+      "title": "📊 Traffic & Saturation",
+      "type": "row"
+    },
+    {
+      "title": "Traffic (req/s by endpoint)",
+      "description": "Request rate split by HTTP route.",
+      "type": "timeseries",
+      "id": 9,
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (http_route) (rate(http_server_request_duration_seconds_count[1m]))",
+          "legendFormat": "{{ http_route }}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "stacking": { "mode": "normal" }
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] }
+      }
+    },
+    {
+      "title": "Route Computation Saturation",
+      "description": "In-flight route computations (gauge) vs. saturation events (rejected requests). High inflight values near capacity indicate the system is approaching its route computation limit.",
+      "type": "timeseries",
+      "id": 10,
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(accesscity_route_computation_inflight)",
+          "legendFormat": "inflight computations",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(accesscity_route_computation_saturated_total[1m]))",
+          "legendFormat": "saturated (rejected/s)",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 15,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "saturated (rejected/s)" },
+            "properties": [
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } },
+              { "id": "custom.fillOpacity", "value": 30 }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 49 },
+      "id": 103,
+      "title": "🔔 Active SLO Alerts",
+      "type": "row"
+    },
+    {
+      "title": "Firing SLO Alerts",
+      "description": "Currently firing SLO burn-rate alerts from the accesscity-slo-burn-rate group.",
+      "type": "table",
+      "id": 11,
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 50 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "ALERTS{alertname=~\"AccessCity.*Burn\", alertstate=\"firing\"}",
+          "legendFormat": "",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": false, "__name__": true, "Value": true },
+            "renameByName": {
+              "alertname": "Alert",
+              "alertstate": "State",
+              "severity": "Severity",
+              "slo": "SLO",
+              "window": "Window"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "left" }
+        }
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Severity", "desc": true }]
+      }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["accesscity", "slo", "burn-rate", "error-budget"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {
+    "refresh_intervals": ["5s", "10s", "30s", "1m", "5m"],
+    "time_options": ["5m", "15m", "1h", "6h", "12h", "24h", "2d", "7d", "30d"]
+  },
+  "timezone": "browser",
+  "title": "AccessCity SLO Overview",
+  "uid": "accesscity-slo-overview",
+  "version": 1
+}

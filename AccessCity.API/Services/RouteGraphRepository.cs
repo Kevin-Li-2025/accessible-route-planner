@@ -871,7 +871,7 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         return graphData;
     }
 
-    private sealed record GraphShardRegion(double MinLon, double MinLat, double MaxLon, double MaxLat);
+
     private sealed record RouteGraphSnapshot(
         string? ShardKey,
         string[] SourceShardKeys,
@@ -911,3 +911,5 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
 
     private sealed record RouteGraphCoordinateSnapshot(double X, double Y);
 }
+
+public sealed record GraphShardRegion(double MinLon, double MinLat, double MaxLon, double MaxLat);

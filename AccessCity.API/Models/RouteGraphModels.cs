@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AccessCity.API.Services;
 using NetTopologySuite.Geometries;
 
 namespace AccessCity.API.Models;
@@ -47,6 +48,7 @@ public sealed class RouteGraphData
     public Dictionary<long, GraphNode> Nodes { get; init; } = new();
     public Dictionary<(int X, int Y), List<long>> SpatialBuckets { get; } = new();
     public RouteGraphPreprocessingData? Preprocessing { get; set; }
+    public ContractionHierarchySet? ContractionHierarchies { get; set; }
     public double SpatialBucketSizeDegrees { get; init; } = 0.001;
     public string? ShardKey { get; init; }
     public IReadOnlyList<string> SourceShardKeys { get; init; } = Array.Empty<string>();

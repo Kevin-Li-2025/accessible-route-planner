@@ -1,0 +1,563 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "enable": true,
+        "expr": "ALERTS{alertname=~\"AccessCity.*\", alertstate=\"firing\"}",
+        "iconColor": "red",
+        "name": "AccessCity Alerts",
+        "titleFormat": "{{ alertname }}",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "tags": ["accesscity"],
+      "title": "Related Dashboards",
+      "type": "dashboards"
+    }
+  ],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 200,
+      "title": "🛣 Route Computation",
+      "type": "row"
+    },
+    {
+      "title": "Route Computation Duration by Outcome (p95)",
+      "description": "p95 safe-path route computation latency split by outcome label. Outcomes: cache-hit, osrm, graph-astar, fallback.",
+      "type": "timeseries",
+      "id": 1,
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, outcome) (rate(accesscity_route_safe_path_duration_milliseconds_bucket[5m])))",
+          "legendFormat": "{{ outcome }}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"] }
+      }
+    },
+    {
+      "title": "Route Computation Duration by Outcome (p50 / p99)",
+      "description": "p50 and p99 view to complement the p95 panel.",
+      "type": "timeseries",
+      "id": 2,
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, outcome) (rate(accesscity_route_safe_path_duration_milliseconds_bucket[5m])))",
+          "legendFormat": "p50 {{ outcome }}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, outcome) (rate(accesscity_route_safe_path_duration_milliseconds_bucket[5m])))",
+          "legendFormat": "p99 {{ outcome }}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 5,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] }
+      }
+    },
+    {
+      "title": "Route Computation Queue Wait (p95)",
+      "description": "Time spent waiting for a CPU slot in the route computation bulkhead. High values indicate capacity pressure.",
+      "type": "timeseries",
+      "id": 3,
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 11 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(accesscity_route_computation_queue_duration_milliseconds_bucket[5m])) by (le))",
+          "legendFormat": "queue wait p95",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(accesscity_route_computation_queue_duration_milliseconds_bucket[5m])) by (le))",
+          "legendFormat": "queue wait p50",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "title": "Route Coalescing Hit Rate",
+      "description": "Rate of coalesced (deduplicated) safe-path requests vs. total requests. Higher is better – it means duplicate route requests are being served from in-flight computations.",
+      "type": "timeseries",
+      "id": 4,
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 11 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(accesscity_route_coalescing_total{outcome=\"coalesced\"}[5m])) / clamp_min(sum(rate(accesscity_route_coalescing_total[5m])), 1)",
+          "legendFormat": "coalescing hit rate",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (outcome) (rate(accesscity_route_coalescing_total[5m]))",
+          "legendFormat": "{{ outcome }}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 15,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "coalescing hit rate" },
+            "properties": [
+              { "id": "unit", "value": "percentunit" },
+              { "id": "custom.axisPlacement", "value": "right" }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 },
+      "id": 201,
+      "title": "🔌 External Dependencies",
+      "type": "row"
+    },
+    {
+      "title": "External Dependency Latency (p95 by dependency)",
+      "description": "p95 latency of guarded external calls (OSRM, Overpass, weather APIs, etc.) split by dependency label.",
+      "type": "timeseries",
+      "id": 5,
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, dependency) (rate(accesscity_external_dependency_duration_milliseconds_bucket[5m])))",
+          "legendFormat": "{{ dependency }}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"] }
+      }
+    },
+    {
+      "title": "External Dependency Fallback & Circuit Breaker",
+      "description": "Fallback rate per dependency and circuit breaker open events. Sustained fallbacks and circuit opens indicate external dependency degradation.",
+      "type": "timeseries",
+      "id": 6,
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (dependency) (rate(accesscity_external_dependency_fallback_total[5m]))",
+          "legendFormat": "fallback: {{ dependency }}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (dependency) (increase(accesscity_external_dependency_circuit_opened_total[5m]))",
+          "legendFormat": "circuit open: {{ dependency }}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 15,
+            "lineWidth": 2,
+            "drawStyle": "bars",
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": { "mode": "normal" }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": "circuit open.*" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "dark-red", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 },
+      "id": 202,
+      "title": "📬 Kafka & Async Processing",
+      "type": "row"
+    },
+    {
+      "title": "Kafka Consumer Lag",
+      "description": "Estimated consumer lag from the kafka_consumer_group_lag metric exposed by the OTel collector or a Kafka lag exporter. Shows how far behind consumers are from the latest offsets.",
+      "type": "timeseries",
+      "id": 7,
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (topic) (kafka_consumer_group_lag)",
+          "legendFormat": "{{ topic }}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1000 },
+              { "color": "red", "value": 10000 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"] }
+      }
+    },
+    {
+      "title": "Kafka Message Processing Rate",
+      "description": "Rate of processed, failed, and dead-lettered messages across all Kafka consumers.",
+      "type": "timeseries",
+      "id": 8,
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(accesscity_kafka_messages_processed_total[1m]))",
+          "legendFormat": "processed",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(accesscity_kafka_messages_failed_total[1m]))",
+          "legendFormat": "failed",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(accesscity_kafka_messages_dead_lettered_total[1m]))",
+          "legendFormat": "dead-lettered",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 15,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "dead-lettered" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "dark-red", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "failed" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 41 },
+      "id": 203,
+      "title": "🗺 OSM Import & Graph Loading",
+      "type": "row"
+    },
+    {
+      "title": "OSM Import Duration (p95)",
+      "description": "p95 duration of OSM data import jobs. Helps identify slowdowns in the geographic data ingestion pipeline.",
+      "type": "timeseries",
+      "id": 9,
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 42 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(accesscity_osm_import_duration_bucket[15m])) by (le))",
+          "legendFormat": "import p95",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(accesscity_osm_import_duration_bucket[15m])) by (le))",
+          "legendFormat": "import p50",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "title": "Graph Shard Load Latency",
+      "description": "Latency breakdown for route graph shard loading. Split by source: L1 cache, L2 distributed cache, file/packed artifact, or PostGIS fallback.",
+      "type": "timeseries",
+      "id": 10,
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 42 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, source) (rate(accesscity_route_safe_path_duration_milliseconds_bucket[5m])))",
+          "legendFormat": "p95 {{ source }}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"] }
+      }
+    },
+    {
+      "title": "Route Computation Inflight & Capacity",
+      "description": "Gauge of currently in-flight route computations and the rate of saturation (rejected) events.",
+      "type": "timeseries",
+      "id": 11,
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 51 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(accesscity_route_computation_inflight)",
+          "legendFormat": "inflight",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(accesscity_route_computation_saturated_total[1m]))",
+          "legendFormat": "saturated/s",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 15,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "saturated/s" },
+            "properties": [
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } },
+              { "id": "unit", "value": "ops" }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "title": "Cache Hit vs Miss Rate",
+      "description": "Absolute rates of cache hits and misses to complement the ratio view on the SLO dashboard.",
+      "type": "timeseries",
+      "id": 12,
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 51 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(accesscity_cache_hit_total[5m]))",
+          "legendFormat": "cache hits/s",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(accesscity_cache_miss_total[5m]))",
+          "legendFormat": "cache misses/s",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "stacking": { "mode": "normal" }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "cache misses/s" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "cache hits/s" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["accesscity", "routing", "deep-dive", "performance"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {
+    "refresh_intervals": ["5s", "10s", "30s", "1m", "5m"],
+    "time_options": ["5m", "15m", "1h", "6h", "12h", "24h", "2d", "7d"]
+  },
+  "timezone": "browser",
+  "title": "AccessCity Routing Deep Dive",
+  "uid": "accesscity-routing-deep-dive",
+  "version": 1
+}

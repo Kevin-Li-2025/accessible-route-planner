@@ -29,16 +29,16 @@ spec:
           readinessProbe:
             httpGet:
               path: /health/ready
-              port: http
-            timeoutSeconds: 3
-            periodSeconds: 10
-            failureThreshold: 6
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
           livenessProbe:
             httpGet:
-              path: /health
-              port: http
-            timeoutSeconds: 3
-            periodSeconds: 30
+              path: /health/live
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
             failureThreshold: 3
           startupProbe:
             httpGet:
@@ -49,15 +49,22 @@ spec:
             failureThreshold: 12
           resources:
             requests:
-              cpu: "250m"
-              memory: "512Mi"
-            limits:
-              cpu: "2"
+              cpu: "500m"
               memory: "1Gi"
+            limits:
+              cpu: "2000m"
+              memory: "4Gi"
+      terminationGracePeriodSeconds: 30
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
           whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: accesscity-api
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
           labelSelector:
             matchLabels:
               app: accesscity-api

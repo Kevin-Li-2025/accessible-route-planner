@@ -10,3 +10,4 @@ resources:
   - service.yaml
   - ingress.yaml
   - keda-scaledobject.yaml
+  - pdb.yaml

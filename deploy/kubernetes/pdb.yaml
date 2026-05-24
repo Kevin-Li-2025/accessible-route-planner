@@ -1,0 +1,23 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: accesscity-api-pdb
+  labels:
+    app: accesscity-api
+spec:
+  minAvailable: "80%"
+  selector:
+    matchLabels:
+      app: accesscity-api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: accesscity-worker-pdb
+  labels:
+    app: accesscity-worker
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: accesscity-worker

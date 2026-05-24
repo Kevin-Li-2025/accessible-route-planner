@@ -70,6 +70,13 @@ services:
       Routing__RouteGraphAltPreprocessingEnabled: ${Routing__RouteGraphAltPreprocessingEnabled:-true}
       Routing__RouteGraphAltLandmarkCount: ${Routing__RouteGraphAltLandmarkCount:-4}
       Routing__RouteGraphMaxAltPreprocessedNodes: ${Routing__RouteGraphMaxAltPreprocessedNodes:-25000}
+      Routing__RouteGraphContractionHierarchyEnabled: ${Routing__RouteGraphContractionHierarchyEnabled:-false}
+      Routing__RouteGraphMaxContractionHierarchyNodes: ${Routing__RouteGraphMaxContractionHierarchyNodes:-25000}
+      Routing__RouteGraphReleaseBuildAndExit: ${Routing__RouteGraphReleaseBuildAndExit:-false}
+      Routing__RouteGraphReleaseValidateAndExit: ${Routing__RouteGraphReleaseValidateAndExit:-false}
+      Routing__RouteGraphReleasePaddingDegrees: ${Routing__RouteGraphReleasePaddingDegrees:-0.01}
+      Routing__RouteGraphReleaseShardSizeDegrees: ${Routing__RouteGraphReleaseShardSizeDegrees:-0}
+      Routing__RouteGraphReleaseSourceName: ${Routing__RouteGraphReleaseSourceName:-release-pipeline}
       Routing__RouteGraphProfileAndExit: ${Routing__RouteGraphProfileAndExit:-false}
       Routing__RouteGraphProfileUseOsmExtract: ${Routing__RouteGraphProfileUseOsmExtract:-true}
       Routing__RouteGraphDistributedLoadCoalescingEnabled: ${Routing__RouteGraphDistributedLoadCoalescingEnabled:-true}
@@ -213,6 +220,13 @@ services:
       Routing__RouteGraphAltPreprocessingEnabled: ${Routing__RouteGraphAltPreprocessingEnabled:-true}
       Routing__RouteGraphAltLandmarkCount: ${Routing__RouteGraphAltLandmarkCount:-4}
       Routing__RouteGraphMaxAltPreprocessedNodes: ${Routing__RouteGraphMaxAltPreprocessedNodes:-25000}
+      Routing__RouteGraphContractionHierarchyEnabled: ${Routing__RouteGraphContractionHierarchyEnabled:-false}
+      Routing__RouteGraphMaxContractionHierarchyNodes: ${Routing__RouteGraphMaxContractionHierarchyNodes:-25000}
+      Routing__RouteGraphReleaseBuildAndExit: ${Routing__RouteGraphReleaseBuildAndExit:-false}
+      Routing__RouteGraphReleaseValidateAndExit: ${Routing__RouteGraphReleaseValidateAndExit:-false}
+      Routing__RouteGraphReleasePaddingDegrees: ${Routing__RouteGraphReleasePaddingDegrees:-0.01}
+      Routing__RouteGraphReleaseShardSizeDegrees: ${Routing__RouteGraphReleaseShardSizeDegrees:-0}
+      Routing__RouteGraphReleaseSourceName: ${Routing__RouteGraphReleaseSourceName:-release-pipeline}
       Routing__RouteGraphProfileAndExit: ${Routing__RouteGraphProfileAndExit:-false}
       Routing__RouteGraphProfileUseOsmExtract: ${Routing__RouteGraphProfileUseOsmExtract:-true}
       Routing__RouteGraphDistributedLoadCoalescingEnabled: ${Routing__RouteGraphDistributedLoadCoalescingEnabled:-true}

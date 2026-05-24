@@ -40,6 +40,10 @@ try
         || args.Any(arg => string.Equals(arg, "--migrate-and-exit", StringComparison.OrdinalIgnoreCase));
     var routeGraphProfileAndExit = builder.Configuration.GetValue<bool>("Routing:RouteGraphProfileAndExit")
         || args.Any(arg => string.Equals(arg, "--profile-route-graph-and-exit", StringComparison.OrdinalIgnoreCase));
+    var routeGraphReleaseBuildAndExit = builder.Configuration.GetValue<bool>("Routing:RouteGraphReleaseBuildAndExit")
+        || args.Any(arg => string.Equals(arg, "--build-route-graph-release", StringComparison.OrdinalIgnoreCase));
+    var routeGraphReleaseValidateAndExit = builder.Configuration.GetValue<bool>("Routing:RouteGraphReleaseValidateAndExit")
+        || args.Any(arg => string.Equals(arg, "--validate-route-graph-release", StringComparison.OrdinalIgnoreCase));
     var routeGraphProfileUsesOsmExtract = builder.Configuration.GetValue<bool>("Routing:RouteGraphProfileUseOsmExtract")
         && !string.IsNullOrWhiteSpace(builder.Configuration["OsmImport:FilePath"]);
 
@@ -65,6 +69,15 @@ try
     {
         await app.RunRouteGraphProfileCommandAsync();
         Log.Information("Route graph profile completed; exiting because Routing:RouteGraphProfileAndExit is enabled.");
+        return;
+    }
+
+    if (routeGraphReleaseBuildAndExit || routeGraphReleaseValidateAndExit)
+    {
+        await app.RunRouteGraphReleaseCommandAsync(
+            buildRelease: routeGraphReleaseBuildAndExit,
+            validateRelease: routeGraphReleaseValidateAndExit || routeGraphReleaseBuildAndExit);
+        Log.Information("Route graph release command completed; exiting.");
         return;
     }
 

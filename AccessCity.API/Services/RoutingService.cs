@@ -369,7 +369,29 @@ public class RoutingService : IRoutingService
             };
         }
 
-        var path = AStarSearch(graphData.Nodes, startId, endId, request, hazardList, graphData.Preprocessing);
+        // Use Contraction Hierarchies only for static, deterministic shortest-path
+        // queries. The CH artifact does not encode live hazards, safety weighting,
+        // or per-request comfort preferences, so safe-path requests still need A*/ALT.
+        List<long>? path = null;
+        if (CanUseContractionHierarchy(request, hazardList))
+        {
+            var chData = ContractionHierarchy.ResolveForProfile(
+                graphData.ContractionHierarchies, request.Profile);
+            if (chData is not null)
+            {
+                var chResult = ContractionHierarchy.Query(chData, startId, endId);
+                if (chResult.PathNodeIds is { Length: >= 2 })
+                {
+                    var candidatePath = chResult.PathNodeIds.ToList();
+                    if (IsRealGraphPathTraversable(candidatePath, graphData.Nodes, request))
+                    {
+                        path = candidatePath;
+                    }
+                }
+            }
+        }
+
+        path ??= AStarSearch(graphData.Nodes, startId, endId, request, hazardList, graphData.Preprocessing);
 
         if (path == null || path.Count < 2)
         {
@@ -384,6 +406,44 @@ public class RoutingService : IRoutingService
         }
 
         return BuildRealGraphResponse(path, graphData.Nodes, request, hazardList);
+    }
+
+    private static bool CanUseContractionHierarchy(RouteRequest request, IReadOnlyCollection<HazardReport> hazards)
+    {
+        return request.SafetyWeight <= 0.001
+               && hazards.Count == 0
+               && request.Preferences.Count == 0;
+    }
+
+    private static bool IsRealGraphPathTraversable(
+        IReadOnlyList<long> path,
+        IReadOnlyDictionary<long, GraphNode> graph,
+        RouteRequest request)
+    {
+        if (path.Count < 2)
+        {
+            return false;
+        }
+
+        var filters = BuildEdgeFilterChain(request);
+        for (var i = 0; i < path.Count - 1; i++)
+        {
+            if (!graph.TryGetValue(path[i], out var fromNode)
+                || !fromNode.Edges.TryGetValue(path[i + 1], out var edge))
+            {
+                return false;
+            }
+
+            foreach (var filter in filters)
+            {
+                if (!filter(edge))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

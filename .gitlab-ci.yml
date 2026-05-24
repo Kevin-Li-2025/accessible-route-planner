@@ -147,6 +147,40 @@ backend:test:
     - exists:
         - CodeConquerors.sln
 
+quality:route-benchmark:
+  stage: test
+  image: mcr.microsoft.com/dotnet/sdk:9.0
+  services:
+    - name: postgis/postgis:16-3.4
+      alias: postgres
+    - name: redis:7-alpine
+      alias: redis
+  timeout: 15m
+  before_script:
+    - apt-get update
+    - DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends netcat-openbsd
+    - |
+      echo "Waiting for PostgreSQL (postgis)..."
+      for i in $(seq 1 90); do
+        if nc -z postgres 5432 2>/dev/null; then echo "Postgres port open."; break; fi
+        sleep 2
+      done
+      nc -z postgres 5432 || { echo "PostgreSQL not reachable"; exit 1; }
+    - |
+      echo "Waiting for Redis..."
+      for i in $(seq 1 30); do
+        if nc -z redis 6379 2>/dev/null; then echo "Redis port open."; break; fi
+        sleep 1
+      done
+      nc -z redis 6379 || { echo "Redis not reachable"; exit 1; }
+  script:
+    - dotnet restore CodeConquerors.sln
+    - dotnet build CodeConquerors.sln --configuration Release --no-restore
+    - dotnet test AccessCity.Tests/AccessCity.Tests.csproj --configuration Release --no-build --verbosity normal --filter "FullyQualifiedName~RouteQualityBenchmark"
+  rules:
+    - exists:
+        - CodeConquerors.sln
+
 # ─── API smoke: live process + scripts/probe_api_endpoints.py ───────────────
 # Uses AccessCity.Tests/Fixtures/test-network.osm (no repo-root *.osm required).
 # Depends on outbound HTTPS (Nominatim, OSRM, etc.); failures there are environmental.
