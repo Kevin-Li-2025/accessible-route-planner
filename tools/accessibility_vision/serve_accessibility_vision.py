@@ -95,6 +95,9 @@ def create_app(checkpoint_path: Path, device_name: str) -> FastAPI:
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
     tasks = checkpoint.get("tasks", DEFAULT_TASKS)
     thresholds = checkpoint.get("thresholds", {})
+    metrics = checkpoint.get("metrics") or {}
+    holdout_metrics = checkpoint.get("holdout_metrics") or {}
+    dataset_summary = checkpoint.get("dataset_summary") or {}
     model_name = checkpoint.get("model_name", "convnext_tiny")
     image_size = int(checkpoint.get("image_size", 224))
 
@@ -121,6 +124,21 @@ def create_app(checkpoint_path: Path, device_name: str) -> FastAPI:
             "model": model_name,
             "tasks": tasks,
             "device": str(device),
+            "thresholds": thresholds,
+            "calibration": {
+                "split": checkpoint.get("calibration_split"),
+                "macroF1": metrics.get("macro_f1"),
+                "macroEce": metrics.get("macro_ece"),
+            },
+            "holdout": {
+                "split": checkpoint.get("holdout_split"),
+                "macroF1": holdout_metrics.get("macro_f1"),
+                "macroEce": holdout_metrics.get("macro_ece"),
+            },
+            "datasetRows": {
+                key: value.get("rows") if isinstance(value, dict) else None
+                for key, value in dataset_summary.items()
+            },
         }
 
     @app.post("/v1/accessibility-vision/analyze")
@@ -146,6 +164,7 @@ def create_app(checkpoint_path: Path, device_name: str) -> FastAPI:
         return {
             "model": model_name,
             "tasks": tasks,
+            "thresholds": {task: round(float(thresholds.get(task, 0.5)), 4) for task in tasks},
             "probabilities": {task: round(float(prob), 4) for task, prob in zip(tasks, max_probs, strict=True)},
             "candidates": candidates,
             "forRouteDecision": False,
@@ -174,4 +193,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

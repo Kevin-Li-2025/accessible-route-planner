@@ -16,7 +16,7 @@ import torch.nn as nn
 from datasets import concatenate_datasets, load_dataset
 from PIL import Image
 from PIL import ImageDraw
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
+from sklearn.metrics import accuracy_score, brier_score_loss, f1_score, precision_score, recall_score, roc_auc_score
 from torch.utils.data import DataLoader, Dataset
 from torchvision import models, transforms
 from tqdm import tqdm
@@ -88,6 +88,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-eval-per-task", type=int, default=0)
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--threshold-grid", default="0.25,0.30,0.35,0.40,0.45,0.50,0.55,0.60,0.65,0.70,0.75")
+    parser.add_argument("--calibration-split", default="validation")
+    parser.add_argument("--holdout-split", default="test")
+    parser.add_argument("--calibration-bins", type=int, default=10)
     parser.add_argument("--synthetic-smoke", action="store_true", help="Use generated images to verify the training/serving pipeline without downloading data.")
     parser.add_argument("--dataset-root", type=Path, default=None, help="Use an exported JSONL/image dataset instead of Hugging Face Hub.")
     parser.add_argument(
@@ -132,7 +135,8 @@ def load_split(split: str, max_per_task: int, seed: int):
 
 
 def load_synthetic_split(split: str, max_per_task: int, seed: int) -> list[dict[str, Any]]:
-    rng = random.Random(seed + (0 if split == "train" else 10_000))
+    split_offsets = {"train": 0, "validation": 10_000, "test": 20_000}
+    rng = random.Random(seed + split_offsets.get(split, 30_000))
     rows: list[dict[str, Any]] = []
     count = max_per_task if max_per_task > 0 else 64
     task_colors = [
@@ -181,6 +185,13 @@ def load_exported_split(dataset_root: Path, split: str, max_per_task: int, seed:
 
     random.Random(seed).shuffle(rows)
     return rows
+
+
+def load_optional_exported_split(dataset_root: Path, split: str, max_per_task: int, seed: int) -> list[dict[str, Any]]:
+    split_file = dataset_root / f"{split}.jsonl"
+    if not split_file.exists():
+        return []
+    return load_exported_split(dataset_root, split, max_per_task, seed)
 
 
 def build_transforms(image_size: int) -> tuple[transforms.Compose, transforms.Compose]:
@@ -235,13 +246,66 @@ def compute_pos_weight(dataset: Any, weak_cross_task_negatives: bool) -> torch.T
     return (negatives / positives).float()
 
 
+def summarize_rows(dataset: Any, weak_cross_task_negatives: bool) -> dict[str, Any]:
+    summary: dict[str, Any] = {"rows": len(dataset), "tasks": {}}
+    positives = {task: 0 for task in TASKS}
+    totals = {task: 0 for task in TASKS}
+    for row in dataset:
+        task_id = int(row["task_id"])
+        task_name = TASKS[task_id]
+        target = float(row["target"])
+        if weak_cross_task_negatives and target >= 0.5:
+            for name in TASKS:
+                totals[name] += 1
+            positives[task_name] += 1
+        else:
+            totals[task_name] += 1
+            positives[task_name] += 1 if target >= 0.5 else 0
+
+    for task_name in TASKS:
+        task_total = totals[task_name]
+        task_positives = positives[task_name]
+        summary["tasks"][task_name] = {
+            "rows": task_total,
+            "positive": task_positives,
+            "negative": task_total - task_positives,
+            "positive_rate": round(task_positives / task_total, 4) if task_total else 0.0,
+        }
+    return summary
+
+
+def expected_calibration_error(y_true: np.ndarray, y_score: np.ndarray, bins: int) -> float | None:
+    if y_true.size == 0:
+        return None
+
+    edges = np.linspace(0.0, 1.0, bins + 1)
+    ece = 0.0
+    for index in range(bins):
+        lower = edges[index]
+        upper = edges[index + 1]
+        selected = (y_score >= lower) & (y_score < upper if index < bins - 1 else y_score <= upper)
+        if not selected.any():
+            continue
+        confidence = float(y_score[selected].mean())
+        observed = float(y_true[selected].mean())
+        ece += float(selected.mean()) * abs(confidence - observed)
+    return ece
+
+
 def masked_bce_loss(logits: torch.Tensor, targets: torch.Tensor, mask: torch.Tensor, pos_weight: torch.Tensor) -> torch.Tensor:
     raw = nn.functional.binary_cross_entropy_with_logits(logits, targets, reduction="none", pos_weight=pos_weight)
     return (raw * mask).sum() / torch.clamp(mask.sum(), min=1.0)
 
 
 @torch.inference_mode()
-def evaluate(model: nn.Module, loader: DataLoader, device: torch.device, thresholds: list[float]) -> dict[str, Any]:
+def evaluate(
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    thresholds: list[float],
+    calibration_bins: int,
+    fixed_thresholds: dict[str, float] | None = None,
+) -> dict[str, Any]:
     model.eval()
     per_task_scores: list[list[float]] = [[] for _ in TASKS]
     per_task_targets: list[list[int]] = [[] for _ in TASKS]
@@ -267,17 +331,31 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device, thresho
             continue
 
         best = {"threshold": 0.5, "f1": -1.0}
-        for threshold in thresholds:
+        if fixed_thresholds is not None and task_name in fixed_thresholds:
+            threshold = fixed_thresholds[task_name]
             y_pred = (y_score >= threshold).astype(np.int32)
-            f1 = f1_score(y_true, y_pred, zero_division=0)
-            if f1 > best["f1"]:
-                best = {"threshold": threshold, "f1": f1}
+            best = {"threshold": threshold, "f1": f1_score(y_true, y_pred, zero_division=0)}
+        else:
+            for threshold in thresholds:
+                y_pred = (y_score >= threshold).astype(np.int32)
+                f1 = f1_score(y_true, y_pred, zero_division=0)
+                if f1 > best["f1"]:
+                    best = {"threshold": threshold, "f1": f1}
 
         y_pred = (y_score >= best["threshold"]).astype(np.int32)
         try:
             auc = roc_auc_score(y_true, y_score)
         except ValueError:
             auc = float("nan")
+        try:
+            brier = brier_score_loss(y_true, y_score)
+        except ValueError:
+            brier = float("nan")
+
+        true_positive = int(((y_pred == 1) & (y_true == 1)).sum())
+        false_positive = int(((y_pred == 1) & (y_true == 0)).sum())
+        true_negative = int(((y_pred == 0) & (y_true == 0)).sum())
+        false_negative = int(((y_pred == 0) & (y_true == 1)).sum())
 
         task_metrics = {
             "count": int(y_true.size),
@@ -288,15 +366,32 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device, thresho
             "recall": float(recall_score(y_true, y_pred, zero_division=0)),
             "f1": float(best["f1"]),
             "roc_auc": None if math.isnan(auc) else float(auc),
+            "brier": None if math.isnan(brier) else float(brier),
+            "ece": expected_calibration_error(y_true, y_score, calibration_bins),
+            "confusion": {
+                "tp": true_positive,
+                "fp": false_positive,
+                "tn": true_negative,
+                "fn": false_negative,
+            },
         }
         metrics["tasks"][task_name] = task_metrics
         f1_values.append(task_metrics["f1"])
 
     metrics["macro_f1"] = float(np.mean(f1_values)) if f1_values else 0.0
+    ece_values = [values["ece"] for values in metrics["tasks"].values() if values.get("ece") is not None]
+    metrics["macro_ece"] = float(np.mean(ece_values)) if ece_values else None
     return metrics
 
 
-def save_checkpoint(path: Path, model: nn.Module, args: argparse.Namespace, metrics: dict[str, Any]) -> None:
+def save_checkpoint(
+    path: Path,
+    model: nn.Module,
+    args: argparse.Namespace,
+    metrics: dict[str, Any],
+    dataset_summary: dict[str, Any],
+    holdout_metrics: dict[str, Any] | None = None,
+) -> None:
     thresholds = {
         task: values["threshold"]
         for task, values in metrics.get("tasks", {}).items()
@@ -310,6 +405,11 @@ def save_checkpoint(path: Path, model: nn.Module, args: argparse.Namespace, metr
             "tasks": TASKS,
             "thresholds": thresholds,
             "metrics": metrics,
+            "holdout_metrics": holdout_metrics,
+            "dataset_summary": dataset_summary,
+            "calibration_split": args.calibration_split,
+            "holdout_split": args.holdout_split,
+            "calibration_bins": args.calibration_bins,
         },
         path,
     )
@@ -323,17 +423,24 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if args.dataset_root is not None:
         train_raw = load_exported_split(args.dataset_root, "train", args.max_train_per_task, args.seed)
-        val_raw = load_exported_split(args.dataset_root, "validation", args.max_eval_per_task, args.seed)
+        val_raw = load_exported_split(args.dataset_root, args.calibration_split, args.max_eval_per_task, args.seed)
+        holdout_raw = load_optional_exported_split(args.dataset_root, args.holdout_split, args.max_eval_per_task, args.seed)
     elif args.synthetic_smoke:
         train_raw = load_synthetic_split("train", args.max_train_per_task, args.seed)
-        val_raw = load_synthetic_split("validation", args.max_eval_per_task, args.seed)
+        val_raw = load_synthetic_split(args.calibration_split, args.max_eval_per_task, args.seed)
+        holdout_raw = load_synthetic_split(args.holdout_split, args.max_eval_per_task, args.seed)
     else:
         train_raw = load_split("train", args.max_train_per_task, args.seed)
-        val_raw = load_split("validation", args.max_eval_per_task, args.seed)
+        val_raw = load_split(args.calibration_split, args.max_eval_per_task, args.seed)
+        try:
+            holdout_raw = load_split(args.holdout_split, args.max_eval_per_task, args.seed)
+        except Exception:  # noqa: BLE001
+            holdout_raw = []
     train_tf, eval_tf = build_transforms(args.image_size)
 
     train_dataset = AccessibilityDataset(train_raw, train_tf, args.weak_cross_task_negatives)
     val_dataset = AccessibilityDataset(val_raw, eval_tf, args.weak_cross_task_negatives)
+    holdout_dataset = AccessibilityDataset(holdout_raw, eval_tf, args.weak_cross_task_negatives) if holdout_raw else None
 
     train_loader = DataLoader(
         train_dataset,
@@ -348,6 +455,17 @@ def main() -> None:
         shuffle=False,
         num_workers=args.num_workers,
         pin_memory=device.type == "cuda",
+    )
+    holdout_loader = (
+        DataLoader(
+            holdout_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=args.num_workers,
+            pin_memory=device.type == "cuda",
+        )
+        if holdout_dataset is not None
+        else None
     )
 
     model = build_model(args.model).to(device)
@@ -364,15 +482,25 @@ def main() -> None:
         "tasks": TASKS,
         "dataset_tasks": DATASET_TASKS,
         "train_rows": len(train_raw),
-        "validation_rows": len(val_raw),
+        "calibration_rows": len(val_raw),
+        "holdout_rows": len(holdout_raw),
         "synthetic_smoke": args.synthetic_smoke,
         "weak_cross_task_negatives": args.weak_cross_task_negatives,
         "dataset_root": str(args.dataset_root) if args.dataset_root is not None else None,
+        "calibration_split": args.calibration_split,
+        "holdout_split": args.holdout_split,
+        "dataset_summary": {
+            "train": summarize_rows(train_raw, args.weak_cross_task_negatives),
+            args.calibration_split: summarize_rows(val_raw, args.weak_cross_task_negatives),
+            args.holdout_split: summarize_rows(holdout_raw, args.weak_cross_task_negatives) if holdout_raw else None,
+        },
         "args": args_dict,
     }
     (args.output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    dataset_summary = metadata["dataset_summary"]
 
     best_macro_f1 = -1.0
+    best_epoch = 0
     history = []
     started = time.perf_counter()
     for epoch in range(1, args.epochs + 1):
@@ -395,20 +523,41 @@ def main() -> None:
             running_loss += float(loss.detach().cpu())
             batches += 1
 
-        metrics = evaluate(model, val_loader, device, thresholds)
+        metrics = evaluate(model, val_loader, device, thresholds, args.calibration_bins)
         metrics["epoch"] = epoch
         metrics["train_loss"] = running_loss / max(batches, 1)
         metrics["elapsed_seconds"] = round(time.perf_counter() - started, 3)
+        metrics["calibration_split"] = args.calibration_split
         history.append(metrics)
         (args.output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
         (args.output_dir / "latest_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-        save_checkpoint(args.output_dir / "latest.pt", model, args, metrics)
+        save_checkpoint(args.output_dir / "latest.pt", model, args, metrics, dataset_summary)
 
         if metrics["macro_f1"] >= best_macro_f1:
             best_macro_f1 = metrics["macro_f1"]
-            save_checkpoint(args.output_dir / "best.pt", model, args, metrics)
+            best_epoch = epoch
+            save_checkpoint(args.output_dir / "best.pt", model, args, metrics, dataset_summary)
 
         print(json.dumps({"epoch": epoch, "train_loss": metrics["train_loss"], "macro_f1": metrics["macro_f1"]}, indent=2))
+
+    if holdout_loader is not None:
+        best_path = args.output_dir / "best.pt"
+        best_checkpoint = torch.load(best_path, map_location=device)
+        model.load_state_dict(best_checkpoint["model_state"])
+        holdout_metrics = evaluate(
+            model,
+            holdout_loader,
+            device,
+            thresholds,
+            args.calibration_bins,
+            fixed_thresholds=best_checkpoint.get("thresholds", {}),
+        )
+        holdout_metrics["best_epoch"] = best_epoch
+        holdout_metrics["holdout_split"] = args.holdout_split
+        (args.output_dir / "holdout_metrics.json").write_text(json.dumps(holdout_metrics, indent=2), encoding="utf-8")
+        best_checkpoint["holdout_metrics"] = holdout_metrics
+        torch.save(best_checkpoint, best_path)
+        print(json.dumps({"holdout_macro_f1": holdout_metrics["macro_f1"], "holdout_macro_ece": holdout_metrics["macro_ece"]}, indent=2))
 
     print(f"best_macro_f1={best_macro_f1:.4f}")
 

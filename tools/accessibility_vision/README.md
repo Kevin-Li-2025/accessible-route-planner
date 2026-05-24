@@ -42,10 +42,18 @@ Hugging Face may rate-limit anonymous dataset downloads. Use an authenticated `H
 ```bash
 export HF_TOKEN=...
 python export_project_sidewalk_subset.py \
-  --output-dir data/projectsidewalk-balanced \
+  --output-dir data/projectsidewalk-rampnet-balanced \
   --train-per-task 1200 \
-  --validation-per-task 300
+  --validation-per-task 300 \
+  --test-per-task 300 \
+  --include-rampnet-crop \
+  --include-rampnet-panorama \
+  --rampnet-panorama-train 5000 \
+  --rampnet-panorama-validation 1000 \
+  --rampnet-panorama-test 1000
 ```
+
+The export format always writes separate `train.jsonl`, `validation.jsonl`, and `test.jsonl` files. Use `validation` only for threshold calibration/model selection and reserve `test` for final holdout reporting. `RampNet crop` rows strengthen curb-ramp positives; `RampNet panorama` rows add large-scale curb-ramp positive/negative labels from `curb_ramp_points_normalized`.
 
 ## L20 Setup
 
@@ -67,16 +75,21 @@ python train_accessibility_vision.py \
   --batch-size 16
 ```
 
-Full first pass:
+Full calibrated pass:
 
 ```bash
 python train_accessibility_vision.py \
+  --dataset-root data/projectsidewalk-rampnet-balanced \
   --output-dir runs/project-sidewalk-convnext-tiny-v1 \
-  --epochs 6 \
+  --epochs 12 \
   --batch-size 48 \
   --learning-rate 3e-4 \
-  --weight-decay 0.05
+  --weight-decay 0.05 \
+  --calibration-split validation \
+  --holdout-split test
 ```
+
+Training writes `latest_metrics.json` for the calibration split and `holdout_metrics.json` for the final untouched test split. The checkpoint embeds calibrated per-task thresholds, macro F1, Brier score, expected calibration error, and confusion counts.
 
 Positive-only bootstrap:
 
