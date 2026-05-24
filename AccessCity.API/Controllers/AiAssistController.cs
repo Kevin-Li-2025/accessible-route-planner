@@ -18,15 +18,18 @@ public sealed class AiAssistController : ControllerBase
 {
     private readonly IHazardReportService _hazards;
     private readonly IAiAssistService _aiAssist;
+    private readonly IAccessibilityVerificationService _accessibilityVerifications;
     private readonly AiEnrichmentOptions _options;
 
     public AiAssistController(
         IHazardReportService hazards,
         IAiAssistService aiAssist,
+        IAccessibilityVerificationService accessibilityVerifications,
         IOptions<AiEnrichmentOptions> options)
     {
         _hazards = hazards;
         _aiAssist = aiAssist;
+        _accessibilityVerifications = accessibilityVerifications;
         _options = options.Value;
     }
 
@@ -74,6 +77,33 @@ public sealed class AiAssistController : ControllerBase
 
         var explanation = await _aiAssist.ExplainRouteAsync(request, cancellationToken);
         return Ok(explanation);
+    }
+
+    /// <summary>
+    /// Reviews a structured accessibility profile and returns human-verification suggestions.
+    /// The result is advisory only and never updates routing decisions.
+    /// </summary>
+    [HttpGet("infrastructure/{assetId:long}/accessibility-review")]
+    [ProducesResponseType(typeof(AccessibilityAiReviewResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiError), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiError), StatusCodes.Status503ServiceUnavailable)]
+    public async Task<ActionResult<AccessibilityAiReviewResult>> GetAccessibilityReview(
+        long assetId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_options.Enabled)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new ApiError("AI assist is disabled."));
+        }
+
+        var profile = await _accessibilityVerifications.GetProfileAsync(assetId, cancellationToken);
+        if (profile is null)
+        {
+            return NotFound(new ApiError("Infrastructure asset not found."));
+        }
+
+        var review = await _aiAssist.ReviewAccessibilityProfileAsync(assetId, profile, cancellationToken);
+        return Ok(review);
     }
 
     private async Task<IReadOnlyCollection<HazardReport>> GetNearbyHazardsAsync(

@@ -94,6 +94,34 @@ public sealed class AiAssistServiceTests
     }
 
     [Fact]
+    public async Task ReviewAccessibilityProfile_ReturnsHumanReviewCandidates_WithoutDecisionAuthority()
+    {
+        var profile = new InfrastructureAccessibilityProfile
+        {
+            VerificationStatus = "unverified",
+            Confidence = 0.32,
+            MissingFields =
+            [
+                "width_metres",
+                "kerb",
+                "incline_percent",
+                "last_verified_at"
+            ]
+        };
+
+        var result = await _service.ReviewAccessibilityProfileAsync(42, profile, CancellationToken.None);
+
+        Assert.False(result.ForRouteDecision);
+        Assert.Equal(42, result.InfrastructureAssetId);
+        Assert.Contains(result.MissingAttributeCandidates, candidate => candidate.Attribute == "width_metres");
+        Assert.Contains(result.MissingAttributeCandidates, candidate => candidate.Attribute == "curb_ramp");
+        Assert.Contains(result.MissingAttributeCandidates, candidate => candidate.Attribute == "last_verified_at");
+        Assert.All(result.MissingAttributeCandidates, candidate => Assert.False(candidate.CanAutoApply));
+        Assert.Contains(result.Guardrails, guardrail => guardrail.Contains("cannot generate routes", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.VerificationChecklist, item => item.Contains("low confidence", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void Constructor_RejectsRouteDecisionInfluence()
     {
         var options = Options.Create(new AiEnrichmentOptions

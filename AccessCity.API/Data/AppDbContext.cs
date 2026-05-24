@@ -17,6 +17,7 @@ namespace AccessCity.API.Data
         public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
         public DbSet<HazardReport> Hazards => Set<HazardReport>();
         public DbSet<InfrastructureAsset> InfrastructureAssets => Set<InfrastructureAsset>();
+        public DbSet<AccessibilityVerificationSubmission> AccessibilityVerificationSubmissions => Set<AccessibilityVerificationSubmission>();
         public DbSet<FeedIngestionRun> FeedIngestionRuns => Set<FeedIngestionRun>();
         public DbSet<OsmImportJob> OsmImportJobs => Set<OsmImportJob>();
         public DbSet<ProcessedIntegrationMessage> ProcessedIntegrationMessages => Set<ProcessedIntegrationMessage>();
@@ -152,6 +153,38 @@ namespace AccessCity.API.Data
                 }
 
                 entity.HasIndex(e => new { e.SourceSystem, e.SourceRecordId }).IsUnique();
+            });
+
+            builder.Entity<AccessibilityVerificationSubmission>(entity =>
+            {
+                entity.ToTable("accessibility_verification_submissions");
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.Source).HasMaxLength(100);
+                entity.Property(e => e.Status).HasMaxLength(50);
+                entity.Property(e => e.SubmittedByUserId).HasMaxLength(450);
+                entity.Property(e => e.ReviewedByUserId).HasMaxLength(450);
+
+                if (isRelational)
+                {
+                    entity.Property(e => e.AttributeUpdates).HasColumnType("jsonb");
+                    entity.Property(e => e.PhotoUrls).HasColumnType("jsonb");
+                }
+                else
+                {
+                    entity.Property(e => e.AttributeUpdates)
+                        .HasConversion(jsonDocumentConverter)
+                        .Metadata.SetValueComparer(jsonDocumentComparer);
+                    entity.Property(e => e.PhotoUrls)
+                        .HasConversion(jsonDocumentConverter)
+                        .Metadata.SetValueComparer(jsonDocumentComparer);
+                }
+
+                entity.HasOne(e => e.InfrastructureAsset)
+                    .WithMany()
+                    .HasForeignKey(e => e.InfrastructureAssetId)
+                    .OnDelete(DeleteBehavior.Cascade);
+                entity.HasIndex(e => new { e.InfrastructureAssetId, e.Status, e.SubmittedAtUtc })
+                    .HasDatabaseName("IX_accessibility_verifications_asset_status_submitted");
             });
 
             builder.Entity<FeedIngestionRun>(entity =>

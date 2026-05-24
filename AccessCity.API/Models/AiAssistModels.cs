@@ -55,3 +55,15 @@ public sealed class RouteExplanationResponse
     public List<string> Limitations { get; set; } = new();
     public DateTime GeneratedAtUtc { get; set; } = DateTime.UtcNow;
 }
+
+public sealed class AccessibilityAiReviewResult
+{
+    public long InfrastructureAssetId { get; set; }
+    public bool ForRouteDecision { get; set; }
+    public string Provider { get; set; } = "local-rules";
+    public DateTime GeneratedAtUtc { get; set; } = DateTime.UtcNow;
+    public string AdminSummary { get; set; } = string.Empty;
+    public List<MissingOsmAttributeCandidate> MissingAttributeCandidates { get; set; } = new();
+    public List<string> VerificationChecklist { get; set; } = new();
+    public List<string> Guardrails { get; set; } = new();
+}

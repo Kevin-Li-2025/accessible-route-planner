@@ -10,6 +10,7 @@ public static class MapsModule
 
         services.AddScoped<IMapTileService, MapTileService>();
         services.AddScoped<ISpatialQueryService, SpatialQueryService>();
+        services.AddScoped<IAccessibilityVerificationService, AccessibilityVerificationService>();
         services.AddScoped<IOfflineMapBundleService, OfflineMapBundleService>();
 
         if (configuration.GetValue("Workers:TileWarming:Enabled", true))

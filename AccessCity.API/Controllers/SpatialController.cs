@@ -2,7 +2,10 @@ using AccessCity.API.Common;
 using AccessCity.API.Models;
 using AccessCity.API.Services;
 using Asp.Versioning;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 
 namespace AccessCity.API.Controllers;
 
@@ -15,10 +18,14 @@ namespace AccessCity.API.Controllers;
 public class SpatialController : ControllerBase
 {
     private readonly ISpatialQueryService _spatialQueries;
+    private readonly IAccessibilityVerificationService _accessibilityVerifications;
 
-    public SpatialController(ISpatialQueryService spatialQueries)
+    public SpatialController(
+        ISpatialQueryService spatialQueries,
+        IAccessibilityVerificationService accessibilityVerifications)
     {
         _spatialQueries = spatialQueries;
+        _accessibilityVerifications = accessibilityVerifications;
     }
 
     /// <summary>
@@ -61,5 +68,65 @@ public class SpatialController : ControllerBase
         return overlay is null
             ? BadRequest(new ApiError("Supported layers: hazards, infrastructure."))
             : Ok(overlay);
+    }
+
+    /// <summary>
+    /// Returns the structured accessibility profile for an infrastructure asset.
+    /// </summary>
+    [HttpGet("infrastructure/{assetId:long}/accessibility-profile")]
+    [ProducesResponseType(typeof(InfrastructureAccessibilityProfile), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiError), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<InfrastructureAccessibilityProfile>> GetAccessibilityProfile(
+        long assetId,
+        CancellationToken cancellationToken = default)
+    {
+        var profile = await _accessibilityVerifications.GetProfileAsync(assetId, cancellationToken);
+        return profile is null ? NotFound(new ApiError("Infrastructure asset not found.")) : Ok(profile);
+    }
+
+    /// <summary>
+    /// Submits field-verified accessibility data for review. The submission is auditable and
+    /// does not alter routing graph edge costs.
+    /// </summary>
+    [Authorize]
+    [HttpPost("infrastructure/{assetId:long}/accessibility-verifications")]
+    [ProducesResponseType(typeof(AccessibilityVerificationResponse), StatusCodes.Status202Accepted)]
+    [ProducesResponseType(typeof(ApiError), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<AccessibilityVerificationResponse>> SubmitAccessibilityVerification(
+        long assetId,
+        [FromBody] AccessibilityVerificationRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var response = await _accessibilityVerifications.SubmitAsync(
+            assetId,
+            request,
+            ResolveUserId(),
+            cancellationToken);
+
+        return response is null
+            ? NotFound(new ApiError("Infrastructure asset not found."))
+            : Accepted(response);
+    }
+
+    /// <summary>
+    /// Lists recent accessibility verification submissions for an infrastructure asset.
+    /// </summary>
+    [Authorize]
+    [HttpGet("infrastructure/{assetId:long}/accessibility-verifications")]
+    [ProducesResponseType(typeof(IEnumerable<AccessibilityVerificationResponse>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IEnumerable<AccessibilityVerificationResponse>>> GetAccessibilityVerifications(
+        long assetId,
+        CancellationToken cancellationToken = default)
+    {
+        var submissions = await _accessibilityVerifications.ListAsync(assetId, cancellationToken);
+        return Ok(submissions);
+    }
+
+    private string ResolveUserId()
+    {
+        return User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? User.FindFirstValue(JwtRegisteredClaimNames.NameId)
+            ?? User.Identity?.Name
+            ?? "unknown";
     }
 }

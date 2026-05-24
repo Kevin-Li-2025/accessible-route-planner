@@ -664,6 +664,42 @@ public static class WebApplicationExtensions
                     END IF;
                 END IF;
 
+                CREATE TABLE IF NOT EXISTS public.accessibility_verification_submissions
+                (
+                    "Id" uuid NOT NULL,
+                    "InfrastructureAssetId" bigint NOT NULL,
+                    "SubmittedByUserId" character varying(450) NOT NULL,
+                    "Source" character varying(100) NOT NULL,
+                    "Status" character varying(50) NOT NULL,
+                    "SubmittedAtUtc" timestamp with time zone NOT NULL,
+                    "ObservedAtUtc" timestamp with time zone NULL,
+                    "ReviewedAtUtc" timestamp with time zone NULL,
+                    "ReviewedByUserId" character varying(450) NULL,
+                    "AppliedAtUtc" timestamp with time zone NULL,
+                    "Notes" text NULL,
+                    "Confidence" double precision NOT NULL,
+                    "AttributeUpdates" jsonb NOT NULL DEFAULT '{{}}'::jsonb,
+                    "PhotoUrls" jsonb NOT NULL DEFAULT '[]'::jsonb,
+                    CONSTRAINT "PK_accessibility_verification_submissions" PRIMARY KEY ("Id")
+                );
+
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conname = 'FK_accessibility_verification_submissions_infrastructure_assets_InfrastructureAssetId'
+                ) AND EXISTS (
+                    SELECT 1
+                    FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                      AND table_name = 'infrastructure_assets'
+                ) THEN
+                    ALTER TABLE public.accessibility_verification_submissions
+                        ADD CONSTRAINT "FK_accessibility_verification_submissions_infrastructure_assets_InfrastructureAssetId"
+                        FOREIGN KEY ("InfrastructureAssetId")
+                        REFERENCES public.infrastructure_assets ("Id")
+                        ON DELETE CASCADE;
+                END IF;
+
                 CREATE TABLE IF NOT EXISTS public.osm_import_jobs
                 (
                     id uuid NOT NULL,
@@ -736,6 +772,9 @@ public static class WebApplicationExtensions
 
             CREATE INDEX IF NOT EXISTS "IX_infrastructure_assets_last_observed_at"
                 ON public.infrastructure_assets ("LastObservedAt" DESC);
+
+            CREATE INDEX IF NOT EXISTS "IX_accessibility_verifications_asset_status_submitted"
+                ON public.accessibility_verification_submissions ("InfrastructureAssetId", "Status", "SubmittedAtUtc" DESC);
 
             CREATE INDEX IF NOT EXISTS "IX_route_edges_geometry_gist"
                 ON public.route_edges USING GIST ("Geometry");

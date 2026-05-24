@@ -35,6 +35,8 @@ public class SchemaAlignmentTests : IClassFixture<AccessCityApiFactory>
         Assert.True(await ColumnExistsAsync(connection, "infrastructure_assets", "AccessibilityProfile"));
         Assert.True(await IndexExistsAsync(connection, "IX_infrastructure_assets_accessibility_profile_gin"));
         Assert.True(await IndexExistsAsync(connection, "IX_infrastructure_assets_last_observed_at"));
+        Assert.True(await TableExistsAsync(connection, "accessibility_verification_submissions"));
+        Assert.True(await IndexExistsAsync(connection, "IX_accessibility_verifications_asset_status_submitted"));
     }
 
     private static async Task<bool> TableExistsAsync(NpgsqlConnection connection, string tableName)

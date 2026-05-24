@@ -15,6 +15,11 @@ public interface IAiAssistService
     Task<RouteExplanationResponse> ExplainRouteAsync(
         RouteExplanationRequest request,
         CancellationToken cancellationToken);
+
+    Task<AccessibilityAiReviewResult> ReviewAccessibilityProfileAsync(
+        long infrastructureAssetId,
+        InfrastructureAccessibilityProfile profile,
+        CancellationToken cancellationToken);
 }
 
 public sealed partial class AiAssistService : IAiAssistService
@@ -180,6 +185,34 @@ public sealed partial class AiAssistService : IAiAssistService
         });
     }
 
+    public Task<AccessibilityAiReviewResult> ReviewAccessibilityProfileAsync(
+        long infrastructureAssetId,
+        InfrastructureAccessibilityProfile profile,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var candidates = BuildAccessibilityCandidates(profile);
+        var checklist = BuildAccessibilityChecklist(profile, candidates);
+
+        return Task.FromResult(new AccessibilityAiReviewResult
+        {
+            InfrastructureAssetId = infrastructureAssetId,
+            ForRouteDecision = false,
+            Provider = _options.Provider,
+            GeneratedAtUtc = DateTime.UtcNow,
+            AdminSummary = BuildAccessibilityAdminSummary(profile, candidates.Count, checklist.Count),
+            MissingAttributeCandidates = candidates,
+            VerificationChecklist = checklist,
+            Guardrails =
+            [
+                "Accessibility review is advisory and cannot generate routes.",
+                "Suggested attributes require human verification before profile updates.",
+                "Applying a verification updates facility metadata only; routing edge costs remain deterministic."
+            ]
+        });
+    }
+
     private List<DuplicateHazardSuggestion> FindDuplicates(
         HazardReport hazard,
         IReadOnlyCollection<HazardReport> nearbyHazards,
@@ -271,6 +304,100 @@ public sealed partial class AiAssistService : IAiAssistService
             .OrderByDescending(candidate => candidate.Confidence)
             .ThenBy(candidate => candidate.Attribute, StringComparer.Ordinal)
             .ToList();
+    }
+
+    private List<MissingOsmAttributeCandidate> BuildAccessibilityCandidates(InfrastructureAccessibilityProfile profile)
+    {
+        var candidates = new List<MissingOsmAttributeCandidate>();
+        var missing = profile.MissingFields.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (missing.Contains("surface"))
+        {
+            AddCandidate(candidates, "surface", "verify_material", 0.74, "Surface is missing; route comfort and wheelchair usefulness depend on material.", "accessibility_profile_gap");
+        }
+
+        if (missing.Contains("smoothness"))
+        {
+            AddCandidate(candidates, "smoothness", "verify_surface_quality", 0.72, "Smoothness is missing; uneven pavement can be more important than route distance.", "accessibility_profile_gap");
+        }
+
+        if (missing.Contains("width_metres") || missing.Contains("door_width_metres") || missing.Contains("toilets_door_width_metres"))
+        {
+            AddCandidate(candidates, "width_metres", "measure_clear_width", 0.78, "Clear width is missing; wheelchair, stroller, and mobility-aid users need measured passable width.", "accessibility_profile_gap");
+        }
+
+        if (missing.Contains("kerb") || missing.Contains("curb_ramp"))
+        {
+            AddCandidate(candidates, "curb_ramp", "verify_flush_or_lowered", 0.80, "Curb ramp / kerb data is missing; crossings with raised kerbs can invalidate accessible routes.", "accessibility_profile_gap");
+        }
+
+        if (missing.Contains("incline_percent"))
+        {
+            AddCandidate(candidates, "incline", "measure_percent_grade", 0.68, "Incline is missing; slope changes travel feasibility for manual wheelchair users.", "accessibility_profile_gap");
+        }
+
+        if (missing.Contains("tactile_paving"))
+        {
+            AddCandidate(candidates, "tactile_paving", "verify_present_absent", 0.64, "Tactile paving is missing; blind and low-vision users need crossing cues.", "accessibility_profile_gap");
+        }
+
+        if (missing.Contains("toilets_wheelchair_access") || missing.Contains("toilets_grab_bars"))
+        {
+            AddCandidate(candidates, "toilets:wheelchair", "verify_accessible_toilet_features", 0.76, "Accessible restroom details are incomplete; verify wheelchair access, grab bars, and turning space.", "accessibility_profile_gap");
+        }
+
+        if (missing.Contains("last_verified_at"))
+        {
+            AddCandidate(candidates, "last_verified_at", "field_verify", 0.70, "Profile has no verification timestamp; recent field verification improves trust.", "accessibility_profile_gap");
+        }
+
+        if (profile.Photos.Count == 0)
+        {
+            AddCandidate(candidates, "photos", "add_field_photo", 0.62, "No field photo is attached; photos improve admin review and duplicate resolution.", "accessibility_profile_gap");
+        }
+
+        return candidates
+            .Where(candidate => candidate.Confidence >= _options.MinimumCandidateConfidence)
+            .OrderByDescending(candidate => candidate.Confidence)
+            .ThenBy(candidate => candidate.Attribute, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static List<string> BuildAccessibilityChecklist(
+        InfrastructureAccessibilityProfile profile,
+        IReadOnlyCollection<MissingOsmAttributeCandidate> candidates)
+    {
+        var checklist = new List<string>();
+        foreach (var candidate in candidates.Take(8))
+        {
+            checklist.Add(candidate.Attribute switch
+            {
+                "surface" => "Record the sidewalk or facility surface material using controlled values such as asphalt, concrete, paving_stones, gravel, or cobblestone.",
+                "smoothness" => "Record surface smoothness from excellent/good/intermediate/bad/very_bad based on wheel and mobility-aid comfort.",
+                "width_metres" => "Measure the narrowest clear passable width in metres, not the nominal pavement width.",
+                "curb_ramp" => "At crossings, verify whether kerbs are flush/lowered/rolled/raised and estimate kerb height if raised.",
+                "incline" => "Measure or estimate grade percentage and note if slope direction is unclear.",
+                "tactile_paving" => "Mark tactile paving as present or absent at crossing decision points.",
+                "toilets:wheelchair" => "Verify wheelchair access, door width, grab bars, turning space, key requirement, and changing table.",
+                "photos" => "Attach a clear field photo of the entrance, crossing, toilet, or obstruction without exposing private personal data.",
+                _ => $"Verify {candidate.Attribute} with direct field evidence."
+            });
+        }
+
+        if (profile.Confidence < 0.6)
+        {
+            checklist.Add("Treat this profile as low confidence until at least one recent field verification is applied.");
+        }
+
+        return checklist;
+    }
+
+    private static string BuildAccessibilityAdminSummary(
+        InfrastructureAccessibilityProfile profile,
+        int candidateCount,
+        int checklistCount)
+    {
+        return $"Accessibility profile {profile.VerificationStatus} at confidence {profile.Confidence:0.00}; {profile.MissingFields.Count} missing field(s), {candidateCount} review candidate(s), {checklistCount} checklist item(s).";
     }
 
     private static void AddCandidate(

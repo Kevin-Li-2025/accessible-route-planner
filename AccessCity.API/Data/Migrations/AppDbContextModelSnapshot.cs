@@ -328,6 +328,68 @@ namespace AccessCity.API.Data.Migrations
                     b.ToTable("infrastructure_assets", (string)null);
                 });
 
+            modelBuilder.Entity("AccessCity.API.Models.AccessibilityVerificationSubmission", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("AppliedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<JsonDocument>("AttributeUpdates")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<double>("Confidence")
+                        .HasColumnType("double precision");
+
+                    b.Property<long>("InfrastructureAssetId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("ObservedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<JsonDocument>("PhotoUrls")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<DateTime?>("ReviewedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ReviewedByUserId")
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<DateTime>("SubmittedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("SubmittedByUserId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InfrastructureAssetId", "Status", "SubmittedAtUtc")
+                        .HasDatabaseName("IX_accessibility_verifications_asset_status_submitted");
+
+                    b.ToTable("accessibility_verification_submissions", (string)null);
+                });
+
             modelBuilder.Entity("AccessCity.API.Models.RouteEdge", b =>
                 {
                     b.Property<long>("Id")
@@ -547,6 +609,17 @@ namespace AccessCity.API.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("AccessCity.API.Models.AccessibilityVerificationSubmission", b =>
+                {
+                    b.HasOne("AccessCity.API.Models.InfrastructureAsset", "InfrastructureAsset")
+                        .WithMany()
+                        .HasForeignKey("InfrastructureAssetId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("InfrastructureAsset");
                 });
 
             modelBuilder.Entity("AccessCity.API.Models.RouteEdge", b =>
