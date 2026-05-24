@@ -32,6 +32,9 @@ public class SchemaAlignmentTests : IClassFixture<AccessCityApiFactory>
         Assert.True(await IndexExistsAsync(connection, "IX_infrastructure_assets_geometry_gist"));
         Assert.True(await IndexExistsAsync(connection, "IX_route_edges_geometry_gist"));
         Assert.True(await IndexExistsAsync(connection, "IX_route_nodes_location_gist"));
+        Assert.True(await ColumnExistsAsync(connection, "infrastructure_assets", "AccessibilityProfile"));
+        Assert.True(await IndexExistsAsync(connection, "IX_infrastructure_assets_accessibility_profile_gin"));
+        Assert.True(await IndexExistsAsync(connection, "IX_infrastructure_assets_last_observed_at"));
     }
 
     private static async Task<bool> TableExistsAsync(NpgsqlConnection connection, string tableName)

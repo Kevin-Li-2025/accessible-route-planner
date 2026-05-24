@@ -95,7 +95,8 @@ public sealed class SpatialQueryService : ISpatialQueryService
                 asset.AssetType,
                 centroid.Y,
                 centroid.X,
-                ParseTags(asset.AccessibilityInfo));
+                ParseTags(asset.AccessibilityInfo),
+                AccessibilityProfileMapper.Parse(asset.AccessibilityProfile));
         }).ToArray();
     }
 
@@ -156,7 +157,8 @@ public sealed class SpatialQueryService : ISpatialQueryService
                         asset.AssetType,
                         asset.Name,
                         asset.Status,
-                        AccessibilityTags = ParseTags(asset.AccessibilityInfo)
+                        AccessibilityTags = ParseTags(asset.AccessibilityInfo),
+                        AccessibilityProfile = AccessibilityProfileMapper.Parse(asset.AccessibilityProfile)
                     }
                 }).ToList()
             };
@@ -182,7 +184,8 @@ public sealed class SpatialQueryService : ISpatialQueryService
             Name = cached.Name,
             Category = cached.Category,
             Location = Wgs84.CreatePoint(new Coordinate(cached.Longitude, cached.Latitude)),
-            AccessibilityTags = cached.AccessibilityTags
+            AccessibilityTags = cached.AccessibilityTags,
+            AccessibilityProfile = cached.AccessibilityProfile
         };
     }
 
@@ -207,5 +210,6 @@ public sealed class SpatialQueryService : ISpatialQueryService
         string Category,
         double Latitude,
         double Longitude,
-        Dictionary<string, string> AccessibilityTags);
+        Dictionary<string, string> AccessibilityTags,
+        InfrastructureAccessibilityProfile AccessibilityProfile);
 }

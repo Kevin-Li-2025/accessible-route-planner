@@ -57,6 +57,25 @@ public class OsmImportTests : IClassFixture<AccessCityApiFactory>
         Assert.True(await dbContext.RouteEdges.CountAsync() > 0);
         Assert.True(await dbContext.InfrastructureAssets.CountAsync() > 0);
 
+        var accessibleToilet = await dbContext.InfrastructureAssets
+            .Where(asset => asset.SourceRecordId == "node:1004")
+            .FirstAsync();
+        var accessibilityProfile = AccessibilityProfileMapper.Parse(accessibleToilet.AccessibilityProfile);
+        Assert.Equal(AccessibilityProfileMapper.SchemaVersion, accessibilityProfile.SchemaVersion);
+        Assert.Equal("osm", accessibilityProfile.SourceSystem);
+        Assert.Equal("node:1004", accessibilityProfile.SourceRecordId);
+        Assert.NotNull(accessibilityProfile.LastVerifiedAtUtc);
+        Assert.True(accessibilityProfile.Confidence >= 0.75);
+        Assert.Equal("verified", accessibilityProfile.VerificationStatus);
+        Assert.Single(accessibilityProfile.Entrances);
+        Assert.Single(accessibilityProfile.Restrooms);
+        Assert.Single(accessibilityProfile.Photos);
+        Assert.True(accessibilityProfile.Entrances[0].StepFree);
+        Assert.Equal(0.9, accessibilityProfile.Entrances[0].DoorWidthMetres.GetValueOrDefault(), precision: 1);
+        Assert.True(accessibilityProfile.Restrooms[0].WheelchairAccessible);
+        Assert.True(accessibilityProfile.Restrooms[0].HasGrabBars);
+        Assert.DoesNotContain("toilets_wheelchair_access", accessibilityProfile.MissingFields);
+
         var accessibleEdge = await dbContext.RouteEdges
             .Where(edge => edge.SourceWayId == 2001)
             .FirstAsync();
@@ -162,11 +181,15 @@ public class OsmImportTests : IClassFixture<AccessCityApiFactory>
         poiResponse.EnsureSuccessStatusCode();
         var poiContent = await poiResponse.Content.ReadAsStringAsync();
         Assert.Contains("amenity", poiContent);
+        Assert.Contains("accessibilityProfile", poiContent);
+        Assert.Contains("restrooms", poiContent);
+        Assert.Contains("lastVerifiedAtUtc", poiContent);
 
         var overlayResponse = await client.GetAsync("/api/v1/spatial/map-overlay?layerName=infrastructure");
         overlayResponse.EnsureSuccessStatusCode();
         var overlayContent = await overlayResponse.Content.ReadAsStringAsync();
         Assert.Contains("FeatureCollection", overlayContent);
         Assert.Contains("infrastructure", overlayContent);
+        Assert.Contains("accessibilityProfile", overlayContent);
     }
 }

@@ -10,6 +10,7 @@ namespace AccessCity.API.Models
         public string Category { get; set; } = null!;
         public Point Location { get; set; } = null!;
         public Dictionary<string, string> AccessibilityTags { get; set; } = new();
+        public InfrastructureAccessibilityProfile AccessibilityProfile { get; set; } = new();
     }
 
     public sealed class MapOverlayFeature

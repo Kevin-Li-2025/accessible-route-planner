@@ -650,6 +650,20 @@ public static class WebApplicationExtensions
                     END IF;
                 END IF;
 
+                -- Infrastructure accessibility profile for fine-grained facility, entrance, restroom, photo, and verification metadata.
+                IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'infrastructure_assets') THEN
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'infrastructure_assets'
+                          AND column_name = 'AccessibilityProfile'
+                    ) THEN
+                        ALTER TABLE public.infrastructure_assets
+                            ADD COLUMN "AccessibilityProfile" jsonb NOT NULL DEFAULT '{{}}'::jsonb;
+                    END IF;
+                END IF;
+
                 CREATE TABLE IF NOT EXISTS public.osm_import_jobs
                 (
                     id uuid NOT NULL,
@@ -716,6 +730,12 @@ public static class WebApplicationExtensions
 
             CREATE INDEX IF NOT EXISTS "IX_infrastructure_assets_updated_at"
                 ON public.infrastructure_assets ("UpdatedAt" DESC);
+
+            CREATE INDEX IF NOT EXISTS "IX_infrastructure_assets_accessibility_profile_gin"
+                ON public.infrastructure_assets USING GIN ("AccessibilityProfile");
+
+            CREATE INDEX IF NOT EXISTS "IX_infrastructure_assets_last_observed_at"
+                ON public.infrastructure_assets ("LastObservedAt" DESC);
 
             CREATE INDEX IF NOT EXISTS "IX_route_edges_geometry_gist"
                 ON public.route_edges USING GIST ("Geometry");

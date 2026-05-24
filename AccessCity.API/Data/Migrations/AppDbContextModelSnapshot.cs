@@ -281,6 +281,10 @@ namespace AccessCity.API.Data.Migrations
                         .IsRequired()
                         .HasColumnType("jsonb");
 
+                    b.Property<JsonDocument>("AccessibilityProfile")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
                     b.Property<string>("AssetType")
                         .IsRequired()
                         .HasMaxLength(100)

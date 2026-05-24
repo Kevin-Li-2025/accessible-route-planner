@@ -435,15 +435,18 @@ public sealed class OsmImportService : IOsmImportService
             ? _geometryFactory.CreatePoint(points[0])
             : _geometryFactory.CreateLineString(points.ToArray());
 
+        var sourceRecordId = $"way:{way.Id}";
+        var lastObservedAt = NormalizeOsmTimestamp(way.TimeStamp);
         asset = new InfrastructureAsset
         {
             AssetType = assetType,
             Name = tags.GetValueOrDefault("name"),
             Geometry = geometry,
             SourceSystem = "osm",
-            SourceRecordId = $"way:{way.Id}",
-            LastObservedAt = NormalizeOsmTimestamp(way.TimeStamp),
-            AccessibilityInfo = ToJsonDocument(tags)
+            SourceRecordId = sourceRecordId,
+            LastObservedAt = lastObservedAt,
+            AccessibilityInfo = ToJsonDocument(tags),
+            AccessibilityProfile = BuildAccessibilityProfileDocument(tags, assetType, sourceRecordId, lastObservedAt)
         };
 
         return true;
@@ -476,15 +479,18 @@ public sealed class OsmImportService : IOsmImportService
             return false;
         }
 
+        var sourceRecordId = $"node:{node.Id.Value}";
+        var lastObservedAt = NormalizeOsmTimestamp(node.TimeStamp);
         asset = new InfrastructureAsset
         {
             AssetType = assetType,
             Name = tags.GetValueOrDefault("name"),
             Geometry = CreatePoint(node.Longitude.Value, node.Latitude.Value),
             SourceSystem = "osm",
-            SourceRecordId = $"node:{node.Id.Value}",
-            LastObservedAt = NormalizeOsmTimestamp(node.TimeStamp),
-            AccessibilityInfo = ToJsonDocument(tags)
+            SourceRecordId = sourceRecordId,
+            LastObservedAt = lastObservedAt,
+            AccessibilityInfo = ToJsonDocument(tags),
+            AccessibilityProfile = BuildAccessibilityProfileDocument(tags, assetType, sourceRecordId, lastObservedAt)
         };
 
         return true;
@@ -1055,6 +1061,7 @@ public sealed class OsmImportService : IOsmImportService
                 "Geometry",
                 "Status",
                 "AccessibilityInfo",
+                "AccessibilityProfile",
                 "SourceSystem",
                 "SourceRecordId",
                 "LastObservedAt",
@@ -1072,6 +1079,7 @@ public sealed class OsmImportService : IOsmImportService
             await writer.WriteAsync(asset.Geometry, NpgsqlDbType.Geometry, cancellationToken);
             await writer.WriteAsync(asset.Status, NpgsqlDbType.Varchar, cancellationToken);
             await writer.WriteAsync(ToJson(asset.AccessibilityInfo), NpgsqlDbType.Jsonb, cancellationToken);
+            await writer.WriteAsync(ToJson(asset.AccessibilityProfile), NpgsqlDbType.Jsonb, cancellationToken);
             await writer.WriteAsync(asset.SourceSystem, NpgsqlDbType.Varchar, cancellationToken);
             await WriteNullableStringAsync(writer, asset.SourceRecordId, NpgsqlDbType.Varchar, cancellationToken);
             await WriteNullableDateTimeAsync(writer, asset.LastObservedAt, cancellationToken);
@@ -1143,6 +1151,22 @@ public sealed class OsmImportService : IOsmImportService
     private static JsonDocument ToJsonDocument(IReadOnlyDictionary<string, string> data)
     {
         return JsonSerializer.SerializeToDocument(data);
+    }
+
+    private static JsonDocument BuildAccessibilityProfileDocument(
+        IReadOnlyDictionary<string, string> tags,
+        string assetType,
+        string? sourceRecordId,
+        DateTime? lastObservedAt)
+    {
+        var profile = AccessibilityProfileMapper.BuildFromOsmTags(
+            tags,
+            assetType,
+            "osm",
+            sourceRecordId,
+            lastObservedAt);
+
+        return AccessibilityProfileMapper.ToJsonDocument(profile);
     }
 
     private static string ToJson(JsonDocument document)

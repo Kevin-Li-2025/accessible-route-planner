@@ -11,6 +11,7 @@ public class InfrastructureAsset
     public Geometry Geometry { get; set; } = null!;
     public string Status { get; set; } = "active";
     public JsonDocument AccessibilityInfo { get; set; } = JsonDocument.Parse("{}");
+    public JsonDocument AccessibilityProfile { get; set; } = JsonDocument.Parse("{}");
     public string SourceSystem { get; set; } = string.Empty;
     public string? SourceRecordId { get; set; }
     public DateTime? LastObservedAt { get; set; }

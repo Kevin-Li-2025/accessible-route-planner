@@ -56,10 +56,14 @@ public class RoutingDbContext : DbContext
             {
                 entity.Property(e => e.Geometry).HasColumnType("geometry(Geometry,4326)");
                 entity.Property(e => e.AccessibilityInfo).HasColumnType("jsonb");
+                entity.Property(e => e.AccessibilityProfile).HasColumnType("jsonb");
             }
             else
             {
                 entity.Property(e => e.AccessibilityInfo)
+                    .HasConversion(jsonDocumentConverter)
+                    .Metadata.SetValueComparer(jsonDocumentComparer);
+                entity.Property(e => e.AccessibilityProfile)
                     .HasConversion(jsonDocumentConverter)
                     .Metadata.SetValueComparer(jsonDocumentComparer);
             }

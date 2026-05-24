@@ -9,6 +9,14 @@
   <node id="1004" lat="52.48645" lon="-1.8899">
     <tag k="amenity" v="toilets" />
     <tag k="wheelchair" v="yes" />
+    <tag k="toilets:wheelchair" v="yes" />
+    <tag k="toilets:door:width" v="0.9" />
+    <tag k="toilets:grab_bar" v="yes" />
+    <tag k="changing_table" v="no" />
+    <tag k="entrance" v="main" />
+    <tag k="door:width" v="0.9" />
+    <tag k="check_date" v="2026-01-15" />
+    <tag k="image" v="https://example.com/access-toilet.jpg" />
     <tag k="name" v="Accessible Toilets" />
   </node>
   <node id="1005" lat="52.4860" lon="-1.8899">
