@@ -55,7 +55,7 @@ public sealed class H3HazardRiskGrid : IHazardRiskGrid
         var latLng = new LatLng(latitude * DegreesToRadians, longitude * DegreesToRadians);
         var index = H3Index.FromLatLng(latLng, H3Resolution);
 
-        return snapshot.Cells.TryGetValue(index, out var risk) ? risk : 0.0;
+        return snapshot.Cells.TryGetValue((ulong)index, out var risk) ? risk : 0.0;
     }
 
     /// <summary>
@@ -69,13 +69,13 @@ public sealed class H3HazardRiskGrid : IHazardRiskGrid
         if (allHazards.Count == 0)
         {
             _snapshot = new H3GridSnapshot(
-                new Dictionary<H3Index, double>(), true);
+                new Dictionary<ulong, double>(), true);
             return;
         }
 
         // Collect all H3 cells that need risk values.
         // Using a HashSet to deduplicate cells in overlapping disk rings.
-        var cellsToCompute = new HashSet<H3Index>();
+        var cellsToCompute = new HashSet<ulong>();
 
         foreach (var hazard in allHazards)
         {
@@ -89,16 +89,17 @@ public sealed class H3HazardRiskGrid : IHazardRiskGrid
             // GridDiskDistances returns (index, distance) tuples for k-ring
             foreach (var ringCell in Rings.GridDiskDistances(center, DiskRingK))
             {
-                cellsToCompute.Add(ringCell.Index);
+                cellsToCompute.Add((ulong)ringCell.Index);
             }
         }
 
         // Compute risk for each unique H3 cell
-        var newCells = new Dictionary<H3Index, double>(cellsToCompute.Count);
+        var newCells = new Dictionary<ulong, double>(cellsToCompute.Count);
 
         foreach (var cell in cellsToCompute)
         {
-            var cellCenter = cell.ToLatLng();
+            var cellIndex = new H3Index(cell);
+            var cellCenter = cellIndex.ToLatLng();
             double cellLatDeg = cellCenter.Latitude / DegreesToRadians;
             double cellLonDeg = cellCenter.Longitude / DegreesToRadians;
 
@@ -133,10 +134,10 @@ public sealed class H3HazardRiskGrid : IHazardRiskGrid
     }
 
     private sealed record H3GridSnapshot(
-        IReadOnlyDictionary<H3Index, double> Cells,
+        IReadOnlyDictionary<ulong, double> Cells,
         bool IsReady)
     {
         public static readonly H3GridSnapshot Empty =
-            new(new Dictionary<H3Index, double>(), false);
+            new(new Dictionary<ulong, double>(), false);
     }
 }
