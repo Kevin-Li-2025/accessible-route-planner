@@ -46,7 +46,7 @@ class Example:
     target: float
 
 
-class AccessibilityDataset(Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]):
+class AccessibilityDataset(Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]):
     def __init__(self, dataset: Any, transform: transforms.Compose, weak_cross_task_negatives: bool):
         self.dataset = dataset
         self.transform = transform
@@ -55,7 +55,7 @@ class AccessibilityDataset(Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tenso
     def __len__(self) -> int:
         return len(self.dataset)
 
-    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         row = self.dataset[index]
         image = row["image"]
         if not isinstance(image, Image.Image):
@@ -64,6 +64,7 @@ class AccessibilityDataset(Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tenso
 
         targets = torch.zeros(len(TASKS), dtype=torch.float32)
         mask = torch.zeros(len(TASKS), dtype=torch.float32)
+        sample_weight = torch.full((len(TASKS),), float(row.get("sample_weight", 1.0)), dtype=torch.float32)
         task_id = int(row["task_id"])
         target = float(row["target"])
         targets[task_id] = target
@@ -71,7 +72,7 @@ class AccessibilityDataset(Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tenso
             mask[:] = 1.0
         else:
             mask[task_id] = 1.0
-        return self.transform(image), targets, mask
+        return self.transform(image), targets, mask, sample_weight
 
 
 def parse_args() -> argparse.Namespace:
@@ -323,9 +324,10 @@ def masked_bce_loss(
     mask: torch.Tensor,
     pos_weight: torch.Tensor,
     task_loss_weight: torch.Tensor,
+    sample_weight: torch.Tensor,
 ) -> torch.Tensor:
     raw = nn.functional.binary_cross_entropy_with_logits(logits, targets, reduction="none", pos_weight=pos_weight)
-    weighted_mask = mask * task_loss_weight
+    weighted_mask = mask * task_loss_weight * sample_weight
     return (raw * weighted_mask).sum() / torch.clamp(weighted_mask.sum(), min=1.0)
 
 
@@ -339,7 +341,7 @@ def collect_logits_and_targets(
     per_task_logits: list[list[float]] = [[] for _ in TASKS]
     per_task_targets: list[list[int]] = [[] for _ in TASKS]
 
-    for images, targets, mask in tqdm(loader, desc="calibrate", leave=False):
+    for images, targets, mask, _sample_weight in tqdm(loader, desc="calibrate", leave=False):
         images = images.to(device, non_blocking=True)
         logits = model(images).cpu()
         targets = targets.cpu()
@@ -409,7 +411,7 @@ def evaluate(
     per_task_targets: list[list[int]] = [[] for _ in TASKS]
     temperature_tensor = temperature_tensor_for_device(logit_temperatures, device)
 
-    for images, targets, mask in tqdm(loader, desc="eval", leave=False):
+    for images, targets, mask, _sample_weight in tqdm(loader, desc="eval", leave=False):
         images = images.to(device, non_blocking=True)
         logits = model(images)
         if temperature_tensor is not None:
@@ -630,15 +632,16 @@ def main() -> None:
         model.train()
         running_loss = 0.0
         batches = 0
-        for images, targets, mask in tqdm(train_loader, desc=f"epoch {epoch}/{args.epochs}"):
+        for images, targets, mask, sample_weight in tqdm(train_loader, desc=f"epoch {epoch}/{args.epochs}"):
             images = images.to(device, non_blocking=True)
             targets = targets.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
+            sample_weight = sample_weight.to(device, non_blocking=True)
 
             optimizer.zero_grad(set_to_none=True)
             with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
                 logits = model(images)
-                loss = masked_bce_loss(logits, targets, mask, pos_weight, task_loss_weight)
+                loss = masked_bce_loss(logits, targets, mask, pos_weight, task_loss_weight, sample_weight)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()

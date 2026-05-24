@@ -110,6 +110,28 @@ python mine_accessibility_vision_errors.py \
 
 The miner writes `summary.json`, `predictions.jsonl`, `hard_examples.jsonl`, copied review images, and contact sheets for false positives, false negatives, uncertain cases, and confident wrong predictions. It also reports threshold recommendations for precision targets such as 70%, 80%, and 90%. Use those outputs to drive the next labeling batch; do not train on the final holdout split.
 
+Build a human review queue from mined hard examples:
+
+```bash
+python build_accessibility_vision_review_queue.py \
+  --hard-examples runs/project-sidewalk-convnext-tiny-v1/hard-examples/production/hard_examples.jsonl \
+  --output-dir runs/project-sidewalk-convnext-tiny-v1/review-queue/production \
+  --limit-per-task-bucket 100
+```
+
+After reviewers fill `reviewed_target` with `0` or `1` and set `review_decision` to a non-empty value such as `corrected`, merge the reviewed labels into a training dataset copy:
+
+```bash
+python merge_accessibility_vision_reviews.py \
+  --dataset-root data/projectsidewalk-rampnet-balanced \
+  --reviews runs/project-sidewalk-convnext-tiny-v1/review-queue/production/review_queue.csv \
+  --output-dir data/projectsidewalk-rampnet-balanced-reviewed-v1 \
+  --target-split train \
+  --sample-weight 3.0
+```
+
+The merge tool refuses reviews sourced from `test` or `holdout` by default. This is intentional: final holdout can diagnose weak categories but must not feed training.
+
 Positive-only bootstrap:
 
 ```bash
