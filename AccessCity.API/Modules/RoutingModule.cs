@@ -9,6 +9,12 @@ public static class RoutingModule
     {
         services.Configure<RoutingOptions>(configuration.GetSection(RoutingOptions.SectionName));
 
+        services.AddSingleton<HazardSpatialIndex>();
+        services.AddSingleton<IHazardSpatialIndex>(sp => sp.GetRequiredService<HazardSpatialIndex>());
+        services.AddSingleton<HazardRiskGrid>();
+        services.AddSingleton<IHazardRiskGrid>(sp => sp.GetRequiredService<HazardRiskGrid>());
+        services.AddHostedService<HazardSpatialIndexRefreshBackgroundService>();
+
         services.AddSingleton<IRouteCoalescingService, RouteCoalescingService>();
         services.AddSingleton<IRouteComputationLimiter, RouteComputationLimiter>();
         services.AddSingleton<RouteJobService>();

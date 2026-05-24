@@ -413,6 +413,8 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
                 ORDER BY "Geometry" <-> ST_Centroid(ST_MakeEnvelope({region.MinLon}, {region.MinLat}, {region.MaxLon}, {region.MaxLat}, 4326))
                 LIMIT {edgeLimit + 1}
                 """)
+            .Include(e => e.FromNode)
+            .Include(e => e.ToNode)
             .AsNoTracking()
             .ToListAsync(cancellationToken);
 
@@ -427,33 +429,31 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
             edges = edges.Take(edgeLimit).ToList();
         }
 
-        var nodeIds = edges
-            .SelectMany(edge => new[] { edge.FromNodeId, edge.ToNodeId })
-            .Distinct()
-            .ToList();
-
-        var nodes = await dbContext.RouteNodes
-            .Where(node => nodeIds.Contains(node.Id))
-            .AsNoTracking()
-            .ToListAsync(cancellationToken);
-
-        var graph = nodes.ToDictionary(
-            node => node.Id,
-            node => new GraphNode
-            {
-                Id = node.Id,
-                Location = node.Location.Coordinate
-            });
+        var graph = new Dictionary<long, GraphNode>();
 
         foreach (var edge in edges)
         {
-            if (!graph.TryGetValue(edge.FromNodeId, out var fromNode) ||
-                !graph.ContainsKey(edge.ToNodeId))
+            if (edge.FromNode != null && !graph.ContainsKey(edge.FromNodeId))
             {
-                continue;
+                graph[edge.FromNodeId] = new GraphNode
+                {
+                    Id = edge.FromNodeId,
+                    Location = edge.FromNode.Location.Coordinate
+                };
+            }
+            if (edge.ToNode != null && !graph.ContainsKey(edge.ToNodeId))
+            {
+                graph[edge.ToNodeId] = new GraphNode
+                {
+                    Id = edge.ToNodeId,
+                    Location = edge.ToNode.Location.Coordinate
+                };
             }
 
-            fromNode.Edges[edge.ToNodeId] = CreateGraphEdge(edge);
+            if (graph.TryGetValue(edge.FromNodeId, out var fromNode) && graph.ContainsKey(edge.ToNodeId))
+            {
+                fromNode.Edges[edge.ToNodeId] = CreateGraphEdge(edge);
+            }
         }
 
         var graphData = new RouteGraphData

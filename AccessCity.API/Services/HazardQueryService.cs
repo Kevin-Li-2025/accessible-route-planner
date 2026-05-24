@@ -22,11 +22,16 @@ public interface IHazardQueryService
 public sealed class HazardQueryService : IHazardQueryService
 {
     private readonly AppDbContext _dbContext;
+    private readonly IHazardSpatialIndex _spatialIndex;
     private readonly RoutingOptions _routingOptions;
 
-    public HazardQueryService(AppDbContext dbContext, IOptions<RoutingOptions> routingOptions)
+    public HazardQueryService(
+        AppDbContext dbContext,
+        IHazardSpatialIndex spatialIndex,
+        IOptions<RoutingOptions> routingOptions)
     {
         _dbContext = dbContext;
+        _spatialIndex = spatialIndex;
         _routingOptions = routingOptions.Value;
     }
 
@@ -49,6 +54,15 @@ public sealed class HazardQueryService : IHazardQueryService
         var minLat = Math.Min(request.Start.Y, request.End.Y) - latitudePadding;
         var maxLat = Math.Max(request.Start.Y, request.End.Y) + latitudePadding;
         var limit = Math.Max(1, _routingOptions.MaxHazardsPerRequest);
+
+        // Fast-path: use the in-memory R-Tree spatial index when warmed up.
+        // This avoids hitting Postgres entirely on the routing hot path.
+        if (_spatialIndex.IsWarmedUp)
+        {
+            return _spatialIndex.QueryBoundingBox(minLon, minLat, maxLon, maxLat)
+                .Take(limit)
+                .ToList();
+        }
 
         if (_dbContext.Database.IsRelational())
         {
@@ -87,6 +101,14 @@ public sealed class HazardQueryService : IHazardQueryService
         var queryRadius = cappedRadius + Math.Max(0, _routingOptions.HazardQueryPaddingMetres);
         var limit = Math.Max(1, _routingOptions.MaxHazardsPerRequest);
 
+        // Fast-path: use the in-memory R-Tree spatial index when warmed up.
+        if (_spatialIndex.IsWarmedUp)
+        {
+            return _spatialIndex.QueryNearby(latitude, longitude, queryRadius)
+                .Take(limit)
+                .ToList();
+        }
+
         if (_dbContext.Database.IsRelational())
         {
             return await _dbContext.Hazards
@@ -114,6 +136,12 @@ public sealed class HazardQueryService : IHazardQueryService
 
     public async Task<List<HazardReport>> LoadActiveHazardsAsync(CancellationToken cancellationToken)
     {
+        // Prefer the in-memory snapshot when available to avoid hitting Postgres.
+        if (_spatialIndex.IsWarmedUp)
+        {
+            return _spatialIndex.GetAllActive().ToList();
+        }
+
         return await _dbContext.Hazards
             .Where(h => h.Status == HazardStatus.Reported || h.Status == HazardStatus.UnderReview)
             .AsNoTracking()

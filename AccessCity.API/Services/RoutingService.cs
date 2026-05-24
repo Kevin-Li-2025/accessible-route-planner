@@ -39,6 +39,7 @@ public class RoutingService : IRoutingService
     private readonly IRouteGraphStatusService _routeGraphStatus;
     private readonly IRiskTileCacheService _tileCache;
     private readonly IRouteCacheService _routeCache;
+    private readonly IHazardRiskGrid _hazardRiskGrid;
 
     private const double WalkingSpeed = 1.3;
     private const double MaxHeuristicSpeedMetresPerSecond = 2.0;
@@ -61,7 +62,8 @@ public class RoutingService : IRoutingService
         IRouteGraphRepository graphRepo,
         IRouteGraphStatusService routeGraphStatus,
         IRiskTileCacheService tileCache,
-        IRouteCacheService routeCache)
+        IRouteCacheService routeCache,
+        IHazardRiskGrid hazardRiskGrid)
     {
         _riskService = riskService;
         _aiRisk = aiRisk;
@@ -70,6 +72,7 @@ public class RoutingService : IRoutingService
         _routeGraphStatus = routeGraphStatus;
         _tileCache = tileCache;
         _routeCache = routeCache;
+        _hazardRiskGrid = hazardRiskGrid;
     }
 
     /// <summary>
@@ -1383,7 +1386,12 @@ public class RoutingService : IRoutingService
         {
             double midLat = (fromNode.Location.Y + toNode.Location.Y) / 2.0;
             double midLon = (fromNode.Location.X + toNode.Location.X) / 2.0;
-            liveRisk = _riskService.QuickRisk(midLat, midLon, hazards, radiusMetres: 200);
+
+            // O(1) grid lookup when the precomputed risk grid is available;
+            // falls back to the original O(N) QuickRisk linear scan otherwise.
+            liveRisk = _hazardRiskGrid.IsReady
+                ? _hazardRiskGrid.GetRisk(midLat, midLon)
+                : _riskService.QuickRisk(midLat, midLon, hazards, radiusMetres: 200);
             riskMemo[riskKey] = liveRisk;
         }
 
@@ -1556,7 +1564,10 @@ public class RoutingService : IRoutingService
 
                     double midLat = (fromNode.Location.Y + toNode.Location.Y) / 2.0;
                     double midLon = (fromNode.Location.X + toNode.Location.X) / 2.0;
-                    double riskAtMid = _riskService.QuickRisk(midLat, midLon, hazards, 150);
+                    // Use O(1) grid lookup for fallback mesh construction when available.
+                    double riskAtMid = _hazardRiskGrid.IsReady
+                        ? _hazardRiskGrid.GetRisk(midLat, midLon)
+                        : _riskService.QuickRisk(midLat, midLon, hazards, 150);
 
                     int seed = HashCode.Combine(
                         Math.Round(midLat, 5), Math.Round(midLon, 5));
