@@ -21,3 +21,15 @@ spec:
   selector:
     matchLabels:
       app: accesscity-worker
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: accesscity-vision-pdb
+  labels:
+    app: accesscity-vision
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: accesscity-vision

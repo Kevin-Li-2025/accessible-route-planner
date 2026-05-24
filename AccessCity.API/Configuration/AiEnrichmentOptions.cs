@@ -22,6 +22,9 @@ public sealed class AiEnrichmentOptions
     public int NebiusTimeoutSeconds { get; set; } = 8;
     public int NebiusMaxTokens { get; set; } = 700;
     public bool NebiusEnableImageInputs { get; set; }
+    public string VisionModelEndpoint { get; set; } = string.Empty;
+    public int VisionModelTimeoutSeconds { get; set; } = 5;
+    public double VisionModelMinimumConfidence { get; set; } = 0.55;
     public int MaxAccessibilityObservationChars { get; set; } = 2_000;
     public int MaxAccessibilityPhotos { get; set; } = 4;
 }

@@ -22,6 +22,7 @@ public interface IAccessibilityAiInferenceService
 public sealed class AccessibilityAiInferenceService : IAccessibilityAiInferenceService
 {
     private readonly LocalAccessibilityAiInferenceProvider _localProvider;
+    private readonly LocalVisionAccessibilityInferenceProvider _localVisionProvider;
     private readonly OpenAiAccessibilityInferenceProvider _openAiProvider;
     private readonly NebiusAccessibilityInferenceProvider _nebiusProvider;
     private readonly AiEnrichmentOptions _options;
@@ -29,12 +30,14 @@ public sealed class AccessibilityAiInferenceService : IAccessibilityAiInferenceS
 
     public AccessibilityAiInferenceService(
         LocalAccessibilityAiInferenceProvider localProvider,
+        LocalVisionAccessibilityInferenceProvider localVisionProvider,
         OpenAiAccessibilityInferenceProvider openAiProvider,
         NebiusAccessibilityInferenceProvider nebiusProvider,
         IOptions<AiEnrichmentOptions> options,
         ILogger<AccessibilityAiInferenceService> logger)
     {
         _localProvider = localProvider;
+        _localVisionProvider = localVisionProvider;
         _openAiProvider = openAiProvider;
         _nebiusProvider = nebiusProvider;
         _options = options.Value;
@@ -48,8 +51,25 @@ public sealed class AccessibilityAiInferenceService : IAccessibilityAiInferenceS
         CancellationToken cancellationToken)
     {
         var normalized = NormalizeRequest(request, _options);
+        var useLocalVision = string.Equals(_options.Provider, "local-vision", StringComparison.OrdinalIgnoreCase);
         var useOpenAi = string.Equals(_options.Provider, "openai", StringComparison.OrdinalIgnoreCase);
         var useNebius = string.Equals(_options.Provider, "nebius", StringComparison.OrdinalIgnoreCase);
+        if (useLocalVision && _localVisionProvider.IsConfigured)
+        {
+            try
+            {
+                return await _localVisionProvider.InferAsync(assetId, profile, normalized, cancellationToken);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException)
+            {
+                _logger.LogWarning(ex, "Local vision accessibility inference failed; falling back to local rules.");
+                var fallback = await _localProvider.InferAsync(assetId, profile, normalized, cancellationToken);
+                fallback.Provider = "local-vision:fallback-local-rules";
+                fallback.Limitations.Add("Local vision inference failed or timed out; local deterministic rules generated this fallback result.");
+                return fallback;
+            }
+        }
+
         if (useNebius && _nebiusProvider.IsConfigured)
         {
             try
@@ -83,7 +103,12 @@ public sealed class AccessibilityAiInferenceService : IAccessibilityAiInferenceS
         }
 
         var result = await _localProvider.InferAsync(assetId, profile, normalized, cancellationToken);
-        if (useOpenAi && !_openAiProvider.IsConfigured)
+        if (useLocalVision && !_localVisionProvider.IsConfigured)
+        {
+            result.Provider = "local-vision:unconfigured-local-rules";
+            result.Limitations.Add("Local vision provider is selected but no endpoint is configured; local deterministic rules generated this result.");
+        }
+        else if (useOpenAi && !_openAiProvider.IsConfigured)
         {
             result.Provider = "openai:unconfigured-local-rules";
             result.Limitations.Add("OpenAI provider is selected but no API key is configured; local deterministic rules generated this result.");
@@ -365,6 +390,127 @@ public sealed class LocalAccessibilityAiInferenceProvider
         "Candidates require human/admin review through accessibility verification before profile updates.",
         "Every candidate must preserve evidence, confidence, provider, and model metadata."
     ];
+}
+
+public sealed class LocalVisionAccessibilityInferenceProvider
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
+    private readonly HttpClient _httpClient;
+    private readonly AiEnrichmentOptions _options;
+
+    public LocalVisionAccessibilityInferenceProvider(HttpClient httpClient, IOptions<AiEnrichmentOptions> options)
+    {
+        _httpClient = httpClient;
+        _options = options.Value;
+        _httpClient.Timeout = TimeSpan.FromSeconds(Math.Clamp(_options.VisionModelTimeoutSeconds, 1, 30));
+    }
+
+    public bool IsConfigured => Uri.TryCreate(_options.VisionModelEndpoint, UriKind.Absolute, out _);
+
+    public async Task<AccessibilityAiInferenceResult> InferAsync(
+        long assetId,
+        InfrastructureAccessibilityProfile profile,
+        AccessibilityAiInferenceRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            throw new InvalidOperationException("Local vision model endpoint is not configured.");
+        }
+
+        if (request.Photos.Count == 0)
+        {
+            throw new InvalidOperationException("Local vision inference requires at least one photo.");
+        }
+
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, ResolveAnalyzeEndpoint());
+        httpRequest.Content = JsonContent.Create(BuildRequestPayload(request), options: JsonOptions);
+
+        using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var parsed = await JsonSerializer.DeserializeAsync<LocalVisionAnalyzeResponse>(stream, JsonOptions, cancellationToken)
+            ?? throw new InvalidOperationException("Local vision model response could not be parsed.");
+
+        var candidates = parsed.Candidates
+            .Select(candidate => AccessibilityCandidateNormalizer.ToCandidate(
+                candidate.Attribute,
+                candidate.Value,
+                candidate.Confidence,
+                candidate.Evidence,
+                string.IsNullOrWhiteSpace(candidate.Source) ? "accesscity_local_vision" : candidate.Source,
+                "Local accessibility vision model candidate."))
+            .Where(candidate => candidate.Confidence >= _options.MinimumCandidateConfidence && candidate.Attribute != "unknown")
+            .GroupBy(candidate => $"{candidate.Attribute}:{candidate.Value}", StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.OrderByDescending(candidate => candidate.Confidence).First())
+            .OrderByDescending(candidate => candidate.Confidence)
+            .ThenBy(candidate => candidate.Attribute, StringComparer.Ordinal)
+            .Take(12)
+            .ToList();
+
+        return new AccessibilityAiInferenceResult
+        {
+            InfrastructureAssetId = assetId,
+            ForRouteDecision = false,
+            Provider = "local-vision",
+            Model = string.IsNullOrWhiteSpace(parsed.Model) ? "accesscity-accessibility-vision" : parsed.Model,
+            GeneratedAtUtc = DateTime.UtcNow,
+            AdminSummary = $"Local vision model generated {candidates.Count} review-only accessibility candidate(s) from {request.Photos.Count} photo(s).",
+            AttributeCandidates = candidates,
+            DraftVerification = request.IncludeDraftVerification
+                ? AccessibilityCandidateDraftBuilder.BuildDraftVerification(candidates, request)
+                : null,
+            Guardrails = LocalAccessibilityAiInferenceProvider.StandardGuardrails(),
+            Limitations =
+            [
+                "Local vision output is a candidate extraction result, not an authoritative accessibility measurement.",
+                "Candidates require human/admin review before profile updates.",
+                "This endpoint is outside routing hot paths and never influences route decisions directly."
+            ]
+        };
+    }
+
+    private object BuildRequestPayload(AccessibilityAiInferenceRequest request) => new
+    {
+        thresholdFloor = Math.Clamp(_options.VisionModelMinimumConfidence, 0.01, 0.99),
+        photos = request.Photos.Select(photo => new
+        {
+            url = photo.Url,
+            caption = photo.Caption,
+            source = photo.Source
+        })
+    };
+
+    private Uri ResolveAnalyzeEndpoint()
+    {
+        var endpoint = _options.VisionModelEndpoint.TrimEnd('/');
+        if (endpoint.EndsWith("/analyze", StringComparison.OrdinalIgnoreCase))
+        {
+            return new Uri(endpoint, UriKind.Absolute);
+        }
+
+        return new Uri($"{endpoint}/v1/accessibility-vision/analyze", UriKind.Absolute);
+    }
+
+    private sealed class LocalVisionAnalyzeResponse
+    {
+        public string Model { get; set; } = string.Empty;
+        public List<LocalVisionCandidate> Candidates { get; set; } = [];
+    }
+
+    private sealed class LocalVisionCandidate
+    {
+        public string Attribute { get; set; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
+        public double Confidence { get; set; }
+        public string Evidence { get; set; } = string.Empty;
+        public string Source { get; set; } = "accesscity_local_vision";
+    }
 }
 
 public sealed class OpenAiAccessibilityInferenceProvider
@@ -938,7 +1084,9 @@ internal static class AccessibilityCandidateNormalizer
         "automatic_door",
         "toilets:wheelchair",
         "toilets:grab_bar",
-        "changing_table"
+        "changing_table",
+        "obstacle",
+        "crosswalk"
     };
 
     public static MissingOsmAttributeCandidate ToCandidate(
@@ -1032,6 +1180,16 @@ internal static class AccessibilityCandidateNormalizer
         if (ContainsAny(joined, "changing_table", "baby_change"))
         {
             return "changing_table";
+        }
+
+        if (ContainsAny(joined, "obstacle", "blocked", "blocking", "barrier"))
+        {
+            return "obstacle";
+        }
+
+        if (ContainsAny(joined, "crosswalk", "crossing", "zebra"))
+        {
+            return "crosswalk";
         }
 
         if (ContainsAny(joined, "step_free", "stairs", "steps", "stairway"))

@@ -15,6 +15,7 @@ public static class HazardsModule
         services.AddScoped<IHazardReportService, HazardReportService>();
         services.AddScoped<IAiAssistService, AiAssistService>();
         services.AddScoped<LocalAccessibilityAiInferenceProvider>();
+        services.AddHttpClient<LocalVisionAccessibilityInferenceProvider>();
         services.AddHttpClient<OpenAiAccessibilityInferenceProvider>();
         services.AddHttpClient<NebiusAccessibilityInferenceProvider>();
         services.AddScoped<IAccessibilityAiInferenceService, AccessibilityAiInferenceService>();

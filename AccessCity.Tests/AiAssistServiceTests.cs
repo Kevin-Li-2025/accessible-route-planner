@@ -236,6 +236,55 @@ public sealed class AiAssistServiceTests
     }
 
     [Fact]
+    public async Task LocalVisionAccessibilityInference_ParsesVisionCandidates_AsReviewOnlyDraft()
+    {
+        var handler = new FakeOpenAiHandler("""
+            {
+              "model": "accesscity-convnext-tiny-v1",
+              "candidates": [
+                {"attribute":"curb_ramp","value":"false","confidence":0.88,"evidence":"Vision detected missing ramp.","source":"accesscity_local_vision"},
+                {"attribute":"kerb_height_metres","value":">0.06","confidence":0.75,"evidence":"Raised kerb should be measured.","source":"accesscity_local_vision"},
+                {"attribute":"smoothness","value":"bad","confidence":0.81,"evidence":"Surface problem detected.","source":"accesscity_local_vision"},
+                {"attribute":"obstacle","value":"present","confidence":0.77,"evidence":"Obstacle candidate detected.","source":"accesscity_local_vision"}
+              ],
+              "forRouteDecision": false,
+              "latencyMs": 8.5
+            }
+            """);
+        var provider = new LocalVisionAccessibilityInferenceProvider(
+            new HttpClient(handler),
+            Options.Create(new AiEnrichmentOptions
+            {
+                Provider = "local-vision",
+                VisionModelEndpoint = "http://vision.local",
+                VisionModelMinimumConfidence = 0.55,
+                MinimumCandidateConfidence = 0.35
+            }));
+
+        var result = await provider.InferAsync(
+            101,
+            new InfrastructureAccessibilityProfile { Confidence = 0.5, VerificationStatus = "partial" },
+            new AccessibilityAiInferenceRequest
+            {
+                Photos = [new AccessibilityPhotoInput { Url = "https://example.com/kerb.jpg", Caption = "raised kerb" }]
+            },
+            CancellationToken.None);
+
+        Assert.Equal("local-vision", result.Provider);
+        Assert.Equal("accesscity-convnext-tiny-v1", result.Model);
+        Assert.False(result.ForRouteDecision);
+        Assert.Contains(result.AttributeCandidates, candidate => candidate.Attribute == "curb_ramp" && candidate.Value == "false");
+        Assert.Contains(result.AttributeCandidates, candidate => candidate.Attribute == "smoothness" && candidate.Value == "bad");
+        Assert.Contains(result.AttributeCandidates, candidate => candidate.Attribute == "obstacle" && candidate.Value == "true");
+        Assert.All(result.AttributeCandidates, candidate => Assert.False(candidate.CanAutoApply));
+        Assert.NotNull(result.DraftVerification);
+        Assert.False(result.DraftVerification!.Path!.HasCurbRamp);
+        Assert.Equal("bad", result.DraftVerification.Path.Smoothness);
+        Assert.Equal("/v1/accessibility-vision/analyze", handler.RequestPath);
+        Assert.Contains("thresholdFloor", handler.RequestJson);
+    }
+
+    [Fact]
     public void Constructor_RejectsRouteDecisionInfluence()
     {
         var options = Options.Create(new AiEnrichmentOptions

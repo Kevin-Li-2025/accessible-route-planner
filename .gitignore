@@ -57,4 +57,5 @@ build_error.txt
 scripts/
 
 *.txt
+!tools/accessibility_vision/requirements-l20.txt
 AccessCity.API/Logs/

@@ -6,6 +6,7 @@ resources:
   - configmap.yaml
   - api-deployment.yaml
   - worker-deployment.yaml
+  - vision-deployment.yaml
   - migration-job.yaml
   - service.yaml
   - ingress.yaml

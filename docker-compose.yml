@@ -121,6 +121,9 @@ services:
       AiEnrichment__NebiusTimeoutSeconds: ${AiEnrichment__NebiusTimeoutSeconds:-8}
       AiEnrichment__NebiusMaxTokens: ${AiEnrichment__NebiusMaxTokens:-700}
       AiEnrichment__NebiusEnableImageInputs: ${AiEnrichment__NebiusEnableImageInputs:-false}
+      AiEnrichment__VisionModelEndpoint: ${AiEnrichment__VisionModelEndpoint:-}
+      AiEnrichment__VisionModelTimeoutSeconds: ${AiEnrichment__VisionModelTimeoutSeconds:-5}
+      AiEnrichment__VisionModelMinimumConfidence: ${AiEnrichment__VisionModelMinimumConfidence:-0.55}
       NEBIUS_API_KEY: ${NEBIUS_API_KEY:-}
       HotPathWarmup__Enabled: ${HotPathWarmup__Enabled:-true}
       HotPathWarmup__InitialDelaySeconds: ${HotPathWarmup__InitialDelaySeconds:-2}
@@ -172,6 +175,25 @@ services:
       kafka:
         condition: service_healthy
     mem_limit: 4g
+  accessibility-vision:
+    profiles: ["ai"]
+    build:
+      context: ./tools/accessibility_vision
+      dockerfile: Dockerfile
+    ports:
+      - "${ACCESSCITY_VISION_HOST_PORT:-8095}:8095"
+    volumes:
+      - ./data/accessibility-vision-models:/models/accesscity-vision:ro
+    environment:
+      VISION_MODEL_CHECKPOINT: ${VISION_MODEL_CHECKPOINT:-/models/accesscity-vision/best.pt}
+      VISION_DEVICE: ${VISION_DEVICE:-auto}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
   api-gateway:
     image: nginx:1.27-alpine
     ports:
@@ -300,6 +322,9 @@ services:
       AiEnrichment__NebiusTimeoutSeconds: ${AiEnrichment__NebiusTimeoutSeconds:-8}
       AiEnrichment__NebiusMaxTokens: ${AiEnrichment__NebiusMaxTokens:-700}
       AiEnrichment__NebiusEnableImageInputs: ${AiEnrichment__NebiusEnableImageInputs:-false}
+      AiEnrichment__VisionModelEndpoint: ${AiEnrichment__VisionModelEndpoint:-}
+      AiEnrichment__VisionModelTimeoutSeconds: ${AiEnrichment__VisionModelTimeoutSeconds:-5}
+      AiEnrichment__VisionModelMinimumConfidence: ${AiEnrichment__VisionModelMinimumConfidence:-0.55}
       NEBIUS_API_KEY: ${NEBIUS_API_KEY:-}
       HotPathWarmup__Enabled: "false"
       OsmImport__ImportOnStartup: "false"
