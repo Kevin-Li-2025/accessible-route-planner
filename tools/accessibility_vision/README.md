@@ -97,6 +97,19 @@ python train_accessibility_vision.py \
 
 Training writes `latest_metrics.json` for the raw calibration split, `calibrated_metrics.json` when `--temperature-scale` is enabled, and `holdout_metrics.json` for the final untouched test split. The checkpoint embeds per-task temperatures, calibrated thresholds, macro F1, Brier score, expected calibration error, and confusion counts. Keep `--task-balanced-loss` enabled when RampNet adds many curb-ramp rows; otherwise the model can over-optimize curb ramps and under-train obstacles, surface problems, and crosswalks.
 
+Hard-example mining for the weaker heads:
+
+```bash
+python mine_accessibility_vision_errors.py \
+  --checkpoint runs/project-sidewalk-convnext-tiny-v1/best.pt \
+  --dataset-root data/projectsidewalk-rampnet-balanced \
+  --split test \
+  --tasks obstacle_present,surface_problem_present \
+  --output-dir runs/project-sidewalk-convnext-tiny-v1/hard-examples/test
+```
+
+The miner writes `summary.json`, `predictions.jsonl`, `hard_examples.jsonl`, copied review images, and contact sheets for false positives, false negatives, uncertain cases, and confident wrong predictions. It also reports threshold recommendations for precision targets such as 70%, 80%, and 90%. Use those outputs to drive the next labeling batch; do not train on the final holdout split.
+
 Positive-only bootstrap:
 
 ```bash
