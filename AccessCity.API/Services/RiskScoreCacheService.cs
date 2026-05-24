@@ -25,6 +25,7 @@ public sealed class RiskScoreCacheService : IRiskScoreCacheService
 {
     private readonly HybridCache _cache;
     private readonly TimeSpan _ttl;
+    private readonly TimeSpan _fillTimeout;
     private readonly int _coordinatePrecision;
     private readonly int _radiusBucketMetres;
 
@@ -32,6 +33,10 @@ public sealed class RiskScoreCacheService : IRiskScoreCacheService
     {
         _cache = cache;
         _ttl = TimeSpan.FromSeconds(Math.Max(1, configuration.GetValue("RiskScoring:CacheTtlSeconds", 30)));
+        _fillTimeout = TimeSpan.FromSeconds(Math.Clamp(
+            configuration.GetValue("RiskScoring:CacheFillTimeoutSeconds", 5),
+            1,
+            60));
         _coordinatePrecision = Math.Clamp(configuration.GetValue("RiskScoring:CacheCoordinatePrecision", 4), 3, 6);
         _radiusBucketMetres = Math.Max(1, configuration.GetValue("RiskScoring:CacheRadiusBucketMetres", 50));
     }
@@ -52,9 +57,13 @@ public sealed class RiskScoreCacheService : IRiskScoreCacheService
 #pragma warning disable EXTEXP0018
         return await _cache.GetOrCreateAsync(
             cacheKey,
-            async token => await factory(token),
+            async _ =>
+            {
+                using var timeout = new CancellationTokenSource(_fillTimeout);
+                return await factory(timeout.Token);
+            },
             new HybridCacheEntryOptions { Expiration = _ttl },
-            cancellationToken: cancellationToken);
+            cancellationToken: CancellationToken.None);
 #pragma warning restore EXTEXP0018
     }
 

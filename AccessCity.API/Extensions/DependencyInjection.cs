@@ -231,6 +231,8 @@ public static class DependencyInjection
 
     public static IServiceCollection AddApplicationServices(this IServiceCollection services, IConfiguration configuration)
     {
+        services.Configure<HotPathWarmupOptions>(configuration.GetSection(HotPathWarmupOptions.SectionName));
+
         services
             .AddExternalApisModule(configuration)
             .AddHazardsModule(configuration)
@@ -238,6 +240,8 @@ public static class DependencyInjection
             .AddRoutingModule(configuration)
             .AddMapsModule(configuration)
             .AddOsmImportModule(configuration);
+
+        services.AddHostedService<AccessCity.API.Services.Background.HotPathWarmupBackgroundService>();
 
         // API Versioning
         services.AddApiVersioning(options =>

@@ -1,5 +1,9 @@
+using AccessCity.API.Configuration;
+using AccessCity.API.Data;
 using AccessCity.API.Models;
 using AccessCity.API.Services;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using NetTopologySuite.Geometries;
 using Xunit;
 
@@ -7,6 +11,46 @@ namespace AccessCity.Tests;
 
 public class HazardOptimizationsTests
 {
+    [Fact]
+    public async Task HazardQuery_UsesWarmedEmptySpatialIndexWithoutDatabaseFallback()
+    {
+        var dbOptions = new DbContextOptionsBuilder<HazardDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
+        await using var dbContext = new HazardDbContext(dbOptions);
+        dbContext.Hazards.Add(new HazardReport
+        {
+            Id = Guid.NewGuid(),
+            Location = new Point(-1.8904, 52.4862) { SRID = 4326 },
+            Type = "pothole",
+            Status = HazardStatus.Reported,
+            Description = "Should not be read when the warmed snapshot is empty",
+            ReportedAt = DateTime.UtcNow
+        });
+        await dbContext.SaveChangesAsync();
+
+        var index = new HazardSpatialIndex();
+        index.Rebuild(Array.Empty<HazardReport>());
+        var queries = new HazardQueryService(
+            dbContext,
+            index,
+            Options.Create(new RoutingOptions
+            {
+                MaxHazardsPerRequest = 500,
+                MaxRiskQueryRadiusMetres = 2_500
+            }));
+
+        var hazards = await queries.LoadHazardsNearPointAsync(52.4862, -1.8904, 500, CancellationToken.None);
+
+        Assert.True(index.IsWarmedUp);
+        Assert.Empty(hazards);
+
+        index.MarkStale();
+        var staleHazards = await queries.LoadHazardsNearPointAsync(52.4862, -1.8904, 500, CancellationToken.None);
+
+        Assert.NotEmpty(staleHazards);
+    }
+
     [Fact]
     public void HazardSpatialIndex_CorrectlyIndexesAndQueriesHazards()
     {

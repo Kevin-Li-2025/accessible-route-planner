@@ -113,6 +113,7 @@ public sealed class ArchitectureModularityTests
 
         Assert.Contains("Routing__AsyncFirstForCacheMiss: \"true\"", configMap, StringComparison.Ordinal);
         Assert.Contains("RiskScoring__RealtimeExternalSignalsEnabled: \"false\"", configMap, StringComparison.Ordinal);
+        Assert.Contains("RiskScoring__CacheFillTimeoutSeconds: \"5\"", configMap, StringComparison.Ordinal);
         Assert.Contains("ExternalApis__Overpass__RealtimeHazardsEnabled: \"false\"", configMap, StringComparison.Ordinal);
         Assert.Contains("ExternalApis__Overpass__HazardFetchBudgetSeconds: \"5\"", configMap, StringComparison.Ordinal);
     }
@@ -277,6 +278,26 @@ public sealed class ArchitectureModularityTests
         Assert.Contains("Routing__RouteGraphWarmupEnabled: \"true\"", configMap, StringComparison.Ordinal);
         Assert.Contains("Routing__RouteGraphWarmupRoutes__0__Name: \"birmingham-core\"", configMap, StringComparison.Ordinal);
         Assert.Contains("Routing__RouteGraphWarmupRoutes__3__Name: \"birmingham-jewellery-core\"", configMap, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Api_hot_path_warmup_primes_readiness_risk_and_poi_caches()
+    {
+        var root = FindRepositoryRoot();
+        var dependencyInjection = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Extensions", "DependencyInjection.cs"));
+        var warmupService = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "Background", "HotPathWarmupBackgroundService.cs"));
+        var configMap = File.ReadAllText(Path.Combine(root, "deploy", "kubernetes", "configmap.yaml"));
+
+        Assert.Contains("Configure<HotPathWarmupOptions>", dependencyInjection, StringComparison.Ordinal);
+        Assert.Contains("HotPathWarmupBackgroundService", dependencyInjection, StringComparison.Ordinal);
+        Assert.Contains("CachedReadinessService", warmupService, StringComparison.Ordinal);
+        Assert.Contains("IRiskScoreCacheService", warmupService, StringComparison.Ordinal);
+        Assert.Contains("ISpatialQueryService", warmupService, StringComparison.Ordinal);
+        Assert.Contains("BucketCorridorRadiusSteps", warmupService, StringComparison.Ordinal);
+        Assert.Contains("HotPathWarmup__Enabled: \"true\"", configMap, StringComparison.Ordinal);
+        Assert.Contains("HotPathWarmup__Enabled: \"false\"", configMap, StringComparison.Ordinal);
+        Assert.Contains("HotPathWarmup__BucketCorridorRadiusSteps: \"20\"", configMap, StringComparison.Ordinal);
+        Assert.Contains("HotPathWarmup__Points__0__Name: \"birmingham-core\"", configMap, StringComparison.Ordinal);
     }
 
     [Fact]

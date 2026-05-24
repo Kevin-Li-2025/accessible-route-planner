@@ -211,6 +211,7 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
                 ReportedAt = DateTime.UtcNow
             });
             await dbContext.SaveChangesAsync();
+            scope.ServiceProvider.GetRequiredService<IHazardSpatialIndex>().MarkStale();
         }
 
         var response = await client.GetAsync("/api/v1/routing/risk-score?lat=52.4862&lng=-1.8904&radius=500");

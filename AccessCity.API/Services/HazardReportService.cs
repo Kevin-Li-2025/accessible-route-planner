@@ -28,15 +28,18 @@ public sealed class HazardReportService : IHazardReportService
     private readonly HazardDbContext _dbContext;
     private readonly ISpatialCacheService _spatialCache;
     private readonly IRealHazardDataService _realHazardData;
+    private readonly IHazardSpatialIndex _hazardSpatialIndex;
 
     public HazardReportService(
         HazardDbContext dbContext,
         ISpatialCacheService spatialCache,
-        IRealHazardDataService realHazardData)
+        IRealHazardDataService realHazardData,
+        IHazardSpatialIndex hazardSpatialIndex)
     {
         _dbContext = dbContext;
         _spatialCache = spatialCache;
         _realHazardData = realHazardData;
+        _hazardSpatialIndex = hazardSpatialIndex;
     }
 
     public async Task<List<HazardReport>> GetHazardsAsync(
@@ -71,6 +74,7 @@ public sealed class HazardReportService : IHazardReportService
 
         _dbContext.Hazards.Add(report);
         await _dbContext.SaveChangesAsync(cancellationToken);
+        _hazardSpatialIndex.MarkStale();
         await _spatialCache.UpdateHazardCacheAsync(report);
 
         return report;
@@ -101,6 +105,7 @@ public sealed class HazardReportService : IHazardReportService
 
         hazard.Status = status;
         await _dbContext.SaveChangesAsync(cancellationToken);
+        _hazardSpatialIndex.MarkStale();
         await _spatialCache.UpdateHazardCacheAsync(hazard);
 
         return hazard;

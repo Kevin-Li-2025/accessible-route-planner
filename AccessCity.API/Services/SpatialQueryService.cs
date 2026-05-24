@@ -25,6 +25,7 @@ public sealed class SpatialQueryService : ISpatialQueryService
     {
         Expiration = TimeSpan.FromSeconds(30)
     };
+    private static readonly TimeSpan PoiCacheFillTimeout = TimeSpan.FromSeconds(5);
 
     private static readonly GeometryFactory Wgs84 = new(new PrecisionModel(), 4326);
     private static readonly TimeSpan OverlayCacheTtl = TimeSpan.FromSeconds(30);
@@ -50,9 +51,13 @@ public sealed class SpatialQueryService : ISpatialQueryService
 #pragma warning disable EXTEXP0018
         var cached = await _cache.GetOrCreateAsync(
             cacheKey,
-            async token => await QueryCachedPoiAsync(lat, lng, radius, token),
+            async _ =>
+            {
+                using var timeout = new CancellationTokenSource(PoiCacheFillTimeout);
+                return await QueryCachedPoiAsync(lat, lng, radius, timeout.Token);
+            },
             PoiCacheOptions,
-            cancellationToken: cancellationToken);
+            cancellationToken: CancellationToken.None);
 #pragma warning restore EXTEXP0018
 
         return cached.Select(ToPointOfInterest).ToList();

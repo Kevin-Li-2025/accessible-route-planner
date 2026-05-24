@@ -69,8 +69,25 @@ services:
       RiskScoring__CacheTtlSeconds: ${RiskScoring__CacheTtlSeconds:-30}
       RiskScoring__CacheCoordinatePrecision: ${RiskScoring__CacheCoordinatePrecision:-4}
       RiskScoring__CacheRadiusBucketMetres: ${RiskScoring__CacheRadiusBucketMetres:-50}
+      RiskScoring__CacheFillTimeoutSeconds: ${RiskScoring__CacheFillTimeoutSeconds:-5}
       RiskScoring__ExternalSignalBudgetMilliseconds: ${RiskScoring__ExternalSignalBudgetMilliseconds:-350}
       RiskScoring__RealtimeExternalSignalsEnabled: ${RiskScoring__RealtimeExternalSignalsEnabled:-false}
+      HotPathWarmup__Enabled: ${HotPathWarmup__Enabled:-true}
+      HotPathWarmup__InitialDelaySeconds: ${HotPathWarmup__InitialDelaySeconds:-2}
+      HotPathWarmup__IntervalSeconds: ${HotPathWarmup__IntervalSeconds:-300}
+      HotPathWarmup__TimeoutSeconds: ${HotPathWarmup__TimeoutSeconds:-20}
+      HotPathWarmup__MaxPoints: ${HotPathWarmup__MaxPoints:-192}
+      HotPathWarmup__BucketCorridorRadiusSteps: ${HotPathWarmup__BucketCorridorRadiusSteps:-20}
+      HotPathWarmup__BucketCorridorStepDegrees: ${HotPathWarmup__BucketCorridorStepDegrees:-0.0001}
+      HotPathWarmup__RiskRadiusMetres: ${HotPathWarmup__RiskRadiusMetres:-500}
+      HotPathWarmup__PoiRadiusMetres: ${HotPathWarmup__PoiRadiusMetres:-750}
+      HotPathWarmup__WarmRouteGraph: ${HotPathWarmup__WarmRouteGraph:-false}
+      HotPathWarmup__Points__0__Name: ${HotPathWarmup__Points__0__Name:-birmingham-core}
+      HotPathWarmup__Points__0__Lat: ${HotPathWarmup__Points__0__Lat:-52.4862}
+      HotPathWarmup__Points__0__Lng: ${HotPathWarmup__Points__0__Lng:--1.8904}
+      HotPathWarmup__Points__1__Name: ${HotPathWarmup__Points__1__Name:-birmingham-east}
+      HotPathWarmup__Points__1__Lat: ${HotPathWarmup__Points__1__Lat:-52.4835}
+      HotPathWarmup__Points__1__Lng: ${HotPathWarmup__Points__1__Lng:--1.8885}
       ExternalApis__CircuitBreaker__FailureThreshold: ${ExternalApis__CircuitBreaker__FailureThreshold:-3}
       ExternalApis__CircuitBreaker__BreakSeconds: ${ExternalApis__CircuitBreaker__BreakSeconds:-30}
       ExternalApis__CircuitBreaker__QueueTimeoutMilliseconds: ${ExternalApis__CircuitBreaker__QueueTimeoutMilliseconds:-50}
@@ -181,8 +198,10 @@ services:
       RiskScoring__CacheTtlSeconds: ${RiskScoring__CacheTtlSeconds:-30}
       RiskScoring__CacheCoordinatePrecision: ${RiskScoring__CacheCoordinatePrecision:-4}
       RiskScoring__CacheRadiusBucketMetres: ${RiskScoring__CacheRadiusBucketMetres:-50}
+      RiskScoring__CacheFillTimeoutSeconds: ${RiskScoring__CacheFillTimeoutSeconds:-5}
       RiskScoring__ExternalSignalBudgetMilliseconds: ${RiskScoring__ExternalSignalBudgetMilliseconds:-350}
       RiskScoring__RealtimeExternalSignalsEnabled: ${RiskScoring__RealtimeExternalSignalsEnabled:-false}
+      HotPathWarmup__Enabled: "false"
       OsmImport__ImportOnStartup: "false"
       OsmImport__FilePath: ${OsmImport__FilePath:-/app/osm/test-network.osm}
       OsmImport__UsePostgresCopy: ${OsmImport__UsePostgresCopy:-true}

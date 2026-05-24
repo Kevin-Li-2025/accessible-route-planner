@@ -28,6 +28,14 @@ Run the steady-state test after replicas have rolled out, Kafka consumer lag is 
 caches have had a short warmup. A deliberately cold run is still useful, but report it separately:
 cold-cache tail latency can fail the same thresholds that a warmed multi-replica run passes.
 
+Production API replicas run `HotPathWarmupBackgroundService` with
+`HotPathWarmup__Enabled=true`. It primes the cached readiness snapshot plus risk-score and POI
+HybridCache entries derived from configured warmup route coordinates, so the load balancer does not
+send the first burst into completely cold PostGIS/cache paths. Set
+`HotPathWarmup__BucketCorridorRadiusSteps` to prefill nearby bucketed coordinates along common route
+corridors instead of only exact seed points. Worker replicas keep this disabled and use
+`RouteGraphWarmupBackgroundService` for graph shards instead.
+
 ## What It Exercises
 
 The script mixes:
@@ -83,6 +91,13 @@ injection checks.
   OSM import workers. City-scale imports should be measured with
   `Routing__RouteGraphProfileUseOsmExtract=false` before relying on PostGIS-backed runtime graph
   loads.
+- `HotPathWarmup__Enabled`: enable on API replicas to warm readiness, risk-score, and POI caches
+  before the first sustained traffic burst. Keep route graph warmup on workers unless API pods also
+  serve synchronous graph loads.
+- `HotPathWarmup__BucketCorridorRadiusSteps`: number of bucket offsets to prefill around each hot
+  point for GPS jitter and load-balanced cold starts.
+- `RiskScoring__CacheFillTimeoutSeconds`: cache-fill timeout that is independent from client request
+  timeouts, so one abandoned request does not cancel a shared cache fill.
 - `Routing__MaxHazardsPerRequest`: cap on active hazards loaded for one route/risk request.
 - `ExternalApis__*__MaxConcurrentRequests`: per-pod bulkhead for tail-sensitive upstream services.
 - `ExternalApis__CircuitBreaker__*`: shared timeout/circuit behavior for external dependency fallback.

@@ -47,12 +47,33 @@ public class RiskScoreCacheServiceTests
         Assert.Equal(1, calls);
     }
 
+    [Fact]
+    public async Task GetOrComputeAsync_DoesNotCancelSharedFillWhenCallerTimesOut()
+    {
+        using var provider = CreateProvider();
+        var cache = provider.GetRequiredService<IRiskScoreCacheService>();
+        using var canceled = new CancellationTokenSource();
+        await canceled.CancelAsync();
+
+        var result = await cache.GetOrComputeAsync(
+            "risk-score:caller-canceled",
+            async token =>
+            {
+                await Task.Delay(1, token);
+                return new RiskScoreResponse { OverallRisk = 0.37 };
+            },
+            canceled.Token);
+
+        Assert.Equal(0.37, result.OverallRisk);
+    }
+
     private static ServiceProvider CreateProvider()
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["RiskScoring:CacheTtlSeconds"] = "30",
+                ["RiskScoring:CacheFillTimeoutSeconds"] = "5",
                 ["RiskScoring:CacheCoordinatePrecision"] = "4",
                 ["RiskScoring:CacheRadiusBucketMetres"] = "50"
             })

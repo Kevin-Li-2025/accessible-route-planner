@@ -45,6 +45,17 @@ public interface IHazardSpatialIndex
     /// Returns true if the index has been populated at least once.
     /// </summary>
     bool IsWarmedUp { get; }
+
+    /// <summary>
+    /// Returns true when this pod knows a write happened after the last rebuild.
+    /// Query services should fall back to the authoritative store while this is true.
+    /// </summary>
+    bool RequiresAuthoritativeRefresh { get; }
+
+    /// <summary>
+    /// Marks the snapshot as stale after a local hazard write.
+    /// </summary>
+    void MarkStale();
 }
 
 public sealed class HazardSpatialIndex : IHazardSpatialIndex
@@ -55,12 +66,16 @@ public sealed class HazardSpatialIndex : IHazardSpatialIndex
     private const double PointBufferDegrees = 0.003;
 
     private volatile HazardSnapshot _snapshot = HazardSnapshot.Empty;
+    private volatile bool _requiresAuthoritativeRefresh;
 
     /// <inheritdoc/>
     public int Count => _snapshot.Hazards.Count;
 
     /// <inheritdoc/>
     public bool IsWarmedUp => _snapshot.IsWarmedUp;
+
+    /// <inheritdoc/>
+    public bool RequiresAuthoritativeRefresh => _requiresAuthoritativeRefresh;
 
     /// <summary>
     /// Atomically replaces the current spatial index with a new one built from
@@ -80,6 +95,13 @@ public sealed class HazardSpatialIndex : IHazardSpatialIndex
         tree.Build();
 
         _snapshot = new HazardSnapshot(tree, hazards, true);
+        _requiresAuthoritativeRefresh = false;
+    }
+
+    /// <inheritdoc/>
+    public void MarkStale()
+    {
+        _requiresAuthoritativeRefresh = true;
     }
 
     /// <inheritdoc/>
@@ -238,4 +260,3 @@ public sealed class HazardSpatialIndexRefreshBackgroundService : BackgroundServi
             stopwatch.Elapsed.TotalMilliseconds);
     }
 }
-

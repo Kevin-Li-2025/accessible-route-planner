@@ -57,7 +57,7 @@ public sealed class HazardQueryService : IHazardQueryService
 
         // Fast-path: use the in-memory R-Tree spatial index when warmed up.
         // This avoids hitting Postgres entirely on the routing hot path.
-        if (_spatialIndex.IsWarmedUp)
+        if (CanUseSpatialIndexSnapshot())
         {
             return _spatialIndex.QueryBoundingBox(minLon, minLat, maxLon, maxLat)
                 .Take(limit)
@@ -102,18 +102,14 @@ public sealed class HazardQueryService : IHazardQueryService
         var limit = Math.Max(1, _routingOptions.MaxHazardsPerRequest);
 
         // Fast-path: use the in-memory R-Tree spatial index when warmed up.
-        // A warmed snapshot can still be briefly stale after a hazard write, so
-        // zero-hit point queries fall through to the authoritative store below.
-        if (_spatialIndex.IsWarmedUp)
+        // The refresh service rebuilds this snapshot from the authoritative store;
+        // an empty result is still authoritative for the snapshot version. Falling
+        // back on zero hits turns no-hazard cities into a PostGIS hot path.
+        if (CanUseSpatialIndexSnapshot())
         {
-            var indexedHazards = _spatialIndex.QueryNearby(latitude, longitude, queryRadius)
+            return _spatialIndex.QueryNearby(latitude, longitude, queryRadius)
                 .Take(limit)
                 .ToList();
-
-            if (indexedHazards.Count > 0)
-            {
-                return indexedHazards;
-            }
         }
 
         if (_dbContext.Database.IsRelational())
@@ -144,7 +140,7 @@ public sealed class HazardQueryService : IHazardQueryService
     public async Task<List<HazardReport>> LoadActiveHazardsAsync(CancellationToken cancellationToken)
     {
         // Prefer the in-memory snapshot when available to avoid hitting Postgres.
-        if (_spatialIndex.IsWarmedUp)
+        if (CanUseSpatialIndexSnapshot())
         {
             return _spatialIndex.GetAllActive().ToList();
         }
@@ -156,6 +152,9 @@ public sealed class HazardQueryService : IHazardQueryService
     }
 
     private static double MetresToLatitudeDegrees(double metres) => metres / 111_320.0;
+
+    private bool CanUseSpatialIndexSnapshot() =>
+        _spatialIndex.IsWarmedUp && !_spatialIndex.RequiresAuthoritativeRefresh;
 
     private static double MetresToLongitudeDegrees(double metres, double latitude)
     {
