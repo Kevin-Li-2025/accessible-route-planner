@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
+import random
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from datasets import load_dataset, load_dataset_builder
+from datasets import load_dataset
+from huggingface_hub import HfApi, hf_hub_download
 from PIL import Image
 from tqdm import tqdm
 
@@ -31,6 +35,7 @@ VALIDATOR_DATASET_TASKS = {
 
 RAMPNET_CROP_DATASET = "projectsidewalk/rampnet-crop-model-dataset"
 RAMPNET_PANORAMA_DATASET = "projectsidewalk/rampnet-dataset"
+IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 
 
 @dataclass(frozen=True)
@@ -49,8 +54,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-per-task", type=int, default=300)
     parser.add_argument("--jpeg-quality", type=int, default=92)
     parser.add_argument("--max-image-side", type=int, default=1024)
+    parser.add_argument("--seed", type=int, default=20260524)
     parser.add_argument("--balanced", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--hf-token", default=os.getenv("HF_TOKEN"), help="Optional Hugging Face token for authenticated exports.")
+    parser.add_argument("--hf-download-min-interval", type=float, default=0.08, help="Minimum seconds between individual Hub file downloads.")
+    parser.add_argument("--hf-rate-limit-sleep-seconds", type=float, default=60.0)
     parser.add_argument("--include-rampnet-crop", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--rampnet-crop-train", type=int, default=0, help="0 means all rows available in the split.")
     parser.add_argument("--rampnet-crop-validation", type=int, default=0, help="0 means all rows available in the split.")
@@ -70,10 +78,10 @@ def split_plans(args: argparse.Namespace) -> list[SplitPlan]:
     ]
 
 
-def positive_label(dataset_name: str, hf_token: str | None) -> int:
-    builder = load_dataset_builder(dataset_name, token=hf_token)
-    label_names = getattr(builder.info.features["label"], "names", None) or []
-    return label_names.index("correct") if "correct" in label_names else 0
+def split_prefixes(split: str) -> tuple[str, ...]:
+    if split == "validation":
+        return ("validation", "val")
+    return (split,)
 
 
 def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -85,8 +93,18 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 def open_image(example: dict[str, Any]) -> Image.Image:
     image = example["image"]
     if not isinstance(image, Image.Image):
-        image = Image.open(image)
+        if isinstance(image, dict):
+            if image.get("bytes") is not None:
+                image = Image.open(io.BytesIO(image["bytes"]))
+            else:
+                image = Image.open(image["path"])
+        else:
+            image = Image.open(image)
     return image.convert("RGB")
+
+
+def open_image_path(path: str | Path) -> Image.Image:
+    return Image.open(path).convert("RGB")
 
 
 def save_image(image: Image.Image, path: Path, jpeg_quality: int, max_image_side: int) -> tuple[int, int]:
@@ -144,6 +162,48 @@ def load_stream(dataset_name: str, split: str, hf_token: str | None):
         raise
 
 
+def list_validator_files(api: HfApi, dataset_name: str, split: str, hf_token: str | None) -> dict[int, list[str]]:
+    prefixes = split_prefixes(split)
+    files = api.list_repo_files(dataset_name, repo_type="dataset", token=hf_token)
+    selected: dict[int, list[str]] = {0: [], 1: []}
+    for file_name in files:
+        parts = file_name.split("/")
+        if len(parts) < 3 or not file_name.lower().endswith(IMAGE_EXTENSIONS):
+            continue
+        split_name, label_name = parts[0], parts[1]
+        if split_name not in prefixes:
+            continue
+        if label_name == "correct":
+            selected[1].append(file_name)
+        elif label_name == "incorrect":
+            selected[0].append(file_name)
+    return selected
+
+
+def throttled_hf_download(
+    dataset_name: str,
+    file_name: str,
+    hf_token: str | None,
+    min_interval: float,
+    rate_limit_sleep_seconds: float,
+    state: dict[str, float],
+) -> str:
+    attempts = 0
+    while True:
+        attempts += 1
+        elapsed = time.monotonic() - state.get("last_download_at", 0.0)
+        if elapsed < min_interval:
+            time.sleep(min_interval - elapsed)
+        try:
+            path = hf_hub_download(dataset_name, file_name, repo_type="dataset", token=hf_token)
+            state["last_download_at"] = time.monotonic()
+            return path
+        except Exception as exc:  # noqa: BLE001
+            if "429" not in str(exc) or attempts >= 6:
+                raise
+            time.sleep(rate_limit_sleep_seconds)
+
+
 def export_validator_split(
     output_dir: Path,
     split: str,
@@ -152,27 +212,44 @@ def export_validator_split(
     max_image_side: int,
     balanced: bool,
     hf_token: str | None,
+    seed: int,
+    hf_download_min_interval: float,
+    hf_rate_limit_sleep_seconds: float,
+    download_state: dict[str, float],
     rows: list[dict[str, Any]],
     counters: dict[str, int],
 ) -> None:
+    api = HfApi()
     for dataset_name, task_name in VALIDATOR_DATASET_TASKS.items():
-        correct_label = positive_label(dataset_name, hf_token)
-        stream = load_stream(dataset_name, split, hf_token)
+        files_by_target = list_validator_files(api, dataset_name, split, hf_token)
+        positive_files = files_by_target[1]
+        negative_files = files_by_target[0]
+        rng = random.Random(f"{seed}:{split}:{task_name}")
+        rng.shuffle(positive_files)
+        rng.shuffle(negative_files)
 
-        count = 0
-        positive_count = 0
-        negative_count = 0
         positive_target = per_task // 2 if balanced else per_task
         negative_target = per_task - positive_target if balanced else 0
-        progress = tqdm(total=per_task, desc=f"{split} validator {task_name}")
-        for example in stream:
-            target = 1 if int(example["label"]) == correct_label else 0
-            if balanced:
-                if target == 1 and positive_count >= positive_target:
-                    continue
-                if target == 0 and negative_count >= negative_target:
-                    continue
+        if len(positive_files) < positive_target or len(negative_files) < negative_target:
+            raise RuntimeError(
+                f"{dataset_name} {split} has {len(positive_files)} positive and {len(negative_files)} negative rows; "
+                f"requested {positive_target}/{negative_target}."
+            )
 
+        selected = [(file_name, 1) for file_name in positive_files[:positive_target]]
+        selected.extend((file_name, 0) for file_name in negative_files[:negative_target])
+        rng.shuffle(selected)
+
+        progress = tqdm(total=len(selected), desc=f"{split} validator {task_name}")
+        for file_name, target in selected:
+            image_path = throttled_hf_download(
+                dataset_name,
+                file_name,
+                hf_token,
+                hf_download_min_interval,
+                hf_rate_limit_sleep_seconds,
+                download_state,
+            )
             append_row(
                 rows,
                 output_dir,
@@ -181,20 +258,14 @@ def export_validator_split(
                 target,
                 dataset_name,
                 "validator",
-                open_image(example),
+                open_image_path(image_path),
                 counters,
                 jpeg_quality,
                 max_image_side,
+                {"source_path": file_name},
             )
-            count += 1
-            positive_count += 1 if target == 1 else 0
-            negative_count += 1 if target == 0 else 0
             progress.update(1)
-            if count >= per_task:
-                break
         progress.close()
-        if count < per_task:
-            raise RuntimeError(f"Only exported {count}/{per_task} rows for {dataset_name} {split}.")
 
 
 def rampnet_limit(args: argparse.Namespace, split: str, prefix: str) -> int:
@@ -294,7 +365,13 @@ def export_rampnet_panorama_split(
         raise RuntimeError(f"Only exported {count}/{limit} RampNet panorama rows for {split}.")
 
 
-def export_split(output_dir: Path, split_plan: SplitPlan, args: argparse.Namespace, counters: dict[str, int]) -> list[dict[str, Any]]:
+def export_split(
+    output_dir: Path,
+    split_plan: SplitPlan,
+    args: argparse.Namespace,
+    counters: dict[str, int],
+    download_state: dict[str, float],
+) -> list[dict[str, Any]]:
     split = split_plan.name
     rows: list[dict[str, Any]] = []
     export_validator_split(
@@ -305,6 +382,10 @@ def export_split(output_dir: Path, split_plan: SplitPlan, args: argparse.Namespa
         args.max_image_side,
         args.balanced,
         args.hf_token,
+        args.seed,
+        args.hf_download_min_interval,
+        args.hf_rate_limit_sleep_seconds,
+        download_state,
         rows,
         counters,
     )
@@ -359,10 +440,11 @@ def main() -> None:
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     counters: dict[str, int] = {}
+    download_state: dict[str, float] = {}
     rows_by_split: dict[str, list[dict[str, Any]]] = {}
 
     for plan in split_plans(args):
-        rows_by_split[plan.name] = export_split(args.output_dir, plan, args, counters)
+        rows_by_split[plan.name] = export_split(args.output_dir, plan, args, counters, download_state)
 
     metadata = {
         "tasks": TASKS,
@@ -374,6 +456,7 @@ def main() -> None:
         "test_per_task": args.test_per_task,
         "balanced": args.balanced,
         "max_image_side": args.max_image_side,
+        "hf_download_min_interval": args.hf_download_min_interval,
         "summary": summarize(rows_by_split),
     }
     (args.output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")

@@ -98,6 +98,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="For positive-only Project Sidewalk exports, treat other task heads as weak negatives for the current image.",
     )
+    parser.add_argument(
+        "--task-balanced-loss",
+        action="store_true",
+        help="Weight supervised labels so each task contributes equally even when one task has more training rows.",
+    )
     return parser.parse_args()
 
 
@@ -246,6 +251,20 @@ def compute_pos_weight(dataset: Any, weak_cross_task_negatives: bool) -> torch.T
     return (negatives / positives).float()
 
 
+def compute_task_loss_weight(dataset: Any, weak_cross_task_negatives: bool) -> torch.Tensor:
+    totals = torch.zeros(len(TASKS), dtype=torch.float64)
+    for row in dataset:
+        target = float(row["target"])
+        if weak_cross_task_negatives and target >= 0.5:
+            totals += 1.0
+        else:
+            totals[int(row["task_id"])] += 1.0
+
+    positive_totals = torch.clamp(totals, min=1.0)
+    weights = positive_totals.sum() / (len(TASKS) * positive_totals)
+    return weights.float()
+
+
 def summarize_rows(dataset: Any, weak_cross_task_negatives: bool) -> dict[str, Any]:
     summary: dict[str, Any] = {"rows": len(dataset), "tasks": {}}
     positives = {task: 0 for task in TASKS}
@@ -292,9 +311,16 @@ def expected_calibration_error(y_true: np.ndarray, y_score: np.ndarray, bins: in
     return ece
 
 
-def masked_bce_loss(logits: torch.Tensor, targets: torch.Tensor, mask: torch.Tensor, pos_weight: torch.Tensor) -> torch.Tensor:
+def masked_bce_loss(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    mask: torch.Tensor,
+    pos_weight: torch.Tensor,
+    task_loss_weight: torch.Tensor,
+) -> torch.Tensor:
     raw = nn.functional.binary_cross_entropy_with_logits(logits, targets, reduction="none", pos_weight=pos_weight)
-    return (raw * mask).sum() / torch.clamp(mask.sum(), min=1.0)
+    weighted_mask = mask * task_loss_weight
+    return (raw * weighted_mask).sum() / torch.clamp(weighted_mask.sum(), min=1.0)
 
 
 @torch.inference_mode()
@@ -472,6 +498,11 @@ def main() -> None:
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
     pos_weight = compute_pos_weight(train_raw, args.weak_cross_task_negatives).to(device)
+    task_loss_weight = (
+        compute_task_loss_weight(train_raw, args.weak_cross_task_negatives).to(device)
+        if args.task_balanced_loss
+        else torch.ones(len(TASKS), dtype=torch.float32, device=device)
+    )
     thresholds = [float(item) for item in args.threshold_grid.split(",") if item.strip()]
 
     args_dict = {
@@ -486,6 +517,11 @@ def main() -> None:
         "holdout_rows": len(holdout_raw),
         "synthetic_smoke": args.synthetic_smoke,
         "weak_cross_task_negatives": args.weak_cross_task_negatives,
+        "task_balanced_loss": args.task_balanced_loss,
+        "task_loss_weight": {
+            task: float(task_loss_weight[index].detach().cpu())
+            for index, task in enumerate(TASKS)
+        },
         "dataset_root": str(args.dataset_root) if args.dataset_root is not None else None,
         "calibration_split": args.calibration_split,
         "holdout_split": args.holdout_split,
@@ -515,7 +551,7 @@ def main() -> None:
             optimizer.zero_grad(set_to_none=True)
             with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
                 logits = model(images)
-                loss = masked_bce_loss(logits, targets, mask, pos_weight)
+                loss = masked_bce_loss(logits, targets, mask, pos_weight, task_loss_weight)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()

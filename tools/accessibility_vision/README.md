@@ -37,20 +37,24 @@ Labels are treated as partial multi-task labels. For example, a correct `curbram
 
 For a quick first checkpoint when only positive class exports are available, use `--weak-cross-task-negatives`. It treats positive examples from other Project Sidewalk validators as weak negatives for the current head. That is useful for bootstrapping and smoke benchmarking, but the production-quality model should be trained on the balanced validator exports plus RampNet curb-ramp data.
 
-Hugging Face may rate-limit anonymous dataset downloads. Use an authenticated `HF_TOKEN` when exporting larger subsets:
+Hugging Face may rate-limit anonymous dataset downloads. Use an authenticated `HF_TOKEN` when exporting larger subsets. The exporter samples validator images from the repository manifest first, then downloads only the selected files with a configurable throttle; this is slower than local datasets but avoids loading every image into memory and is more reliable for repeatable balanced exports:
 
 ```bash
 export HF_TOKEN=...
 python export_project_sidewalk_subset.py \
   --output-dir data/projectsidewalk-rampnet-balanced \
-  --train-per-task 1200 \
-  --validation-per-task 300 \
-  --test-per-task 300 \
+  --train-per-task 1000 \
+  --validation-per-task 200 \
+  --test-per-task 200 \
+  --hf-download-min-interval 0.12 \
   --include-rampnet-crop \
+  --rampnet-crop-train 500 \
+  --rampnet-crop-validation 100 \
+  --rampnet-crop-test 100 \
   --include-rampnet-panorama \
-  --rampnet-panorama-train 5000 \
-  --rampnet-panorama-validation 1000 \
-  --rampnet-panorama-test 1000
+  --rampnet-panorama-train 500 \
+  --rampnet-panorama-validation 100 \
+  --rampnet-panorama-test 100
 ```
 
 The export format always writes separate `train.jsonl`, `validation.jsonl`, and `test.jsonl` files. Use `validation` only for threshold calibration/model selection and reserve `test` for final holdout reporting. `RampNet crop` rows strengthen curb-ramp positives; `RampNet panorama` rows add large-scale curb-ramp positive/negative labels from `curb_ramp_points_normalized`.
@@ -82,14 +86,15 @@ python train_accessibility_vision.py \
   --dataset-root data/projectsidewalk-rampnet-balanced \
   --output-dir runs/project-sidewalk-convnext-tiny-v1 \
   --epochs 12 \
-  --batch-size 48 \
-  --learning-rate 3e-4 \
+  --batch-size 64 \
+  --learning-rate 1e-4 \
   --weight-decay 0.05 \
+  --task-balanced-loss \
   --calibration-split validation \
   --holdout-split test
 ```
 
-Training writes `latest_metrics.json` for the calibration split and `holdout_metrics.json` for the final untouched test split. The checkpoint embeds calibrated per-task thresholds, macro F1, Brier score, expected calibration error, and confusion counts.
+Training writes `latest_metrics.json` for the calibration split and `holdout_metrics.json` for the final untouched test split. The checkpoint embeds calibrated per-task thresholds, macro F1, Brier score, expected calibration error, and confusion counts. Keep `--task-balanced-loss` enabled when RampNet adds many curb-ramp rows; otherwise the model can over-optimize curb ramps and under-train obstacles, surface problems, and crosswalks.
 
 Positive-only bootstrap:
 
