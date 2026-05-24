@@ -574,7 +574,8 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
 
         var artifact = RouteGraphArtifactCodec.Pack(first);
         var payload = RouteGraphArtifactCodec.SerializeRedisPayload(artifact);
-        var written = await artifactStore.WriteAsync(first.ShardKey!, artifact, payload, "unit-test-manifest");
+        var manifestShardCacheKey = $"{first.ShardKey}:offline-shard";
+        var written = await artifactStore.WriteAsync(manifestShardCacheKey, artifact, payload, "unit-test-manifest");
         Assert.NotNull(written);
 
         var manifest = new RouteGraphArtifactManifest(
@@ -588,7 +589,7 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
             new[]
             {
                 new RouteGraphArtifactManifestShard(
-                    first.ShardKey!,
+                    manifestShardCacheKey,
                     -1.92,
                     52.47,
                     -1.86,
@@ -602,6 +603,12 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
             });
         Assert.NotNull(await artifactStore.WriteManifestAsync(manifest));
         await distributedCache.RemoveAsync(first.ShardKey!);
+        await distributedCache.SetAsync(
+            manifestShardCacheKey,
+            payload,
+            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5) });
+        File.Delete(written!.ArtifactPath);
+        File.Delete(Path.ChangeExtension(written.ArtifactPath, ".json"));
 
         await using var transaction = await dbContext.Database.BeginTransactionAsync();
         await dbContext.RouteEdges.ExecuteDeleteAsync();

@@ -270,12 +270,19 @@ public sealed class ArchitectureModularityTests
         var root = FindRepositoryRoot();
         var routingModule = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Modules", "RoutingModule.cs"));
         var warmupService = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "Background", "RouteGraphWarmupBackgroundService.cs"));
+        var artifactWarmupService = File.ReadAllText(Path.Combine(root, "AccessCity.API", "Services", "Background", "RouteGraphArtifactManifestWarmupBackgroundService.cs"));
+        var manifestHealthCheck = File.ReadAllText(Path.Combine(root, "AccessCity.API", "HealthChecks", "RouteGraphArtifactManifestHealthCheck.cs"));
         var configMap = File.ReadAllText(Path.Combine(root, "deploy", "kubernetes", "configmap.yaml"));
 
         Assert.Contains("RouteGraphWarmupBackgroundService", routingModule, StringComparison.Ordinal);
+        Assert.Contains("RouteGraphArtifactManifestWarmupBackgroundService", routingModule, StringComparison.Ordinal);
         Assert.Contains("LoadGraphAsync", warmupService, StringComparison.Ordinal);
+        Assert.Contains("TryReadManifestAsync", manifestHealthCheck, StringComparison.Ordinal);
+        Assert.Contains("TryReadManifestShardAsync", artifactWarmupService, StringComparison.Ordinal);
+        Assert.Contains("SetAsync", artifactWarmupService, StringComparison.Ordinal);
         Assert.Contains("Routing__RouteGraphWarmupEnabled: \"false\"", configMap, StringComparison.Ordinal);
         Assert.Contains("Routing__RouteGraphWarmupEnabled: \"true\"", configMap, StringComparison.Ordinal);
+        Assert.Contains("Routing__RouteGraphFileArtifactWarmupEnabled: \"false\"", configMap, StringComparison.Ordinal);
         Assert.Contains("Routing__RouteGraphWarmupRoutes__0__Name: \"birmingham-core\"", configMap, StringComparison.Ordinal);
         Assert.Contains("Routing__RouteGraphWarmupRoutes__3__Name: \"birmingham-jewellery-core\"", configMap, StringComparison.Ordinal);
     }

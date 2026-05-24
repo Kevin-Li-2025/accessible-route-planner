@@ -44,6 +44,11 @@ public static class RoutingModule
             services.AddHostedService<AccessCity.API.Services.Background.RouteGraphWarmupBackgroundService>();
         }
 
+        if (configuration.GetValue("Routing:RouteGraphFileArtifactWarmupEnabled", false))
+        {
+            services.AddHostedService<AccessCity.API.Services.Background.RouteGraphArtifactManifestWarmupBackgroundService>();
+        }
+
         return services;
     }
 }

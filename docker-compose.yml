@@ -60,6 +60,10 @@ services:
       Routing__RouteGraphFileArtifactManifestEnabled: ${Routing__RouteGraphFileArtifactManifestEnabled:-true}
       Routing__RouteGraphFileArtifactManifestFileName: ${Routing__RouteGraphFileArtifactManifestFileName:-manifest.json}
       Routing__RouteGraphMaxFileArtifactShardLoadCount: ${Routing__RouteGraphMaxFileArtifactShardLoadCount:-64}
+      Routing__RouteGraphFileArtifactWarmupEnabled: ${Routing__RouteGraphFileArtifactWarmupEnabled:-false}
+      Routing__RouteGraphFileArtifactWarmupDelaySeconds: ${Routing__RouteGraphFileArtifactWarmupDelaySeconds:-5}
+      Routing__RouteGraphFileArtifactWarmupShardLimit: ${Routing__RouteGraphFileArtifactWarmupShardLimit:-64}
+      Routing__RouteGraphFileArtifactWarmupLargestShardsFirst: ${Routing__RouteGraphFileArtifactWarmupLargestShardsFirst:-true}
       Routing__RouteGraphOfflineShardArtifactBuildEnabled: ${Routing__RouteGraphOfflineShardArtifactBuildEnabled:-false}
       Routing__RouteGraphOfflineShardArtifactBuildLimit: ${Routing__RouteGraphOfflineShardArtifactBuildLimit:-0}
       Routing__RouteGraphAltPreprocessingEnabled: ${Routing__RouteGraphAltPreprocessingEnabled:-true}
@@ -198,6 +202,10 @@ services:
       Routing__RouteGraphFileArtifactManifestEnabled: ${Routing__RouteGraphFileArtifactManifestEnabled:-true}
       Routing__RouteGraphFileArtifactManifestFileName: ${Routing__RouteGraphFileArtifactManifestFileName:-manifest.json}
       Routing__RouteGraphMaxFileArtifactShardLoadCount: ${Routing__RouteGraphMaxFileArtifactShardLoadCount:-64}
+      Routing__RouteGraphFileArtifactWarmupEnabled: ${Routing__RouteGraphFileArtifactWarmupEnabled:-true}
+      Routing__RouteGraphFileArtifactWarmupDelaySeconds: ${Routing__RouteGraphFileArtifactWarmupDelaySeconds:-5}
+      Routing__RouteGraphFileArtifactWarmupShardLimit: ${Routing__RouteGraphFileArtifactWarmupShardLimit:-64}
+      Routing__RouteGraphFileArtifactWarmupLargestShardsFirst: ${Routing__RouteGraphFileArtifactWarmupLargestShardsFirst:-true}
       Routing__RouteGraphOfflineShardArtifactBuildEnabled: ${Routing__RouteGraphOfflineShardArtifactBuildEnabled:-false}
       Routing__RouteGraphOfflineShardArtifactBuildLimit: ${Routing__RouteGraphOfflineShardArtifactBuildLimit:-0}
       Routing__RouteGraphAltPreprocessingEnabled: ${Routing__RouteGraphAltPreprocessingEnabled:-true}

@@ -410,6 +410,12 @@ public static class DependencyInjection
                 failureStatus: configuration.GetValue<bool>("Routing:RequireRouteGraphForReadiness")
                     ? HealthStatus.Unhealthy
                     : HealthStatus.Degraded,
+                tags: new[] { "ready" })
+            .AddCheck<RouteGraphArtifactManifestHealthCheck>(
+                "route_graph_artifacts",
+                failureStatus: configuration.GetValue<bool>("Routing:RequireRouteGraphForReadiness")
+                    ? HealthStatus.Unhealthy
+                    : HealthStatus.Degraded,
                 tags: new[] { "ready" });
         services.AddSingleton<CachedReadinessService>();
         services.AddHostedService<ReadinessWarmupBackgroundService>();

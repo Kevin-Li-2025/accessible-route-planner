@@ -167,7 +167,8 @@ public sealed class RouteGraphArtifactStore : IRouteGraphArtifactStore
                 paths.ArtifactPath,
                 payload.LongLength,
                 metadata.CreatedAtUtc,
-                metadata.SourceType);
+                metadata.SourceType,
+                payload);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
         {
@@ -217,7 +218,8 @@ public sealed class RouteGraphArtifactStore : IRouteGraphArtifactStore
                 artifactPath,
                 payload.LongLength,
                 shard.CreatedAtUtc,
-                shard.SourceType);
+                shard.SourceType,
+                payload);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
         {
@@ -387,7 +389,8 @@ public sealed record RouteGraphArtifactStoreReadResult(
     string ArtifactPath,
     long PayloadBytes,
     DateTime CreatedAtUtc,
-    string SourceType);
+    string SourceType,
+    byte[]? Payload = null);
 
 public sealed record RouteGraphArtifactStoreWriteResult(
     string ArtifactPath,

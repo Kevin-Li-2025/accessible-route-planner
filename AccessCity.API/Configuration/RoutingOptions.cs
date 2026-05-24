@@ -33,6 +33,10 @@ public sealed class RoutingOptions
     public bool RouteGraphFileArtifactManifestEnabled { get; set; } = true;
     public string RouteGraphFileArtifactManifestFileName { get; set; } = "manifest.json";
     public int RouteGraphMaxFileArtifactShardLoadCount { get; set; } = 64;
+    public bool RouteGraphFileArtifactWarmupEnabled { get; set; }
+    public int RouteGraphFileArtifactWarmupDelaySeconds { get; set; } = 5;
+    public int RouteGraphFileArtifactWarmupShardLimit { get; set; } = 64;
+    public bool RouteGraphFileArtifactWarmupLargestShardsFirst { get; set; } = true;
     public bool RouteGraphOfflineShardArtifactBuildEnabled { get; set; }
     public int RouteGraphOfflineShardArtifactBuildLimit { get; set; }
     public bool RouteGraphAltPreprocessingEnabled { get; set; } = true;

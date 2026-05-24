@@ -223,13 +223,18 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         foreach (var shard in matchingShards)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var artifact = await _artifactStore.TryReadManifestShardAsync(shard, cancellationToken);
-            if (artifact is null)
+            var graphData = await TryGetDistributedSnapshotAsync(shard.CacheKey, cancellationToken);
+            if (graphData is null)
             {
-                return null;
+                var artifact = await _artifactStore.TryReadManifestShardAsync(shard, cancellationToken);
+                if (artifact is null)
+                {
+                    return null;
+                }
+
+                graphData = RouteGraphArtifactCodec.Unpack(artifact.Artifact);
             }
 
-            var graphData = RouteGraphArtifactCodec.Unpack(artifact.Artifact);
             if (!graphData.HasCoverage)
             {
                 return null;
