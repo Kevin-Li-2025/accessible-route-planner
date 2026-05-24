@@ -90,6 +90,8 @@ services:
       # Local compose mounts the small fixture below; production should override FilePath with a city extract.
       OsmImport__FilePath: ${OsmImport__FilePath:-/app/osm/test-network.osm}
       OsmImport__ImportOnStartup: ${OsmImport__ImportOnStartup:-true}
+      OsmImport__UsePostgresCopy: ${OsmImport__UsePostgresCopy:-true}
+      OsmImport__BulkCopyBatchSize: ${OsmImport__BulkCopyBatchSize:-20000}
       # HybridCache L2 (route cache, etc.). Empty = use in-process memory only (see DependencyInjection).
       # Enable Redis: put `REDIS_CONNECTION=redis:6379` in a `.env` next to this file, then recreate api.
       ConnectionStrings__Redis: ${REDIS_CONNECTION:-redis:6379}
@@ -183,6 +185,8 @@ services:
       RiskScoring__RealtimeExternalSignalsEnabled: ${RiskScoring__RealtimeExternalSignalsEnabled:-false}
       OsmImport__ImportOnStartup: "false"
       OsmImport__FilePath: ${OsmImport__FilePath:-/app/osm/test-network.osm}
+      OsmImport__UsePostgresCopy: ${OsmImport__UsePostgresCopy:-true}
+      OsmImport__BulkCopyBatchSize: ${OsmImport__BulkCopyBatchSize:-20000}
       ConnectionStrings__Redis: ${REDIS_CONNECTION:-redis:6379}
       Workers__OsmImport__Enabled: "true"
       Workers__Routing__Enabled: "true"

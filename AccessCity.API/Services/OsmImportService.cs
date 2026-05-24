@@ -6,6 +6,8 @@ using AccessCity.API.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using NetTopologySuite.Geometries;
+using Npgsql;
+using NpgsqlTypes;
 using OsmSharp;
 using OsmSharp.Complete;
 using OsmSharp.Streams;
@@ -183,9 +185,10 @@ public sealed class OsmImportService : IOsmImportService
     {
         var nodeCache = new Dictionary<long, (double Lon, double Lat)>();
         var seenAssetKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var pendingRouteNodes = new List<RouteNode>(250);
-        var pendingRouteEdges = new List<RouteEdge>(250);
-        var pendingAssets = new List<InfrastructureAsset>(250);
+        var batchSize = GetFlushBatchSize(dbContext);
+        var pendingRouteNodes = new List<RouteNode>(Math.Min(batchSize, 4096));
+        var pendingRouteEdges = new List<RouteEdge>(Math.Min(batchSize, 4096));
+        var pendingAssets = new List<InfrastructureAsset>(Math.Min(batchSize, 4096));
         var counters = new ImportCounters();
         var previousAutoDetectChanges = dbContext.ChangeTracker.AutoDetectChangesEnabled;
         dbContext.ChangeTracker.AutoDetectChangesEnabled = false;
@@ -216,7 +219,7 @@ public sealed class OsmImportService : IOsmImportService
                         }
                     }
 
-                    if (pendingAssets.Count >= 500)
+                    if (pendingAssets.Count >= batchSize)
                     {
                         await FlushAsync(dbContext, pendingRouteNodes, pendingRouteEdges, pendingAssets, cancellationToken);
                     }
@@ -250,7 +253,9 @@ public sealed class OsmImportService : IOsmImportService
                         }
                     }
 
-                    if (pendingRouteNodes.Count >= 500 || pendingRouteEdges.Count >= 500 || pendingAssets.Count >= 250)
+                    if (pendingRouteNodes.Count >= batchSize ||
+                        pendingRouteEdges.Count >= batchSize ||
+                        pendingAssets.Count >= batchSize)
                     {
                         await FlushAsync(dbContext, pendingRouteNodes, pendingRouteEdges, pendingAssets, cancellationToken);
                     }
@@ -835,6 +840,21 @@ public sealed class OsmImportService : IOsmImportService
             return;
         }
 
+        if (TryGetPostgresConnection(dbContext, out var connection))
+        {
+            await FlushWithPostgresCopyAsync(
+                connection,
+                pendingRouteNodes,
+                pendingRouteEdges,
+                pendingAssets,
+                cancellationToken);
+            dbContext.ChangeTracker.Clear();
+            pendingRouteNodes.Clear();
+            pendingRouteEdges.Clear();
+            pendingAssets.Clear();
+            return;
+        }
+
         if (pendingRouteNodes.Count > 0)
         {
             dbContext.RouteNodes.AddRange(pendingRouteNodes);
@@ -857,6 +877,254 @@ public sealed class OsmImportService : IOsmImportService
         pendingAssets.Clear();
     }
 
+    private int GetFlushBatchSize(AppDbContext dbContext)
+    {
+        if (!CanUsePostgresCopy(dbContext))
+        {
+            return 500;
+        }
+
+        return Math.Clamp(_options.Value.BulkCopyBatchSize, 1_000, 100_000);
+    }
+
+    private bool TryGetPostgresConnection(AppDbContext dbContext, out NpgsqlConnection connection)
+    {
+        if (CanUsePostgresCopy(dbContext) &&
+            dbContext.Database.GetDbConnection() is NpgsqlConnection npgsqlConnection)
+        {
+            connection = npgsqlConnection;
+            return true;
+        }
+
+        connection = null!;
+        return false;
+    }
+
+    private bool CanUsePostgresCopy(AppDbContext dbContext) =>
+        _options.Value.UsePostgresCopy &&
+        string.Equals(dbContext.Database.ProviderName, "Npgsql.EntityFrameworkCore.PostgreSQL", StringComparison.Ordinal);
+
+    private static async Task FlushWithPostgresCopyAsync(
+        NpgsqlConnection connection,
+        IReadOnlyCollection<RouteNode> pendingRouteNodes,
+        IReadOnlyCollection<RouteEdge> pendingRouteEdges,
+        IReadOnlyCollection<InfrastructureAsset> pendingAssets,
+        CancellationToken cancellationToken)
+    {
+        var openedConnection = connection.State != System.Data.ConnectionState.Open;
+        if (openedConnection)
+        {
+            await connection.OpenAsync(cancellationToken);
+        }
+
+        try
+        {
+            if (pendingRouteNodes.Count > 0)
+            {
+                await CopyRouteNodesAsync(connection, pendingRouteNodes, cancellationToken);
+            }
+
+            if (pendingRouteEdges.Count > 0)
+            {
+                await CopyRouteEdgesAsync(connection, pendingRouteEdges, cancellationToken);
+            }
+
+            if (pendingAssets.Count > 0)
+            {
+                await CopyInfrastructureAssetsAsync(connection, pendingAssets, cancellationToken);
+            }
+        }
+        finally
+        {
+            if (openedConnection)
+            {
+                await connection.CloseAsync();
+            }
+        }
+    }
+
+    private static async Task CopyRouteNodesAsync(
+        NpgsqlConnection connection,
+        IEnumerable<RouteNode> nodes,
+        CancellationToken cancellationToken)
+    {
+        await using var writer = await connection.BeginBinaryImportAsync(
+            """
+            COPY public.route_nodes ("Id", "Location", "Tags")
+            FROM STDIN (FORMAT BINARY)
+            """,
+            cancellationToken);
+
+        foreach (var node in nodes)
+        {
+            await writer.StartRowAsync(cancellationToken);
+            await writer.WriteAsync(node.Id, NpgsqlDbType.Bigint, cancellationToken);
+            await writer.WriteAsync(node.Location, NpgsqlDbType.Geometry, cancellationToken);
+            await writer.WriteAsync(ToJson(node.Tags), NpgsqlDbType.Jsonb, cancellationToken);
+        }
+
+        await writer.CompleteAsync(cancellationToken);
+    }
+
+    private static async Task CopyRouteEdgesAsync(
+        NpgsqlConnection connection,
+        IEnumerable<RouteEdge> edges,
+        CancellationToken cancellationToken)
+    {
+        await using var writer = await connection.BeginBinaryImportAsync(
+            """
+            COPY public.route_edges (
+                "FromNodeId",
+                "ToNodeId",
+                "SourceWayId",
+                "Geometry",
+                "DistanceMetres",
+                "BaseSafetyCost",
+                "SurfaceType",
+                "HasStairs",
+                "HasCrossing",
+                "IsUnderConstruction",
+                "LightingQuality",
+                "IsSteep",
+                kerb_height,
+                smoothness,
+                width_metres,
+                has_tactile_paving,
+                "HasBarrier",
+                "Access",
+                accessibility_cost_version,
+                standard_accessibility_penalty_seconds,
+                wheelchair_accessibility_penalty_seconds,
+                stroller_accessibility_penalty_seconds,
+                accessibility_data_quality,
+                "Tags")
+            FROM STDIN (FORMAT BINARY)
+            """,
+            cancellationToken);
+
+        foreach (var edge in edges)
+        {
+            await writer.StartRowAsync(cancellationToken);
+            await writer.WriteAsync(edge.FromNodeId, NpgsqlDbType.Bigint, cancellationToken);
+            await writer.WriteAsync(edge.ToNodeId, NpgsqlDbType.Bigint, cancellationToken);
+            if (edge.SourceWayId.HasValue)
+            {
+                await writer.WriteAsync(edge.SourceWayId.Value, NpgsqlDbType.Bigint, cancellationToken);
+            }
+            else
+            {
+                await writer.WriteNullAsync(cancellationToken);
+            }
+
+            await writer.WriteAsync(edge.Geometry, NpgsqlDbType.Geometry, cancellationToken);
+            await writer.WriteAsync(edge.DistanceMetres, NpgsqlDbType.Double, cancellationToken);
+            await writer.WriteAsync(edge.BaseSafetyCost, NpgsqlDbType.Double, cancellationToken);
+            await writer.WriteAsync(edge.SurfaceType, NpgsqlDbType.Varchar, cancellationToken);
+            await writer.WriteAsync(edge.HasStairs, NpgsqlDbType.Boolean, cancellationToken);
+            await writer.WriteAsync(edge.HasCrossing, NpgsqlDbType.Boolean, cancellationToken);
+            await writer.WriteAsync(edge.IsUnderConstruction, NpgsqlDbType.Boolean, cancellationToken);
+            await writer.WriteAsync(edge.LightingQuality, NpgsqlDbType.Double, cancellationToken);
+            await writer.WriteAsync(edge.IsSteep, NpgsqlDbType.Boolean, cancellationToken);
+            await writer.WriteAsync(edge.KerbHeight, NpgsqlDbType.Double, cancellationToken);
+            await WriteNullableStringAsync(writer, edge.Smoothness, NpgsqlDbType.Varchar, cancellationToken);
+            await WriteNullableDoubleAsync(writer, edge.WidthMetres, cancellationToken);
+            await writer.WriteAsync(edge.HasTactilePaving, NpgsqlDbType.Boolean, cancellationToken);
+            await writer.WriteAsync(edge.HasBarrier, NpgsqlDbType.Boolean, cancellationToken);
+            await WriteNullableStringAsync(writer, edge.Access, NpgsqlDbType.Text, cancellationToken);
+            await writer.WriteAsync(edge.AccessibilityCostVersion, NpgsqlDbType.Integer, cancellationToken);
+            await writer.WriteAsync(edge.StandardAccessibilityPenaltySeconds, NpgsqlDbType.Double, cancellationToken);
+            await writer.WriteAsync(edge.WheelchairAccessibilityPenaltySeconds, NpgsqlDbType.Double, cancellationToken);
+            await writer.WriteAsync(edge.StrollerAccessibilityPenaltySeconds, NpgsqlDbType.Double, cancellationToken);
+            await writer.WriteAsync(edge.AccessibilityDataQuality, NpgsqlDbType.Double, cancellationToken);
+            await writer.WriteAsync(ToJson(edge.Tags), NpgsqlDbType.Jsonb, cancellationToken);
+        }
+
+        await writer.CompleteAsync(cancellationToken);
+    }
+
+    private static async Task CopyInfrastructureAssetsAsync(
+        NpgsqlConnection connection,
+        IEnumerable<InfrastructureAsset> assets,
+        CancellationToken cancellationToken)
+    {
+        await using var writer = await connection.BeginBinaryImportAsync(
+            """
+            COPY public.infrastructure_assets (
+                "AssetType",
+                "Name",
+                "Geometry",
+                "Status",
+                "AccessibilityInfo",
+                "SourceSystem",
+                "SourceRecordId",
+                "LastObservedAt",
+                "CreatedAt",
+                "UpdatedAt")
+            FROM STDIN (FORMAT BINARY)
+            """,
+            cancellationToken);
+
+        foreach (var asset in assets)
+        {
+            await writer.StartRowAsync(cancellationToken);
+            await writer.WriteAsync(asset.AssetType, NpgsqlDbType.Varchar, cancellationToken);
+            await WriteNullableStringAsync(writer, asset.Name, NpgsqlDbType.Text, cancellationToken);
+            await writer.WriteAsync(asset.Geometry, NpgsqlDbType.Geometry, cancellationToken);
+            await writer.WriteAsync(asset.Status, NpgsqlDbType.Varchar, cancellationToken);
+            await writer.WriteAsync(ToJson(asset.AccessibilityInfo), NpgsqlDbType.Jsonb, cancellationToken);
+            await writer.WriteAsync(asset.SourceSystem, NpgsqlDbType.Varchar, cancellationToken);
+            await WriteNullableStringAsync(writer, asset.SourceRecordId, NpgsqlDbType.Varchar, cancellationToken);
+            await WriteNullableDateTimeAsync(writer, asset.LastObservedAt, cancellationToken);
+            await writer.WriteAsync(asset.CreatedAt, NpgsqlDbType.TimestampTz, cancellationToken);
+            await writer.WriteAsync(asset.UpdatedAt, NpgsqlDbType.TimestampTz, cancellationToken);
+        }
+
+        await writer.CompleteAsync(cancellationToken);
+    }
+
+    private static async Task WriteNullableStringAsync(
+        NpgsqlBinaryImporter writer,
+        string? value,
+        NpgsqlDbType dbType,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            await writer.WriteNullAsync(cancellationToken);
+            return;
+        }
+
+        await writer.WriteAsync(value, dbType, cancellationToken);
+    }
+
+    private static async Task WriteNullableDoubleAsync(
+        NpgsqlBinaryImporter writer,
+        double? value,
+        CancellationToken cancellationToken)
+    {
+        if (value.HasValue)
+        {
+            await writer.WriteAsync(value.Value, NpgsqlDbType.Double, cancellationToken);
+            return;
+        }
+
+        await writer.WriteNullAsync(cancellationToken);
+    }
+
+    private static async Task WriteNullableDateTimeAsync(
+        NpgsqlBinaryImporter writer,
+        DateTime? value,
+        CancellationToken cancellationToken)
+    {
+        if (value.HasValue)
+        {
+            await writer.WriteAsync(value.Value, NpgsqlDbType.TimestampTz, cancellationToken);
+            return;
+        }
+
+        await writer.WriteNullAsync(cancellationToken);
+    }
+
     private Point CreatePoint(double longitude, double latitude)
     {
         return _geometryFactory.CreatePoint(new Coordinate(longitude, latitude));
@@ -875,6 +1143,11 @@ public sealed class OsmImportService : IOsmImportService
     private static JsonDocument ToJsonDocument(IReadOnlyDictionary<string, string> data)
     {
         return JsonSerializer.SerializeToDocument(data);
+    }
+
+    private static string ToJson(JsonDocument document)
+    {
+        return document.RootElement.GetRawText();
     }
 
     private sealed class ImportCounters

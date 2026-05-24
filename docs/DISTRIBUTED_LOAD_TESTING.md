@@ -24,6 +24,10 @@ kubectl -n accesscity apply -f deploy/kubernetes/loadtest-job.yaml
 kubectl -n accesscity logs -f job/accesscity-distributed-loadtest
 ```
 
+Run the steady-state test after replicas have rolled out, Kafka consumer lag is zero, and route/risk
+caches have had a short warmup. A deliberately cold run is still useful, but report it separately:
+cold-cache tail latency can fail the same thresholds that a warmed multi-replica run passes.
+
 ## What It Exercises
 
 The script mixes:
@@ -75,6 +79,10 @@ injection checks.
 - `tools/profile-city-route-graph.sh`: profiles a real OSM extract through the offline graph
   preprocessing path and prints source graph size, shard reuse, artifact size, binary Redis
   payload bytes, cold load, hot load, and artifact unpack timings.
+- `OsmImport__UsePostgresCopy` / `OsmImport__BulkCopyBatchSize`: keep binary COPY enabled on
+  OSM import workers. City-scale imports should be measured with
+  `Routing__RouteGraphProfileUseOsmExtract=false` before relying on PostGIS-backed runtime graph
+  loads.
 - `Routing__MaxHazardsPerRequest`: cap on active hazards loaded for one route/risk request.
 - `ExternalApis__*__MaxConcurrentRequests`: per-pod bulkhead for tail-sensitive upstream services.
 - `ExternalApis__CircuitBreaker__*`: shared timeout/circuit behavior for external dependency fallback.

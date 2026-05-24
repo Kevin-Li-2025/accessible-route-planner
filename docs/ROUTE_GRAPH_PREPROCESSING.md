@@ -35,6 +35,23 @@ The JSON result reports source graph size, source shard count, shard reuse ratio
 
 Latest Birmingham extract check (`Birmingham.osm.pbf`, 53.6MB, `Routing__MaxRouteGraphEdges=2000000`) built a non-truncated graph of 661,852 nodes and 1,428,512 directed edges into 1,419 shards. The four warmup routes reused 53 unique shards across 89 references (`shardReuseRatio=0.4045`), all carried ALT-v1 preprocessing, and the largest route artifact moved from about 69.5MB JSON to about 14.6MB binary Redis payload. With the shard index, compact in-memory ALT tables, and binary payload in place, max cold shard merge/preprocessing time was about 229ms, max production pack/binary serialize time was about 115ms, max artifact unpack time was about 92ms, and max Redis hot-load restore was about 48ms on the local offline extract profile.
 
+## Runtime PostGIS Import Profile
+
+The runtime PostGIS path is still not the preferred serving path for 1M+ DAU, but import now uses PostgreSQL binary `COPY` for route nodes, route edges, and infrastructure assets when `OsmImport__UsePostgresCopy=true`. Keep this enabled on workers; the EF `SaveChanges` path remains as a fallback for tests or non-Postgres providers.
+
+Validated local Birmingham runtime import (`Routing__RouteGraphProfileUseOsmExtract=false`, `Routing__MaxRouteGraphEdges=2000000`, `OsmImport__BulkCopyBatchSize=20000`) inserted 661,852 route nodes, 1,429,002 directed route edges, and 202,230 infrastructure assets in 80.68 seconds. The resulting PostGIS profile produced four ALT-backed route graph artifacts with 89 shard references, largest binary Redis payload about 14.6MB, max cold repository load about 3.43s, and hot in-memory loads near 0ms once the shard bundle was cached.
+
+Use this mode to validate schema and runtime graph loading after import changes:
+
+```bash
+Routing__RouteGraphProfileUseOsmExtract=false \
+OsmImport__BulkCopyBatchSize=20000 \
+Routing__MaxRouteGraphEdges=2000000 \
+tools/profile-city-route-graph.sh
+```
+
+If runtime import regresses, check `feed_ingestion_runs` duration, Postgres WAL/write I/O, and whether `OsmImport__UsePostgresCopy` was disabled. For production-scale serving, prefer prebuilt immutable graph artifacts and worker warmup over having every route shard depend on fresh PostGIS reads.
+
 ## Reading Results
 
 - `shardReuseRatio`: should increase as warmup/profile routes overlap. Low values mean route requests are too dispersed for exact route cache to matter and the graph needs larger precomputed partitions or route bucketing.

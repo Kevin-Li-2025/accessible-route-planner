@@ -163,12 +163,12 @@ data:
           tags: { name: 'route-poll' }
         });
         const pollBody = parseJson(poll);
-        if (poll.status === 200 && pollBody && pollBody.status === 'Completed') {
+        if (poll.status === 200 && pollBody && (pollBody.status === 'Completed' || pollBody.status === 2)) {
           check(poll, { 'route job completed': () => true });
           return;
         }
 
-        if (poll.status === 200 && pollBody && pollBody.status === 'Failed') {
+        if (poll.status === 200 && pollBody && (pollBody.status === 'Failed' || pollBody.status === 3)) {
           check(poll, { 'route job completed': () => false });
           return;
         }
