@@ -60,6 +60,7 @@ docker compose run --rm --no-deps \
   -e Routing__RouteGraphProfileAndExit=true \
   -e Routing__RouteGraphPrepartitionedShardsEnabled=true \
   -e Routing__RouteGraphPackedArtifactsEnabled=true \
+  -e Routing__RouteGraphMaxDistributedSnapshotBytes="${Routing__RouteGraphMaxDistributedSnapshotBytes:-8388608}" \
   -e Routing__RouteGraphFileArtifactStoreEnabled="${Routing__RouteGraphFileArtifactStoreEnabled:-true}" \
   -e Routing__RouteGraphFileArtifactDirectory="${Routing__RouteGraphFileArtifactDirectory:-/app/route-graph-artifacts}" \
   -e Routing__RouteGraphFileArtifactWriteThroughEnabled="${Routing__RouteGraphFileArtifactWriteThroughEnabled:-true}" \
@@ -72,6 +73,16 @@ docker compose run --rm --no-deps \
   -e Routing__RouteGraphAltLandmarkCount="${Routing__RouteGraphAltLandmarkCount:-4}" \
   -e Routing__RouteGraphMaxAltPreprocessedNodes="${Routing__RouteGraphMaxAltPreprocessedNodes:-60000}" \
   -e Routing__RouteGraphProfileUseOsmExtract="${Routing__RouteGraphProfileUseOsmExtract:-true}" \
+  -e Routing__RouteGraphProfileOutputPath="${Routing__RouteGraphProfileOutputPath:-/app/route-graph-artifacts/profile-report.json}" \
+  -e Routing__RouteGraphProfileFailOnQualityGate="${Routing__RouteGraphProfileFailOnQualityGate:-false}" \
+  -e Routing__RouteGraphProfileMaxRedisPayloadBytes="${Routing__RouteGraphProfileMaxRedisPayloadBytes:-8388608}" \
+  -e Routing__RouteGraphProfileMaxArtifactBytes="${Routing__RouteGraphProfileMaxArtifactBytes:-33554432}" \
+  -e Routing__RouteGraphProfileMaxColdLoadMilliseconds="${Routing__RouteGraphProfileMaxColdLoadMilliseconds:-2000}" \
+  -e Routing__RouteGraphProfileMaxHotLoadMilliseconds="${Routing__RouteGraphProfileMaxHotLoadMilliseconds:-100}" \
+  -e Routing__RouteGraphProfileMaxArtifactPackMilliseconds="${Routing__RouteGraphProfileMaxArtifactPackMilliseconds:-750}" \
+  -e Routing__RouteGraphProfileMaxArtifactStoreReadMilliseconds="${Routing__RouteGraphProfileMaxArtifactStoreReadMilliseconds:-150}" \
+  -e Routing__RouteGraphProfileMaxArtifactUnpackMilliseconds="${Routing__RouteGraphProfileMaxArtifactUnpackMilliseconds:-150}" \
+  -e Routing__RouteGraphProfileMaxShardReferencesPerRoute="${Routing__RouteGraphProfileMaxShardReferencesPerRoute:-64}" \
   -e Routing__MaxRouteGraphEdges="${Routing__MaxRouteGraphEdges:-2000000}" \
   -e Routing__RouteGraphWarmupRoutes__0__Name=birmingham-core \
   -e Routing__RouteGraphWarmupRoutes__0__StartLat=52.4862 \
@@ -94,3 +105,5 @@ docker compose run --rm --no-deps \
   -e Routing__RouteGraphWarmupRoutes__3__EndLat=52.4805 \
   -e Routing__RouteGraphWarmupRoutes__3__EndLng=-1.9015 \
   api --profile-route-graph-and-exit
+
+echo "Route graph profile report: data/route-graph-artifacts/profile-report.json"

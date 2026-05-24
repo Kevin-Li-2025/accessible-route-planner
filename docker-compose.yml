@@ -54,6 +54,7 @@ services:
       Routing__RouteGraphMaxPrepartitionedShardCount: ${Routing__RouteGraphMaxPrepartitionedShardCount:-64}
       Routing__RouteGraphMinEdgesPerPrepartitionedShard: ${Routing__RouteGraphMinEdgesPerPrepartitionedShard:-250}
       Routing__RouteGraphPackedArtifactsEnabled: ${Routing__RouteGraphPackedArtifactsEnabled:-true}
+      Routing__RouteGraphMaxDistributedSnapshotBytes: ${Routing__RouteGraphMaxDistributedSnapshotBytes:-8388608}
       Routing__RouteGraphFileArtifactStoreEnabled: ${Routing__RouteGraphFileArtifactStoreEnabled:-false}
       Routing__RouteGraphFileArtifactDirectory: ${Routing__RouteGraphFileArtifactDirectory:-/app/route-graph-artifacts}
       Routing__RouteGraphFileArtifactWriteThroughEnabled: ${Routing__RouteGraphFileArtifactWriteThroughEnabled:-true}
@@ -79,6 +80,16 @@ services:
       Routing__RouteGraphReleaseSourceName: ${Routing__RouteGraphReleaseSourceName:-release-pipeline}
       Routing__RouteGraphProfileAndExit: ${Routing__RouteGraphProfileAndExit:-false}
       Routing__RouteGraphProfileUseOsmExtract: ${Routing__RouteGraphProfileUseOsmExtract:-true}
+      Routing__RouteGraphProfileOutputPath: ${Routing__RouteGraphProfileOutputPath:-}
+      Routing__RouteGraphProfileFailOnQualityGate: ${Routing__RouteGraphProfileFailOnQualityGate:-false}
+      Routing__RouteGraphProfileMaxRedisPayloadBytes: ${Routing__RouteGraphProfileMaxRedisPayloadBytes:-8388608}
+      Routing__RouteGraphProfileMaxArtifactBytes: ${Routing__RouteGraphProfileMaxArtifactBytes:-33554432}
+      Routing__RouteGraphProfileMaxColdLoadMilliseconds: ${Routing__RouteGraphProfileMaxColdLoadMilliseconds:-2000}
+      Routing__RouteGraphProfileMaxHotLoadMilliseconds: ${Routing__RouteGraphProfileMaxHotLoadMilliseconds:-100}
+      Routing__RouteGraphProfileMaxArtifactPackMilliseconds: ${Routing__RouteGraphProfileMaxArtifactPackMilliseconds:-750}
+      Routing__RouteGraphProfileMaxArtifactStoreReadMilliseconds: ${Routing__RouteGraphProfileMaxArtifactStoreReadMilliseconds:-150}
+      Routing__RouteGraphProfileMaxArtifactUnpackMilliseconds: ${Routing__RouteGraphProfileMaxArtifactUnpackMilliseconds:-150}
+      Routing__RouteGraphProfileMaxShardReferencesPerRoute: ${Routing__RouteGraphProfileMaxShardReferencesPerRoute:-64}
       Routing__RouteGraphDistributedLoadCoalescingEnabled: ${Routing__RouteGraphDistributedLoadCoalescingEnabled:-true}
       Routing__RouteGraphDistributedLoadLockTtlSeconds: ${Routing__RouteGraphDistributedLoadLockTtlSeconds:-8}
       Routing__RouteGraphDistributedLoadWaitMilliseconds: ${Routing__RouteGraphDistributedLoadWaitMilliseconds:-3500}
@@ -204,6 +215,7 @@ services:
       Routing__RouteGraphMaxPrepartitionedShardCount: ${Routing__RouteGraphMaxPrepartitionedShardCount:-64}
       Routing__RouteGraphMinEdgesPerPrepartitionedShard: ${Routing__RouteGraphMinEdgesPerPrepartitionedShard:-250}
       Routing__RouteGraphPackedArtifactsEnabled: ${Routing__RouteGraphPackedArtifactsEnabled:-true}
+      Routing__RouteGraphMaxDistributedSnapshotBytes: ${Routing__RouteGraphMaxDistributedSnapshotBytes:-8388608}
       Routing__RouteGraphFileArtifactStoreEnabled: ${Routing__RouteGraphFileArtifactStoreEnabled:-false}
       Routing__RouteGraphFileArtifactDirectory: ${Routing__RouteGraphFileArtifactDirectory:-/app/route-graph-artifacts}
       Routing__RouteGraphFileArtifactWriteThroughEnabled: ${Routing__RouteGraphFileArtifactWriteThroughEnabled:-true}
@@ -229,6 +241,16 @@ services:
       Routing__RouteGraphReleaseSourceName: ${Routing__RouteGraphReleaseSourceName:-release-pipeline}
       Routing__RouteGraphProfileAndExit: ${Routing__RouteGraphProfileAndExit:-false}
       Routing__RouteGraphProfileUseOsmExtract: ${Routing__RouteGraphProfileUseOsmExtract:-true}
+      Routing__RouteGraphProfileOutputPath: ${Routing__RouteGraphProfileOutputPath:-}
+      Routing__RouteGraphProfileFailOnQualityGate: ${Routing__RouteGraphProfileFailOnQualityGate:-false}
+      Routing__RouteGraphProfileMaxRedisPayloadBytes: ${Routing__RouteGraphProfileMaxRedisPayloadBytes:-8388608}
+      Routing__RouteGraphProfileMaxArtifactBytes: ${Routing__RouteGraphProfileMaxArtifactBytes:-33554432}
+      Routing__RouteGraphProfileMaxColdLoadMilliseconds: ${Routing__RouteGraphProfileMaxColdLoadMilliseconds:-2000}
+      Routing__RouteGraphProfileMaxHotLoadMilliseconds: ${Routing__RouteGraphProfileMaxHotLoadMilliseconds:-100}
+      Routing__RouteGraphProfileMaxArtifactPackMilliseconds: ${Routing__RouteGraphProfileMaxArtifactPackMilliseconds:-750}
+      Routing__RouteGraphProfileMaxArtifactStoreReadMilliseconds: ${Routing__RouteGraphProfileMaxArtifactStoreReadMilliseconds:-150}
+      Routing__RouteGraphProfileMaxArtifactUnpackMilliseconds: ${Routing__RouteGraphProfileMaxArtifactUnpackMilliseconds:-150}
+      Routing__RouteGraphProfileMaxShardReferencesPerRoute: ${Routing__RouteGraphProfileMaxShardReferencesPerRoute:-64}
       Routing__RouteGraphDistributedLoadCoalescingEnabled: ${Routing__RouteGraphDistributedLoadCoalescingEnabled:-true}
       Routing__RouteGraphDistributedLoadLockTtlSeconds: ${Routing__RouteGraphDistributedLoadLockTtlSeconds:-8}
       Routing__RouteGraphDistributedLoadWaitMilliseconds: ${Routing__RouteGraphDistributedLoadWaitMilliseconds:-3500}

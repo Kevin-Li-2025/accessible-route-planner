@@ -495,6 +495,17 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
             {
                 var artifact = RouteGraphArtifactCodec.Pack(graphData);
                 var redisPayload = RouteGraphArtifactCodec.SerializeRedisPayload(artifact);
+                if (_options.RouteGraphMaxDistributedSnapshotBytes > 0
+                    && redisPayload.LongLength > _options.RouteGraphMaxDistributedSnapshotBytes)
+                {
+                    _logger.LogDebug(
+                        "Skipping distributed route graph snapshot {ShardKey}: payload {PayloadBytes} bytes exceeds limit {PayloadLimitBytes}",
+                        cacheKey,
+                        redisPayload.LongLength,
+                        _options.RouteGraphMaxDistributedSnapshotBytes);
+                    return;
+                }
+
                 await _distributedCache.SetAsync(
                     cacheKey,
                     redisPayload,

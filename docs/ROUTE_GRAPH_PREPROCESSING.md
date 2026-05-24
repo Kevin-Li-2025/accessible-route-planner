@@ -38,7 +38,20 @@ Routing__MaxRouteGraphEdges=2000000 \
 tools/profile-city-route-graph.sh
 ```
 
-The JSON result reports source graph size, source shard count, shard reuse ratio, uncompressed artifact size, binary Redis payload bytes, cold shard merge/preprocessing time, worker hot-load time from Redis payload restore, artifact pack time, and artifact unpack time.
+The JSON result reports source graph size, source shard count, shard reuse ratio, uncompressed artifact size, binary Redis payload bytes, cold shard merge/preprocessing time, worker hot-load time from Redis payload restore, artifact pack time, artifact unpack time, p95 hot-load/unpack time, and a `qualityGatePassed` summary with concrete warnings. The script also writes a machine-readable report to `data/route-graph-artifacts/profile-report.json` by default.
+
+Quality gates are warning-only unless `Routing__RouteGraphProfileFailOnQualityGate=true` is set. Runtime also honors `Routing__RouteGraphMaxDistributedSnapshotBytes`: route graph bundles above that size stay in per-pod L1 memory and are not pushed into Redis/file write-through as large route-specific objects. Source shard artifacts can still be warmed from the manifest, so cross-city routes do not force every API replica to move a 10MB+ merged bundle through Redis.
+
+Use the fail mode in CI or release pipelines after tuning the limits for the target city:
+
+```bash
+Routing__RouteGraphProfileFailOnQualityGate=true \
+Routing__RouteGraphProfileMaxRedisPayloadBytes=8388608 \
+Routing__RouteGraphProfileMaxArtifactUnpackMilliseconds=150 \
+tools/profile-city-route-graph.sh
+```
+
+The key limits are `RouteGraphMaxDistributedSnapshotBytes`, `RouteGraphProfileMaxRedisPayloadBytes`, `RouteGraphProfileMaxArtifactBytes`, `RouteGraphProfileMaxColdLoadMilliseconds`, `RouteGraphProfileMaxHotLoadMilliseconds`, `RouteGraphProfileMaxArtifactPackMilliseconds`, `RouteGraphProfileMaxArtifactStoreReadMilliseconds`, `RouteGraphProfileMaxArtifactUnpackMilliseconds`, and `RouteGraphProfileMaxShardReferencesPerRoute`.
 
 When `Routing__RouteGraphFileArtifactStoreEnabled=true`, the profile also persists packed artifacts under `data/route-graph-artifacts` via the compose mount. With `Routing__RouteGraphOfflineShardArtifactBuildEnabled=true`, it writes one versioned artifact per offline source shard before route-level bundle profiling and publishes `manifest.json` with shard bbox, payload size, SHA-256 payload hash, artifact-set id, and version metadata. Use `Routing__RouteGraphOfflineShardArtifactBuildLimit` for quick smoke runs; `0` means all shards.
 
@@ -61,7 +74,7 @@ If explicit release bounds are omitted, the command derives a bbox from `Routing
 dotnet run --project AccessCity.API/AccessCity.API.csproj -- --validate-route-graph-release
 ```
 
-Latest Birmingham extract check (`Birmingham.osm.pbf`, 53.6MB, `Routing__MaxRouteGraphEdges=2000000`) built a non-truncated graph of 661,852 nodes and 1,428,512 directed edges into 1,419 shards. The offline shard artifact build persisted all 1,419 source shard artifacts plus `manifest.json` in about 7.4s, totaling about 225.7MB of binary `.acrg` payloads. The four warmup routes reused 53 unique shards across 89 references (`shardReuseRatio=0.4045`), all carried ALT-v1 preprocessing, and the largest route artifact moved from about 69.5MB JSON to about 14.6MB binary Redis payload. With the shard index, compact in-memory ALT tables, dense preprocessing graph, binary payload pre-sizing, file artifact store, and manifest in place, max cold shard merge/preprocessing time was about 150ms, max production pack/binary serialize time was about 73ms, max artifact unpack time was about 54ms, max Redis hot-load restore was about 46ms, and max file artifact hot-load was about 56ms on the local offline extract profile.
+Latest Birmingham extract check (`Birmingham.osm.pbf`, 53.6MB, `Routing__MaxRouteGraphEdges=2000000`) built a non-truncated graph of 661,852 nodes and 1,428,512 directed edges into 1,419 shards. The offline shard artifact build persisted all 1,419 source shard artifacts plus `manifest.json` in about 5.6s, totaling about 225.7MB of binary `.acrg` payloads. The four warmup routes reused 53 unique shards across 89 references (`shardReuseRatio=0.4045`), all carried ALT-v1 preprocessing, and the largest route artifact moved from about 69.5MB JSON to about 14.6MB binary Redis payload. With the 8MB distributed snapshot cap, that cross-city bundle is reported but not written to Redis/file write-through; the other three route bundles remain cacheable. On the local offline extract profile, max source shard merge/preprocessing time was about 568ms, max pack/binary serialize time about 259ms, max artifact unpack time about 50ms, max Redis hot-load restore about 36ms, and max file artifact read about 61ms.
 
 ## Runtime PostGIS Import Profile
 
@@ -85,6 +98,7 @@ If runtime import regresses, check `feed_ingestion_runs` duration, Postgres WAL/
 - `shardReuseRatio`: should increase as warmup/profile routes overlap. Low values mean route requests are too dispersed for exact route cache to matter and the graph needs larger precomputed partitions or route bucketing.
 - `artifactBytes` / `redisPayloadBytes`: `artifactBytes` is uncompressed JSON; `redisPayloadBytes` is the binary L2 payload. Watch both before raising landmark count. ALT tables scale with `nodes * landmarks * 2`, and the production in-memory tables use 4-byte floats.
 - `artifactUnpackMilliseconds` / `hotLoadMilliseconds`: proxy for new worker hot-load time from Redis, including binary payload restore.
+- `wouldCacheDistributedPayload`: false means the route bundle exceeds `RouteGraphMaxDistributedSnapshotBytes`. That is expected for some long cross-city routes; rely on source shard artifacts plus pod-local L1 for those instead of spreading giant route bundles through Redis.
 - `isTruncated`: any `true` profile route means the route graph cap is too low or the bbox is too broad for the current shard settings.
 - `hasAltPreprocessing`: should be true for non-truncated shards under `RouteGraphMaxAltPreprocessedNodes`.
 

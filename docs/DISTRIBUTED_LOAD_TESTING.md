@@ -82,11 +82,17 @@ injection checks.
   cell artifacts instead of caching only exact route-sized graph blobs.
 - `Routing__RouteGraphPackedArtifactsEnabled`: store compact versioned graph artifacts with
   precomputed edge traversal weights in the shared cache.
+- `Routing__RouteGraphMaxDistributedSnapshotBytes`: cap route graph bundle writes to Redis/L2.
+  Keep this near the profile payload budget so long cross-city route bundles stay pod-local while
+  reusable source shard artifacts still warm from the manifest.
 - `Routing__RouteGraphAltPreprocessingEnabled`: add ALT landmark lower-bound tables to packed
   artifacts for faster exact A* search on larger city shards.
 - `tools/profile-city-route-graph.sh`: profiles a real OSM extract through the offline graph
   preprocessing path and prints source graph size, shard reuse, artifact size, binary Redis
-  payload bytes, cold load, hot load, and artifact unpack timings.
+  payload bytes, cold load, hot load, artifact unpack timings, and profile quality-gate warnings.
+  It writes `data/route-graph-artifacts/profile-report.json`; set
+  `Routing__RouteGraphProfileFailOnQualityGate=true` when the run should fail CI/CD on oversized
+  payloads or slow worker hot-load.
 - `OsmImport__UsePostgresCopy` / `OsmImport__BulkCopyBatchSize`: keep binary COPY enabled on
   OSM import workers. City-scale imports should be measured with
   `Routing__RouteGraphProfileUseOsmExtract=false` before relying on PostGIS-backed runtime graph

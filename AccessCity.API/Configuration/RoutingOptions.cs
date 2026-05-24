@@ -27,6 +27,7 @@ public sealed class RoutingOptions
     public int RouteGraphMaxPrepartitionedShardCount { get; set; } = 64;
     public int RouteGraphMinEdgesPerPrepartitionedShard { get; set; } = 250;
     public bool RouteGraphPackedArtifactsEnabled { get; set; } = true;
+    public long RouteGraphMaxDistributedSnapshotBytes { get; set; } = 8 * 1024 * 1024;
     public bool RouteGraphFileArtifactStoreEnabled { get; set; }
     public string RouteGraphFileArtifactDirectory { get; set; } = "/app/route-graph-artifacts";
     public bool RouteGraphFileArtifactWriteThroughEnabled { get; set; } = true;
@@ -56,6 +57,16 @@ public sealed class RoutingOptions
     public string RouteGraphReleaseSourceName { get; set; } = "release-pipeline";
     public bool RouteGraphProfileAndExit { get; set; }
     public bool RouteGraphProfileUseOsmExtract { get; set; } = true;
+    public string? RouteGraphProfileOutputPath { get; set; }
+    public bool RouteGraphProfileFailOnQualityGate { get; set; }
+    public long RouteGraphProfileMaxRedisPayloadBytes { get; set; } = 8 * 1024 * 1024;
+    public long RouteGraphProfileMaxArtifactBytes { get; set; } = 32 * 1024 * 1024;
+    public double RouteGraphProfileMaxColdLoadMilliseconds { get; set; } = 2_000;
+    public double RouteGraphProfileMaxHotLoadMilliseconds { get; set; } = 100;
+    public double RouteGraphProfileMaxArtifactPackMilliseconds { get; set; } = 750;
+    public double RouteGraphProfileMaxArtifactStoreReadMilliseconds { get; set; } = 150;
+    public double RouteGraphProfileMaxArtifactUnpackMilliseconds { get; set; } = 150;
+    public int RouteGraphProfileMaxShardReferencesPerRoute { get; set; } = 64;
     public bool RouteGraphDistributedLoadCoalescingEnabled { get; set; } = true;
     public int RouteGraphDistributedLoadLockTtlSeconds { get; set; } = 8;
     public int RouteGraphDistributedLoadWaitMilliseconds { get; set; } = 3_500;

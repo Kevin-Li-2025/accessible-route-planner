@@ -64,11 +64,12 @@ public sealed class OsmRouteGraphExtractProfileService : IOsmRouteGraphExtractPr
             var artifact = RouteGraphArtifactCodec.Pack(graphData);
             var redisPayload = RouteGraphArtifactCodec.SerializeRedisPayload(artifact);
             pack.Stop();
+            var routeBundleCacheable = WouldCacheDistributedPayload(redisPayload.LongLength);
             var artifactPayload = RouteGraphArtifactCodec.SerializeJsonBytes(artifact);
             var artifactStoreWriteMilliseconds = 0.0;
             var artifactStoreReadMilliseconds = 0.0;
             RouteGraphArtifactStoreWriteResult? artifactStoreWrite = null;
-            if (_artifactStore.IsEnabled && graphData.ShardKey is not null)
+            if (_artifactStore.IsEnabled && graphData.ShardKey is not null && routeBundleCacheable)
             {
                 var artifactStoreWriteStopwatch = Stopwatch.StartNew();
                 artifactStoreWrite = await _artifactStore.WriteAsync(
@@ -135,6 +136,7 @@ public sealed class OsmRouteGraphExtractProfileService : IOsmRouteGraphExtractPr
                 NodeCount = graphData.Nodes.Count,
                 EdgeCount = graphData.LoadedEdgeCount,
                 IsTruncated = graphData.IsTruncated,
+                WouldCacheDistributedPayload = routeBundleCacheable,
                 HasAltPreprocessing = graphData.Preprocessing?.HasLandmarks == true,
                 LandmarkCount = graphData.Preprocessing?.LandmarkNodeIds.Length ?? 0,
                 AltPreprocessedNodeCount = graphData.Preprocessing?.NodeDistances.Count ?? 0,
@@ -153,7 +155,7 @@ public sealed class OsmRouteGraphExtractProfileService : IOsmRouteGraphExtractPr
         }
 
         var uniqueShardReferences = shardReferences.Distinct(StringComparer.Ordinal).Count();
-        return new RouteGraphProfileResponse
+        var response = new RouteGraphProfileResponse
         {
             ProfiledAtUtc = DateTime.UtcNow,
             SourceType = "osm-extract-offline",
@@ -186,7 +188,13 @@ public sealed class OsmRouteGraphExtractProfileService : IOsmRouteGraphExtractPr
             MaxArtifactUnpackMilliseconds = results.Count == 0 ? 0 : results.Max(result => result.ArtifactUnpackMilliseconds),
             Routes = results
         };
+
+        return RouteGraphProfileQualityEvaluator.Finalize(response, _options);
     }
+
+    private bool WouldCacheDistributedPayload(long payloadBytes) =>
+        _options.RouteGraphMaxDistributedSnapshotBytes <= 0
+        || payloadBytes <= _options.RouteGraphMaxDistributedSnapshotBytes;
 
     private async Task<OfflineShardArtifactBuildResult> PersistOfflineShardArtifactsAsync(
         string filePath,

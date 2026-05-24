@@ -106,13 +106,22 @@ namespace AccessCity.API.Models
         public long TotalArtifactBytes { get; set; }
         public long MaxArtifactBytes { get; set; }
         public long TotalRedisPayloadBytes { get; set; }
+        public long MaxRedisPayloadBytes { get; set; }
+        public double AverageShardReferencesPerRoute { get; set; }
+        public int MaxSourceShardCountPerRoute { get; set; }
         public int PersistedShardArtifactCount { get; set; }
         public long PersistedShardArtifactBytes { get; set; }
         public double PersistedShardArtifactBuildMilliseconds { get; set; }
         public double MaxColdLoadMilliseconds { get; set; }
         public double MaxHotLoadMilliseconds { get; set; }
+        public double P95HotLoadMilliseconds { get; set; }
+        public double MaxPreprocessingMilliseconds { get; set; }
+        public double MaxArtifactPackMilliseconds { get; set; }
         public double MaxArtifactStoreReadMilliseconds { get; set; }
         public double MaxArtifactUnpackMilliseconds { get; set; }
+        public double P95ArtifactUnpackMilliseconds { get; set; }
+        public bool QualityGatePassed { get; set; } = true;
+        public List<string> QualityGateWarnings { get; set; } = new();
         public List<RouteGraphProfileRouteResult> Routes { get; set; } = new();
     }
 
@@ -124,6 +133,7 @@ namespace AccessCity.API.Models
         public int NodeCount { get; set; }
         public int EdgeCount { get; set; }
         public bool IsTruncated { get; set; }
+        public bool WouldCacheDistributedPayload { get; set; } = true;
         public bool HasAltPreprocessing { get; set; }
         public int LandmarkCount { get; set; }
         public int AltPreprocessedNodeCount { get; set; }

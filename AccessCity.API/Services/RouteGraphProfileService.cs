@@ -72,6 +72,7 @@ public sealed class RouteGraphProfileService : IRouteGraphProfileService
             var artifact = RouteGraphArtifactCodec.Pack(graphData);
             var redisPayload = RouteGraphArtifactCodec.SerializeRedisPayload(artifact);
             pack.Stop();
+            var routeBundleCacheable = WouldCacheDistributedPayload(redisPayload.LongLength);
             var artifactPayload = RouteGraphArtifactCodec.SerializeJsonBytes(artifact);
 
             var unpack = Stopwatch.StartNew();
@@ -99,6 +100,7 @@ public sealed class RouteGraphProfileService : IRouteGraphProfileService
                 NodeCount = graphData.Nodes.Count,
                 EdgeCount = graphData.LoadedEdgeCount,
                 IsTruncated = graphData.IsTruncated,
+                WouldCacheDistributedPayload = routeBundleCacheable,
                 HasAltPreprocessing = graphData.Preprocessing?.HasLandmarks == true,
                 LandmarkCount = graphData.Preprocessing?.LandmarkNodeIds.Length ?? 0,
                 AltPreprocessedNodeCount = graphData.Preprocessing?.NodeDistances.Count ?? 0,
@@ -112,7 +114,7 @@ public sealed class RouteGraphProfileService : IRouteGraphProfileService
         }
 
         var uniqueShardReferences = shardReferences.Distinct(StringComparer.Ordinal).Count();
-        return new RouteGraphProfileResponse
+        var response = new RouteGraphProfileResponse
         {
             ProfiledAtUtc = DateTime.UtcNow,
             ArtifactSchemaVersion = RouteGraphArtifactCodec.SchemaVersion,
@@ -133,5 +135,11 @@ public sealed class RouteGraphProfileService : IRouteGraphProfileService
             MaxArtifactUnpackMilliseconds = results.Count == 0 ? 0 : results.Max(result => result.ArtifactUnpackMilliseconds),
             Routes = results
         };
+
+        return RouteGraphProfileQualityEvaluator.Finalize(response, _options);
     }
+
+    private bool WouldCacheDistributedPayload(long payloadBytes) =>
+        _options.RouteGraphMaxDistributedSnapshotBytes <= 0
+        || payloadBytes <= _options.RouteGraphMaxDistributedSnapshotBytes;
 }

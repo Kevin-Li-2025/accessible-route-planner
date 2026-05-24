@@ -53,8 +53,29 @@ public static class RouteGraphProfileCommandExtensions
                 .ProfileAsync(request, CancellationToken.None);
         }
 
-        Console.WriteLine(JsonSerializer.Serialize(
+        var json = JsonSerializer.Serialize(
             result,
-            new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+            new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true });
+
+        if (!string.IsNullOrWhiteSpace(routingOptions.RouteGraphProfileOutputPath))
+        {
+            var outputPath = Path.GetFullPath(routingOptions.RouteGraphProfileOutputPath);
+            var outputDirectory = Path.GetDirectoryName(outputPath);
+            if (!string.IsNullOrWhiteSpace(outputDirectory))
+            {
+                Directory.CreateDirectory(outputDirectory);
+            }
+
+            await File.WriteAllTextAsync(outputPath, json);
+            logger.LogInformation("Wrote route graph profile report to {OutputPath}", outputPath);
+        }
+
+        Console.WriteLine(json);
+
+        if (routingOptions.RouteGraphProfileFailOnQualityGate && !result.QualityGatePassed)
+        {
+            throw new InvalidOperationException(
+                "Route graph profile quality gate failed: " + string.Join("; ", result.QualityGateWarnings));
+        }
     }
 }
