@@ -529,6 +529,22 @@ namespace AccessCity.API.Services
             return R * 2.0 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(Math.Max(0, 1.0 - a)));
         }
 
+        /// <summary>
+        /// Fast equirectangular distance approximation in metres.
+        /// Uses only 1 trig call (cos) vs Haversine's 4 (sin×2, cos×2, atan2, sqrt).
+        /// Accurate to &lt;0.1% for distances under 50km — ideal for city-scale routing heuristics.
+        /// </summary>
+        public static double EquirectangularDistance(double lat1, double lon1, double lat2, double lon2)
+        {
+            const double R = 6_371_000;
+            const double DegToRad = Math.PI / 180.0;
+            double dLat = (lat2 - lat1) * DegToRad;
+            double dLon = (lon2 - lon1) * DegToRad;
+            double cosAvgLat = Math.Cos((lat1 + lat2) * 0.5 * DegToRad);
+            double x = dLon * cosAvgLat;
+            return R * Math.Sqrt(x * x + dLat * dLat);
+        }
+
         private static double ToRad(double deg) => deg * Math.PI / 180.0;
 
         /// <summary>Sigmoid squashing: maps [0,∞) → [0,1).</summary>

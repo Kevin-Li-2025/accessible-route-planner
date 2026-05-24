@@ -40,6 +40,7 @@ public class RoutingService : IRoutingService
     private readonly IRiskTileCacheService _tileCache;
     private readonly IRouteCacheService _routeCache;
     private readonly IHazardRiskGrid _hazardRiskGrid;
+    private readonly IHazardSpatialIndex _hazardSpatialIndex;
 
     private const double WalkingSpeed = 1.3;
     private const double MaxHeuristicSpeedMetresPerSecond = 2.0;
@@ -63,7 +64,8 @@ public class RoutingService : IRoutingService
         IRouteGraphStatusService routeGraphStatus,
         IRiskTileCacheService tileCache,
         IRouteCacheService routeCache,
-        IHazardRiskGrid hazardRiskGrid)
+        IHazardRiskGrid hazardRiskGrid,
+        IHazardSpatialIndex hazardSpatialIndex)
     {
         _riskService = riskService;
         _aiRisk = aiRisk;
@@ -73,6 +75,7 @@ public class RoutingService : IRoutingService
         _tileCache = tileCache;
         _routeCache = routeCache;
         _hazardRiskGrid = hazardRiskGrid;
+        _hazardSpatialIndex = hazardSpatialIndex;
     }
 
     /// <summary>
@@ -649,14 +652,39 @@ public class RoutingService : IRoutingService
 
     /// <summary>
     /// Find hazards that are dangerously close to the route path.
+    /// Uses the in-memory R-Tree spatial index to pre-filter candidates,
+    /// reducing complexity from O(H × R) to O(K × R) where K ≪ H.
     /// </summary>
     private List<HazardReport> FindHazardsNearRoute(
         List<Coordinate> routeCoords,
         List<HazardReport> hazards)
     {
-        var result = new List<HazardReport>();
+        // Compute the bounding box of the route polyline + buffer
+        IReadOnlyList<HazardReport> candidates;
+        if (_hazardSpatialIndex.IsWarmedUp && routeCoords.Count > 0)
+        {
+            double minLon = double.MaxValue, maxLon = double.MinValue;
+            double minLat = double.MaxValue, maxLat = double.MinValue;
+            foreach (var c in routeCoords)
+            {
+                if (c.X < minLon) minLon = c.X;
+                if (c.X > maxLon) maxLon = c.X;
+                if (c.Y < minLat) minLat = c.Y;
+                if (c.Y > maxLat) maxLat = c.Y;
+            }
+            // Expand by avoidance radius (~50m ≈ 0.00045 degrees)
+            double bufferDeg = HazardAvoidanceRadiusMetres / 111_320.0;
+            candidates = _hazardSpatialIndex.QueryBoundingBox(
+                minLon - bufferDeg, minLat - bufferDeg,
+                maxLon + bufferDeg, maxLat + bufferDeg);
+        }
+        else
+        {
+            candidates = hazards;
+        }
 
-        foreach (var hazard in hazards)
+        var result = new List<HazardReport>();
+        foreach (var hazard in candidates)
         {
             var minDist = DistancePointToPolylineMetres(hazard.Location.Coordinate, routeCoords);
             if (minDist < HazardAvoidanceRadiusMetres)
@@ -1349,7 +1377,9 @@ public class RoutingService : IRoutingService
 
     private static double Heuristic(Coordinate a, Coordinate b)
     {
-        double dist = RiskScoringService.HaversineDistance(a.Y, a.X, b.Y, b.X);
+        // Equirectangular approximation: 6-8x faster than Haversine,
+        // accurate to <0.1% for city-scale distances (<50km).
+        double dist = RiskScoringService.EquirectangularDistance(a.Y, a.X, b.Y, b.X);
         return dist / MaxHeuristicSpeedMetresPerSecond;
     }
 

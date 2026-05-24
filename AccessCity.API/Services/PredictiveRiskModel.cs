@@ -37,6 +37,7 @@ namespace AccessCity.API.Services
     public class PredictiveRiskModel : IPredictiveRiskModel
     {
         private readonly IRiskScoringService _baseRisk;
+        private readonly IHazardRiskGrid _hazardRiskGrid;
         private readonly ILiveHazardClient? _weatherClient;
         private readonly IMemoryCache? _cache;
         private readonly TimeSpan _externalSignalBudget;
@@ -57,11 +58,13 @@ namespace AccessCity.API.Services
 
         public PredictiveRiskModel(
             IRiskScoringService baseRisk,
+            IHazardRiskGrid hazardRiskGrid,
             ILiveHazardClient? weatherClient = null,
             IMemoryCache? cache = null,
             IConfiguration? configuration = null)
         {
             _baseRisk = baseRisk;
+            _hazardRiskGrid = hazardRiskGrid;
             _weatherClient = weatherClient;
             _cache = cache;
             var budgetMs = configuration?.GetValue("RiskScoring:ExternalSignalBudgetMilliseconds", (int)DefaultExternalSignalBudget.TotalMilliseconds)
@@ -137,7 +140,11 @@ namespace AccessCity.API.Services
             IEnumerable<HazardReport> hazards,
             double radiusMetres = 200)
         {
-            double hazardRisk = _baseRisk.QuickRisk(lat, lon, hazards, radiusMetres);
+            // O(1) grid lookup when the precomputed risk grid is available;
+            // falls back to the original O(N) QuickRisk linear scan otherwise.
+            double hazardRisk = _hazardRiskGrid.IsReady
+                ? _hazardRiskGrid.GetRisk(lat, lon)
+                : _baseRisk.QuickRisk(lat, lon, hazards, radiusMetres);
             double timeRisk = ComputeTimeOfDayRisk(DateTime.UtcNow);
             double weatherRisk = WeatherRiskEvaluator.GetCachedRisk(_cache, lat, lon);
             double crimeRisk = _baseRisk.QuickCrimeRisk(lat, lon);
