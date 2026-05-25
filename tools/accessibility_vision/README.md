@@ -61,6 +61,8 @@ python export_project_sidewalk_subset.py \
 
 The exporter writes separate `train.jsonl`, `validation.jsonl`, and `test.jsonl` files. It downloads selected validator images directly from the Hub file URLs so large balanced exports do not fill the Hugging Face cache with unused images; tune `--validator-download-workers`, `--hf-download-min-interval`, and `--hf-download-timeout-seconds` for the network you are using. Use `validation` only for threshold calibration/model selection and reserve `test` for final holdout reporting. `RampNet crop` rows strengthen curb-ramp positives; `RampNet panorama` rows add large-scale curb-ramp positive/negative labels from `curb_ramp_points_normalized`.
 
+If a long export is interrupted, rerun with `--splits train`, `--splits validation`, or `--splits test` to rebuild only the missing split. Skipped split JSONL files are still loaded into `metadata.json`, so the dataset record remains complete.
+
 When one task is underperforming, add more training rows for that head without changing the validation or final holdout distribution:
 
 ```bash
@@ -132,14 +134,43 @@ Training writes `latest_metrics.json` for the raw calibration split, `calibrated
 
 Training also writes `model_card.md`. Treat that file as the release record for the checkpoint: data split sizes, holdout/calibration metrics, per-task thresholds, temperatures, training arguments, and the review-only guardrails that keep the model out of route decisions.
 
+High-accuracy L20 pass:
+
+```bash
+python train_accessibility_vision.py \
+  --model convnext_small \
+  --dataset-root data/projectsidewalk-rampnet-balanced \
+  --output-dir runs/project-sidewalk-convnext-small-v2 \
+  --epochs 18 \
+  --batch-size 48 \
+  --image-size 256 \
+  --learning-rate 8e-5 \
+  --min-learning-rate 1e-6 \
+  --weight-decay 0.05 \
+  --scheduler cosine \
+  --warmup-epochs 2 \
+  --freeze-backbone-epochs 1 \
+  --gradient-clip-norm 1.0 \
+  --ema-decay 0.999 \
+  --early-stopping-patience 5 \
+  --train-augmentation standard \
+  --channels-last \
+  --task-balanced-loss \
+  --temperature-scale \
+  --calibration-split validation \
+  --holdout-split test
+```
+
+Use this as the default serious training recipe on the L20. It increases capacity, image resolution, training stability, and calibration discipline while keeping release selection tied to untouched holdout metrics. Use `--train-augmentation strong` only as an ablation; in the current Project Sidewalk + RampNet split it underperformed the standard augmentation recipe on holdout F1. Promote a run only if holdout macro F1 improves without a material macro ECE or weaker-head regression. If the larger checkpoint is too slow for interactive photo review, distill it back into `convnext_tiny` after it becomes the teacher.
+
 Current promoted release pattern:
 
-- dataset: `projectsidewalk-rampnet-balanced-v5` plus train-only weak-class validator delta;
-- checkpoint: `convnext_tiny`, 12 epochs, task-balanced loss, temperature scaling;
-- calibration: macro F1 `0.8668`, macro ECE `0.0620`;
-- untouched test holdout: macro F1 `0.8021`, macro ECE `0.0759`;
-- strongest gain over the prior v5 tiny checkpoint: `obstacle_present` F1 `0.6514 -> 0.7054`;
-- known regression to address next: `surface_problem_present` F1 `0.7085 -> 0.6961`, ECE `0.1234 -> 0.1500`.
+- dataset: `projectsidewalk-rampnet-best-v7`, with train-only expansion for curb ramps, obstacles, and surface problems;
+- checkpoint: `convnext_small`, 18 epoch budget with early stopping at epoch 15, best epoch 10, task-balanced loss, EMA, cosine warmup, temperature scaling;
+- calibration: macro F1 `0.8699`, macro ECE `0.0662`;
+- untouched test holdout: macro F1 `0.8174`, macro ECE `0.0808`;
+- strongest gains over the prior promoted tiny checkpoint: `curb_ramp_present` F1 `0.9077 -> 0.9349`, `crosswalk_present` F1 `0.8920 -> 0.9065`, and macro F1 `0.8021 -> 0.8174`;
+- known weak heads to target next: `obstacle_present` F1 `0.7163` and `surface_problem_present` F1 `0.7024`; these need more reviewed city-specific hard examples rather than reusing final holdout rows.
 
 Remote L20 runner:
 
@@ -151,14 +182,12 @@ export HF_TOKEN=...
 # Optional when the GPU box is slow to reach PyPI or download.pytorch.org:
 export PIP_INDEX_URL=...
 export PIP_EXTRA_INDEX_URL=...
-# Optional higher-capacity accuracy pass:
-export ACCESSCITY_VISION_MODEL=convnext_small
+# Optional class-focused expansion for weaker heads:
 export ACCESSCITY_VISION_TRAIN_PER_TASK_OVERRIDES=obstacle_present=2200,surface_problem_present=2200,curb_ramp_absent=2000
-export ACCESSCITY_VISION_LEARNING_RATE=8e-5
 ./run_l20_training.sh
 ```
 
-The runner syncs this tool directory to the GPU box, exports a balanced Project Sidewalk + RampNet dataset, trains a calibrated ConvNeXt checkpoint, and verifies that `best.pt`, `holdout_metrics.json`, and `model_card.md` exist. It never stores credentials in the repository.
+The runner syncs this tool directory to the GPU box, exports a balanced Project Sidewalk + RampNet dataset, trains a calibrated high-accuracy ConvNeXt checkpoint with EMA, cosine warmup, standard augmentation, and untouched holdout evaluation, then verifies that `best.pt`, `holdout_metrics.json`, and `model_card.md` exist. It never stores credentials in the repository.
 
 Hard-example mining for the weaker heads:
 

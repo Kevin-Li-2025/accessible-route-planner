@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import random
@@ -83,6 +84,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=6)
     parser.add_argument("--batch-size", type=int, default=48)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
+    parser.add_argument("--min-learning-rate", type=float, default=1e-6)
     parser.add_argument("--weight-decay", type=float, default=0.05)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--seed", type=int, default=20260524)
@@ -90,6 +92,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-eval-per-task", type=int, default=0)
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--threshold-grid", default="0.25,0.30,0.35,0.40,0.45,0.50,0.55,0.60,0.65,0.70,0.75")
+    parser.add_argument("--scheduler", default="cosine", choices=["cosine", "none"])
+    parser.add_argument("--warmup-epochs", type=float, default=1.0)
+    parser.add_argument("--gradient-clip-norm", type=float, default=1.0)
+    parser.add_argument("--ema-decay", type=float, default=0.999)
+    parser.add_argument("--freeze-backbone-epochs", type=float, default=0.0)
+    parser.add_argument("--early-stopping-patience", type=int, default=0)
+    parser.add_argument("--train-augmentation", default="standard", choices=["standard", "strong"])
+    parser.add_argument("--channels-last", action="store_true")
     parser.add_argument("--calibration-split", default="validation")
     parser.add_argument("--holdout-split", default="test")
     parser.add_argument("--calibration-bins", type=int, default=10)
@@ -207,16 +217,40 @@ def load_optional_exported_split(dataset_root: Path, split: str, max_per_task: i
     return load_exported_split(dataset_root, split, max_per_task, seed)
 
 
-def build_transforms(image_size: int) -> tuple[transforms.Compose, transforms.Compose]:
-    train_tf = transforms.Compose(
-        [
-            transforms.Resize((image_size, image_size)),
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.1),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ]
-    )
+def build_transforms(image_size: int, train_augmentation: str) -> tuple[transforms.Compose, transforms.Compose]:
+    if train_augmentation == "strong":
+        train_tf = transforms.Compose(
+            [
+                transforms.RandomResizedCrop(image_size, scale=(0.72, 1.0), ratio=(0.85, 1.15)),
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.RandomApply(
+                    [
+                        transforms.ColorJitter(
+                            brightness=0.25,
+                            contrast=0.25,
+                            saturation=0.18,
+                            hue=0.02,
+                        )
+                    ],
+                    p=0.8,
+                ),
+                transforms.RandomGrayscale(p=0.04),
+                transforms.RandomRotation(degrees=3),
+                transforms.ToTensor(),
+                transforms.RandomErasing(p=0.12, scale=(0.01, 0.04), ratio=(0.3, 3.3)),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ]
+        )
+    else:
+        train_tf = transforms.Compose(
+            [
+                transforms.Resize((image_size, image_size)),
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.1),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ]
+        )
     eval_tf = transforms.Compose(
         [
             transforms.Resize((image_size, image_size)),
@@ -246,6 +280,82 @@ def build_model(model_name: str) -> nn.Module:
     in_features = model.classifier[1].in_features
     model.classifier[1] = nn.Linear(in_features, len(TASKS))
     return model
+
+
+def set_backbone_trainable(model: nn.Module, model_name: str, trainable: bool) -> None:
+    head_prefixes = {
+        "convnext_tiny": ("classifier.2",),
+        "convnext_small": ("classifier.2",),
+        "efficientnet_b0": ("classifier.1",),
+    }
+    prefixes = head_prefixes.get(model_name, ())
+    for name, parameter in model.named_parameters():
+        parameter.requires_grad = trainable or name.startswith(prefixes)
+
+
+def build_scheduler(
+    optimizer: torch.optim.Optimizer,
+    scheduler_name: str,
+    *,
+    learning_rate: float,
+    min_learning_rate: float,
+    total_steps: int,
+    warmup_steps: int,
+) -> torch.optim.lr_scheduler.LRScheduler | None:
+    if scheduler_name == "none":
+        return None
+
+    total_steps = max(1, total_steps)
+    warmup_steps = max(0, min(warmup_steps, total_steps - 1))
+    min_factor = max(0.0, min(min_learning_rate / learning_rate, 1.0)) if learning_rate > 0 else 0.0
+
+    def lr_lambda(step: int) -> float:
+        if warmup_steps > 0 and step < warmup_steps:
+            return max(min_factor, (step + 1) / warmup_steps)
+        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        cosine = 0.5 * (1.0 + math.cos(math.pi * min(1.0, max(0.0, progress))))
+        return min_factor + (1.0 - min_factor) * cosine
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+
+def clone_ema_model(model: nn.Module) -> nn.Module:
+    ema_model = copy.deepcopy(model)
+    ema_model.eval()
+    for parameter in ema_model.parameters():
+        parameter.requires_grad_(False)
+    return ema_model
+
+
+@torch.no_grad()
+def update_ema_model(ema_model: nn.Module, model: nn.Module, decay: float) -> None:
+    model_state = model.state_dict()
+    for name, ema_value in ema_model.state_dict().items():
+        model_value = model_state[name].detach()
+        if ema_value.dtype.is_floating_point:
+            ema_value.mul_(decay).add_(model_value, alpha=1.0 - decay)
+        else:
+            ema_value.copy_(model_value)
+
+
+def to_device_batch(
+    images: torch.Tensor,
+    targets: torch.Tensor,
+    mask: torch.Tensor,
+    sample_weight: torch.Tensor,
+    device: torch.device,
+    *,
+    channels_last: bool,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    images = images.to(device, non_blocking=True)
+    if channels_last and device.type == "cuda":
+        images = images.contiguous(memory_format=torch.channels_last)
+    return (
+        images,
+        targets.to(device, non_blocking=True),
+        mask.to(device, non_blocking=True),
+        sample_weight.to(device, non_blocking=True),
+    )
 
 
 def compute_pos_weight(dataset: Any, weak_cross_task_negatives: bool) -> torch.Tensor:
@@ -536,6 +646,18 @@ def thresholds_from_metrics(metrics: dict[str, Any]) -> dict[str, float]:
     }
 
 
+def is_better_checkpoint(metrics: dict[str, Any], best_macro_f1: float, best_macro_ece: float | None) -> bool:
+    macro_f1 = float(metrics.get("macro_f1", 0.0))
+    macro_ece = metrics.get("macro_ece")
+    if macro_f1 > best_macro_f1 + 1e-6:
+        return True
+    if abs(macro_f1 - best_macro_f1) > 1e-6:
+        return False
+    if best_macro_ece is None:
+        return macro_ece is not None
+    return macro_ece is not None and float(macro_ece) < best_macro_ece
+
+
 def format_metric(value: Any) -> str:
     if value is None:
         return "n/a"
@@ -646,7 +768,7 @@ def main() -> None:
             holdout_raw = load_split(args.holdout_split, args.max_eval_per_task, args.seed)
         except Exception:  # noqa: BLE001
             holdout_raw = []
-    train_tf, eval_tf = build_transforms(args.image_size)
+    train_tf, eval_tf = build_transforms(args.image_size, args.train_augmentation)
 
     train_dataset = AccessibilityDataset(train_raw, train_tf, args.weak_cross_task_negatives)
     val_dataset = AccessibilityDataset(val_raw, eval_tf, args.weak_cross_task_negatives)
@@ -679,7 +801,19 @@ def main() -> None:
     )
 
     model = build_model(args.model).to(device)
+    if args.channels_last and device.type == "cuda":
+        model = model.to(memory_format=torch.channels_last)
+    ema_model = clone_ema_model(model) if args.ema_decay > 0 else None
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+    total_steps = max(1, args.epochs * max(len(train_loader), 1))
+    scheduler = build_scheduler(
+        optimizer,
+        args.scheduler,
+        learning_rate=args.learning_rate,
+        min_learning_rate=args.min_learning_rate,
+        total_steps=total_steps,
+        warmup_steps=int(args.warmup_epochs * max(len(train_loader), 1)),
+    )
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
     pos_weight = compute_pos_weight(train_raw, args.weak_cross_task_negatives).to(device)
     task_loss_weight = (
@@ -703,6 +837,14 @@ def main() -> None:
         "weak_cross_task_negatives": args.weak_cross_task_negatives,
         "task_balanced_loss": args.task_balanced_loss,
         "temperature_scale": args.temperature_scale,
+        "scheduler": args.scheduler,
+        "warmup_epochs": args.warmup_epochs,
+        "gradient_clip_norm": args.gradient_clip_norm,
+        "ema_decay": args.ema_decay,
+        "freeze_backbone_epochs": args.freeze_backbone_epochs,
+        "early_stopping_patience": args.early_stopping_patience,
+        "train_augmentation": args.train_augmentation,
+        "channels_last": args.channels_last,
         "task_loss_weight": {
             task: float(task_loss_weight[index].detach().cpu())
             for index, task in enumerate(TASKS)
@@ -721,46 +863,73 @@ def main() -> None:
     dataset_summary = metadata["dataset_summary"]
 
     best_macro_f1 = -1.0
+    best_macro_ece: float | None = None
     best_epoch = 0
+    epochs_without_improvement = 0
+    global_step = 0
     history = []
     started = time.perf_counter()
     for epoch in range(1, args.epochs + 1):
+        set_backbone_trainable(model, args.model, trainable=epoch > args.freeze_backbone_epochs)
         model.train()
         running_loss = 0.0
         batches = 0
         for images, targets, mask, sample_weight in tqdm(train_loader, desc=f"epoch {epoch}/{args.epochs}"):
-            images = images.to(device, non_blocking=True)
-            targets = targets.to(device, non_blocking=True)
-            mask = mask.to(device, non_blocking=True)
-            sample_weight = sample_weight.to(device, non_blocking=True)
+            images, targets, mask, sample_weight = to_device_batch(
+                images,
+                targets,
+                mask,
+                sample_weight,
+                device,
+                channels_last=args.channels_last,
+            )
 
             optimizer.zero_grad(set_to_none=True)
             with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
                 logits = model(images)
                 loss = masked_bce_loss(logits, targets, mask, pos_weight, task_loss_weight, sample_weight)
             scaler.scale(loss).backward()
+            if args.gradient_clip_norm > 0:
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.gradient_clip_norm)
             scaler.step(optimizer)
             scaler.update()
+            if scheduler is not None:
+                scheduler.step()
+            if ema_model is not None:
+                global_step += 1
+                ema_decay = min(args.ema_decay, (1 + global_step) / (10 + global_step))
+                update_ema_model(ema_model, model, ema_decay)
 
             running_loss += float(loss.detach().cpu())
             batches += 1
 
-        metrics = evaluate(model, val_loader, device, thresholds, args.calibration_bins)
+        eval_model = ema_model if ema_model is not None else model
+        metrics = evaluate(eval_model, val_loader, device, thresholds, args.calibration_bins)
         metrics["epoch"] = epoch
         metrics["train_loss"] = running_loss / max(batches, 1)
         metrics["elapsed_seconds"] = round(time.perf_counter() - started, 3)
         metrics["calibration_split"] = args.calibration_split
+        metrics["learning_rate"] = optimizer.param_groups[0]["lr"]
+        metrics["ema_decay"] = args.ema_decay if ema_model is not None else None
         history.append(metrics)
         (args.output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
         (args.output_dir / "latest_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-        save_checkpoint(args.output_dir / "latest.pt", model, args, metrics, dataset_summary)
+        save_checkpoint(args.output_dir / "latest.pt", eval_model, args, metrics, dataset_summary)
 
-        if metrics["macro_f1"] >= best_macro_f1:
+        if is_better_checkpoint(metrics, best_macro_f1, best_macro_ece):
             best_macro_f1 = metrics["macro_f1"]
+            best_macro_ece = metrics.get("macro_ece")
             best_epoch = epoch
-            save_checkpoint(args.output_dir / "best.pt", model, args, metrics, dataset_summary)
+            epochs_without_improvement = 0
+            save_checkpoint(args.output_dir / "best.pt", eval_model, args, metrics, dataset_summary)
+        else:
+            epochs_without_improvement += 1
 
         print(json.dumps({"epoch": epoch, "train_loss": metrics["train_loss"], "macro_f1": metrics["macro_f1"]}, indent=2))
+        if args.early_stopping_patience > 0 and epochs_without_improvement >= args.early_stopping_patience:
+            print(f"early_stopping_patience reached after epoch {epoch}; best_epoch={best_epoch}")
+            break
 
     best_path = args.output_dir / "best.pt"
     best_checkpoint = torch.load(best_path, map_location=device)

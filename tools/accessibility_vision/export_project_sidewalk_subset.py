@@ -57,6 +57,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--validation-per-task", type=int, default=300)
     parser.add_argument("--test-per-task", type=int, default=300)
     parser.add_argument(
+        "--splits",
+        default="train,validation,test",
+        help="Comma-separated splits to export. Existing JSONL files for skipped splits are loaded into metadata.",
+    )
+    parser.add_argument(
         "--train-per-task-overrides",
         default="",
         help="Comma-separated task=count overrides for train, for example obstacle_present=2200,surface_problem_present=2200.",
@@ -93,6 +98,7 @@ def parse_args() -> argparse.Namespace:
         args.train_per_task_overrides = parse_task_count_overrides(args.train_per_task_overrides)
         args.validation_per_task_overrides = parse_task_count_overrides(args.validation_per_task_overrides)
         args.test_per_task_overrides = parse_task_count_overrides(args.test_per_task_overrides)
+        args.splits = parse_splits(args.splits)
     except argparse.ArgumentTypeError as exc:
         parser.error(str(exc))
     return args
@@ -122,6 +128,19 @@ def parse_task_count_overrides(raw: str) -> dict[str, int]:
     return overrides
 
 
+def parse_splits(raw: str) -> set[str]:
+    valid = {"train", "validation", "test"}
+    splits = {item.strip() for item in raw.split(",") if item.strip()}
+    unknown = splits - valid
+    if unknown:
+        raise argparse.ArgumentTypeError(
+            f"Unknown split(s) {', '.join(sorted(unknown))}; expected any of {', '.join(sorted(valid))}."
+        )
+    if not splits:
+        raise argparse.ArgumentTypeError("At least one split must be selected.")
+    return splits
+
+
 def split_plans(args: argparse.Namespace) -> list[SplitPlan]:
     return [
         SplitPlan("train", args.train_per_task),
@@ -140,6 +159,16 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     with path.open("w", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row, separators=(",", ":")) + "\n")
+
+
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
 
 
 def open_image(example: dict[str, Any]) -> Image.Image:
@@ -564,7 +593,13 @@ def main() -> None:
     rows_by_split: dict[str, list[dict[str, Any]]] = {}
 
     for plan in split_plans(args):
-        rows_by_split[plan.name] = export_split(args.output_dir, plan, args, counters, download_state)
+        if plan.name in args.splits:
+            rows_by_split[plan.name] = export_split(args.output_dir, plan, args, counters, download_state)
+            continue
+        existing_split = args.output_dir / f"{plan.name}.jsonl"
+        if not existing_split.exists():
+            raise RuntimeError(f"Cannot skip {plan.name!r}; {existing_split} does not exist.")
+        rows_by_split[plan.name] = read_jsonl(existing_split)
 
     metadata = {
         "tasks": TASKS,
