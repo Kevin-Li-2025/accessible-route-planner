@@ -54,6 +54,18 @@ spec:
               value: "32"
             - name: VISION_MAX_BATCH_WAIT_MS
               value: "1"
+            - name: VISION_REQUIRE_HOLDOUT_METRICS
+              value: "true"
+            - name: VISION_REQUIRE_TEMPERATURE_SCALING
+              value: "true"
+            - name: VISION_MIN_HOLDOUT_MACRO_F1
+              value: "0.70"
+            - name: VISION_MAX_HOLDOUT_MACRO_ECE
+              value: "0.12"
+            - name: VISION_MIN_CALIBRATION_MACRO_F1
+              value: "0.70"
+            - name: VISION_MAX_CALIBRATION_MACRO_ECE
+              value: "0.12"
           ports:
             - containerPort: 8095
               name: http

@@ -53,6 +53,20 @@ class BatchRequest:
     future: Future[dict[str, Any]]
 
 
+@dataclass(frozen=True)
+class QualityGateResult:
+    passed: bool
+    failures: list[str]
+    checks: dict[str, Any]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "passed": self.passed,
+            "failures": self.failures,
+            "checks": self.checks,
+        }
+
+
 class MicroBatchPredictor:
     def __init__(
         self,
@@ -235,7 +249,97 @@ def task_candidates(tasks: list[str], probs: list[float], thresholds: dict[str, 
     return candidates
 
 
-def create_app(checkpoint_path: Path, device_name: str, max_batch_images: int, max_batch_wait_ms: float) -> FastAPI:
+def metric_number(metrics: dict[str, Any], name: str) -> float | None:
+    value = metrics.get(name)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def validate_checkpoint_quality(
+    checkpoint: dict[str, Any],
+    require_holdout_metrics: bool,
+    min_holdout_macro_f1: float,
+    max_holdout_macro_ece: float,
+    min_calibration_macro_f1: float,
+    max_calibration_macro_ece: float,
+    require_temperature_scaling: bool,
+) -> QualityGateResult:
+    metrics = checkpoint.get("metrics") or {}
+    holdout_metrics = checkpoint.get("holdout_metrics") or {}
+    logit_temperatures = checkpoint.get("logit_temperatures") or {}
+    failures: list[str] = []
+
+    checks: dict[str, Any] = {
+        "requireHoldoutMetrics": require_holdout_metrics,
+        "minHoldoutMacroF1": min_holdout_macro_f1,
+        "maxHoldoutMacroEce": max_holdout_macro_ece,
+        "minCalibrationMacroF1": min_calibration_macro_f1,
+        "maxCalibrationMacroEce": max_calibration_macro_ece,
+        "requireTemperatureScaling": require_temperature_scaling,
+        "temperatureScaled": bool(logit_temperatures),
+        "holdoutMacroF1": metric_number(holdout_metrics, "macro_f1"),
+        "holdoutMacroEce": metric_number(holdout_metrics, "macro_ece"),
+        "calibrationMacroF1": metric_number(metrics, "macro_f1"),
+        "calibrationMacroEce": metric_number(metrics, "macro_ece"),
+    }
+
+    if require_temperature_scaling and not logit_temperatures:
+        failures.append("checkpoint is not temperature-scaled")
+
+    holdout_required = require_holdout_metrics or min_holdout_macro_f1 > 0.0 or max_holdout_macro_ece < 1.0
+    if holdout_required and not holdout_metrics:
+        failures.append("checkpoint is missing final holdout metrics")
+
+    holdout_f1 = checks["holdoutMacroF1"]
+    if holdout_required and holdout_f1 is None:
+        failures.append("holdout macro_f1 is missing")
+    elif holdout_f1 is not None and holdout_f1 < min_holdout_macro_f1:
+        failures.append(f"holdout macro_f1 {holdout_f1:.4f} is below {min_holdout_macro_f1:.4f}")
+
+    holdout_ece = checks["holdoutMacroEce"]
+    if holdout_required and holdout_ece is None:
+        failures.append("holdout macro_ece is missing")
+    elif holdout_ece is not None and holdout_ece > max_holdout_macro_ece:
+        failures.append(f"holdout macro_ece {holdout_ece:.4f} is above {max_holdout_macro_ece:.4f}")
+
+    calibration_f1 = checks["calibrationMacroF1"]
+    if min_calibration_macro_f1 > 0.0 and calibration_f1 is None:
+        failures.append("calibration macro_f1 is missing")
+    elif calibration_f1 is not None and calibration_f1 < min_calibration_macro_f1:
+        failures.append(f"calibration macro_f1 {calibration_f1:.4f} is below {min_calibration_macro_f1:.4f}")
+
+    calibration_ece = checks["calibrationMacroEce"]
+    if max_calibration_macro_ece < 1.0 and calibration_ece is None:
+        failures.append("calibration macro_ece is missing")
+    elif calibration_ece is not None and calibration_ece > max_calibration_macro_ece:
+        failures.append(f"calibration macro_ece {calibration_ece:.4f} is above {max_calibration_macro_ece:.4f}")
+
+    return QualityGateResult(passed=not failures, failures=failures, checks=checks)
+
+
+def bool_from_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def create_app(
+    checkpoint_path: Path,
+    device_name: str,
+    max_batch_images: int,
+    max_batch_wait_ms: float,
+    require_holdout_metrics: bool = False,
+    min_holdout_macro_f1: float = 0.0,
+    max_holdout_macro_ece: float = 1.0,
+    min_calibration_macro_f1: float = 0.0,
+    max_calibration_macro_ece: float = 1.0,
+    require_temperature_scaling: bool = False,
+) -> FastAPI:
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
     tasks = checkpoint.get("tasks", DEFAULT_TASKS)
     thresholds = checkpoint.get("thresholds", {})
@@ -245,6 +349,17 @@ def create_app(checkpoint_path: Path, device_name: str, max_batch_images: int, m
     dataset_summary = checkpoint.get("dataset_summary") or {}
     model_name = checkpoint.get("model_name", "convnext_tiny")
     image_size = int(checkpoint.get("image_size", 224))
+    quality_gate = validate_checkpoint_quality(
+        checkpoint,
+        require_holdout_metrics=require_holdout_metrics,
+        min_holdout_macro_f1=min_holdout_macro_f1,
+        max_holdout_macro_ece=max_holdout_macro_ece,
+        min_calibration_macro_f1=min_calibration_macro_f1,
+        max_calibration_macro_ece=max_calibration_macro_ece,
+        require_temperature_scaling=require_temperature_scaling,
+    )
+    if not quality_gate.passed:
+        raise RuntimeError("Checkpoint failed accessibility vision quality gate: " + "; ".join(quality_gate.failures))
 
     device = torch.device(device_name if device_name != "auto" else ("cuda" if torch.cuda.is_available() else "cpu"))
     model = build_model(model_name, len(tasks))
@@ -298,6 +413,7 @@ def create_app(checkpoint_path: Path, device_name: str, max_batch_images: int, m
                 "macroF1": holdout_metrics.get("macro_f1"),
                 "macroEce": holdout_metrics.get("macro_ece"),
             },
+            "qualityGate": quality_gate.as_dict(),
             "datasetRows": {
                 key: value.get("rows") if isinstance(value, dict) else None
                 for key, value in dataset_summary.items()
@@ -349,9 +465,34 @@ def main() -> None:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--max-batch-images", type=int, default=int(os.getenv("VISION_MAX_BATCH_IMAGES", "32")))
     parser.add_argument("--max-batch-wait-ms", type=float, default=float(os.getenv("VISION_MAX_BATCH_WAIT_MS", "1")))
+    parser.add_argument(
+        "--require-holdout-metrics",
+        action=argparse.BooleanOptionalAction,
+        default=bool_from_env("VISION_REQUIRE_HOLDOUT_METRICS", False),
+    )
+    parser.add_argument("--min-holdout-macro-f1", type=float, default=float(os.getenv("VISION_MIN_HOLDOUT_MACRO_F1", "0")))
+    parser.add_argument("--max-holdout-macro-ece", type=float, default=float(os.getenv("VISION_MAX_HOLDOUT_MACRO_ECE", "1")))
+    parser.add_argument("--min-calibration-macro-f1", type=float, default=float(os.getenv("VISION_MIN_CALIBRATION_MACRO_F1", "0")))
+    parser.add_argument("--max-calibration-macro-ece", type=float, default=float(os.getenv("VISION_MAX_CALIBRATION_MACRO_ECE", "1")))
+    parser.add_argument(
+        "--require-temperature-scaling",
+        action=argparse.BooleanOptionalAction,
+        default=bool_from_env("VISION_REQUIRE_TEMPERATURE_SCALING", False),
+    )
     args = parser.parse_args()
 
-    app = create_app(args.checkpoint, args.device, args.max_batch_images, args.max_batch_wait_ms)
+    app = create_app(
+        args.checkpoint,
+        args.device,
+        args.max_batch_images,
+        args.max_batch_wait_ms,
+        require_holdout_metrics=args.require_holdout_metrics,
+        min_holdout_macro_f1=args.min_holdout_macro_f1,
+        max_holdout_macro_ece=args.max_holdout_macro_ece,
+        min_calibration_macro_f1=args.min_calibration_macro_f1,
+        max_calibration_macro_ece=args.max_calibration_macro_ece,
+        require_temperature_scaling=args.require_temperature_scaling,
+    )
     uvicorn.run(app, host=args.host, port=args.port)
 
 

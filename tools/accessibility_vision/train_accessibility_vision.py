@@ -7,6 +7,7 @@ import math
 import random
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -529,6 +530,95 @@ def thresholds_from_metrics(metrics: dict[str, Any]) -> dict[str, float]:
     }
 
 
+def format_metric(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        return f"{float(value):.4f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def write_model_card(output_dir: Path, checkpoint: dict[str, Any], metadata: dict[str, Any]) -> None:
+    metrics = checkpoint.get("metrics") or {}
+    holdout_metrics = checkpoint.get("holdout_metrics") or {}
+    thresholds = checkpoint.get("thresholds") or {}
+    logit_temperatures = checkpoint.get("logit_temperatures") or {}
+    dataset_summary = metadata.get("dataset_summary") or {}
+    generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    lines = [
+        "# AccessCity Accessibility Vision Model Card",
+        "",
+        f"Generated: `{generated_at}`",
+        f"Model: `{checkpoint.get('model_name', 'unknown')}`",
+        f"Image size: `{checkpoint.get('image_size', 'unknown')}`",
+        f"Temperature scaled: `{bool(logit_temperatures)}`",
+        "",
+        "## Intended Use",
+        "",
+        "This model produces review-only sidewalk accessibility candidates from field or street-view images. "
+        "It must not generate route geometry, change routing graph edge costs, or directly alter safe-path decisions.",
+        "",
+        "## Tasks",
+        "",
+    ]
+    for task in checkpoint.get("tasks", TASKS):
+        lines.append(f"- `{task}`")
+
+    lines.extend(["", "## Dataset Summary", ""])
+    for split, summary in dataset_summary.items():
+        if not isinstance(summary, dict):
+            continue
+        lines.append(f"- `{split}` rows: `{summary.get('rows', 'n/a')}`")
+
+    lines.extend(
+        [
+            "",
+            "## Metrics",
+            "",
+            "| Split | Macro F1 | Macro ECE |",
+            "| --- | ---: | ---: |",
+            f"| calibration | {format_metric(metrics.get('macro_f1'))} | {format_metric(metrics.get('macro_ece'))} |",
+            f"| holdout | {format_metric(holdout_metrics.get('macro_f1'))} | {format_metric(holdout_metrics.get('macro_ece'))} |",
+            "",
+            "## Per-Task Thresholds",
+            "",
+            "| Task | Threshold | Temperature |",
+            "| --- | ---: | ---: |",
+        ]
+    )
+    for task in checkpoint.get("tasks", TASKS):
+        lines.append(
+            f"| `{task}` | {format_metric(thresholds.get(task))} | {format_metric(logit_temperatures.get(task, 1.0))} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Production Quality Gate",
+            "",
+            "Serve this checkpoint with `--require-holdout-metrics` and `--require-temperature-scaling`. "
+            "Recommended initial production gates are holdout macro F1 >= 0.70 and macro ECE <= 0.12; raise the F1 gate per city after collecting local reviewed labels.",
+            "",
+            "## Guardrails",
+            "",
+            "- `canAutoApply` must remain false for generated candidates.",
+            "- Human/admin review is required before candidate attributes update OSM/accessibility profiles.",
+            "- The routing algorithm can only consume reviewed profile data, never raw model output.",
+            "- Final holdout examples must not be merged back into training data.",
+            "",
+            "## Training Arguments",
+            "",
+            "```json",
+            json.dumps(metadata.get("args", {}), indent=2),
+            "```",
+            "",
+        ]
+    )
+    (output_dir / "model_card.md").write_text("\n".join(lines), encoding="utf-8")
+
+
 def main() -> None:
     args = parse_args()
     seed_everything(args.seed)
@@ -713,6 +803,7 @@ def main() -> None:
         best_checkpoint["holdout_metrics"] = holdout_metrics
         print(json.dumps({"holdout_macro_f1": holdout_metrics["macro_f1"], "holdout_macro_ece": holdout_metrics["macro_ece"]}, indent=2))
     torch.save(best_checkpoint, best_path)
+    write_model_card(args.output_dir, best_checkpoint, metadata)
 
     print(f"best_macro_f1={best_macro_f1:.4f}")
 

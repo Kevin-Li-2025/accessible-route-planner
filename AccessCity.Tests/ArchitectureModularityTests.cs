@@ -338,6 +338,29 @@ public sealed class ArchitectureModularityTests
     }
 
     [Fact]
+    public void Accessibility_vision_release_path_has_quality_gate_and_review_only_guardrails()
+    {
+        var root = FindRepositoryRoot();
+        var server = File.ReadAllText(Path.Combine(root, "tools", "accessibility_vision", "serve_accessibility_vision.py"));
+        var trainer = File.ReadAllText(Path.Combine(root, "tools", "accessibility_vision", "train_accessibility_vision.py"));
+        var benchmark = File.ReadAllText(Path.Combine(root, "tools", "accessibility_vision", "benchmark_accessibility_vision.py"));
+        var deployment = File.ReadAllText(Path.Combine(root, "deploy", "kubernetes", "vision-deployment.yaml"));
+
+        Assert.Contains("validate_checkpoint_quality", server, StringComparison.Ordinal);
+        Assert.Contains("require_holdout_metrics", server, StringComparison.Ordinal);
+        Assert.Contains("require_temperature_scaling", server, StringComparison.Ordinal);
+        Assert.Contains("\"qualityGate\"", server, StringComparison.Ordinal);
+        Assert.Contains("\"forRouteDecision\": False", server, StringComparison.Ordinal);
+        Assert.Contains("model_card.md", trainer, StringComparison.Ordinal);
+        Assert.Contains("write_model_card", trainer, StringComparison.Ordinal);
+        Assert.Contains("p95", benchmark, StringComparison.Ordinal);
+        Assert.Contains("VISION_REQUIRE_HOLDOUT_METRICS", deployment, StringComparison.Ordinal);
+        Assert.Contains("VISION_REQUIRE_TEMPERATURE_SCALING", deployment, StringComparison.Ordinal);
+        Assert.Contains("VISION_MIN_HOLDOUT_MACRO_F1", deployment, StringComparison.Ordinal);
+        Assert.Contains("VISION_MAX_HOLDOUT_MACRO_ECE", deployment, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Kafka_processed_message_identity_includes_topic()
     {
         var root = FindRepositoryRoot();

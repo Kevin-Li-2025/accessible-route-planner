@@ -97,6 +97,23 @@ python train_accessibility_vision.py \
 
 Training writes `latest_metrics.json` for the raw calibration split, `calibrated_metrics.json` when `--temperature-scale` is enabled, and `holdout_metrics.json` for the final untouched test split. The checkpoint embeds per-task temperatures, calibrated thresholds, macro F1, Brier score, expected calibration error, and confusion counts. Keep `--task-balanced-loss` enabled when RampNet adds many curb-ramp rows; otherwise the model can over-optimize curb ramps and under-train obstacles, surface problems, and crosswalks.
 
+Training also writes `model_card.md`. Treat that file as the release record for the checkpoint: data split sizes, holdout/calibration metrics, per-task thresholds, temperatures, training arguments, and the review-only guardrails that keep the model out of route decisions.
+
+Remote L20 runner:
+
+```bash
+export ACCESSCITY_L20_HOST=...
+export ACCESSCITY_L20_PORT=...
+export ACCESSCITY_L20_USER=...
+export HF_TOKEN=...
+# Optional when the GPU box is slow to reach PyPI or download.pytorch.org:
+export PIP_INDEX_URL=...
+export PIP_EXTRA_INDEX_URL=...
+./run_l20_training.sh
+```
+
+The runner syncs this tool directory to the GPU box, exports a balanced Project Sidewalk + RampNet dataset, trains a calibrated ConvNeXt checkpoint, and verifies that `best.pt`, `holdout_metrics.json`, and `model_card.md` exist. It never stores credentials in the repository.
+
 Hard-example mining for the weaker heads:
 
 ```bash
@@ -153,7 +170,11 @@ python serve_accessibility_vision.py \
   --host 0.0.0.0 \
   --port 8095 \
   --max-batch-images 32 \
-  --max-batch-wait-ms 1
+  --max-batch-wait-ms 1 \
+  --require-holdout-metrics \
+  --require-temperature-scaling \
+  --min-holdout-macro-f1 0.70 \
+  --max-holdout-macro-ece 0.12
 ```
 
 The service exposes:
@@ -163,6 +184,20 @@ POST /v1/accessibility-vision/analyze
 ```
 
 It accepts image URLs or base64 images and returns review-only AccessCity candidates. It never changes route decisions or edge costs. The server uses a small micro-batch queue so concurrent requests can share one GPU forward pass; `/health` reports pending requests, observed batch sizes, and queue wait timing.
+
+The server fails startup when a production quality gate is enabled and the checkpoint is missing holdout metrics, has holdout macro F1 below the configured floor, has macro ECE above the configured ceiling, or lacks temperature scaling when `--require-temperature-scaling` is set. This prevents an uncalibrated smoke checkpoint from being mounted into the production inference service.
+
+Latency benchmark:
+
+```bash
+python benchmark_accessibility_vision.py \
+  --endpoint http://127.0.0.1:8095/v1/accessibility-vision/analyze \
+  --requests 500 \
+  --concurrency 32 \
+  --photos-per-request 1
+```
+
+The benchmark prints throughput, p50/p95/p99 end-to-end latency, model inference latency, queue wait time, health payloads, and sample failures. Run it after every new checkpoint because higher accuracy is not useful if upload review becomes slow enough that users stop submitting useful photos.
 
 ## Deployment
 
