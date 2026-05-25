@@ -193,6 +193,7 @@ export default function Hazard() {
   const [quickFilter, setQuickFilter] = useState<QuickFilter>('Severity');
   const [isSearching, setIsSearching] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [referenceLocation, setReferenceLocation] = useState<ReferenceLocation>({
     latitude: DEFAULT_MAP_CENTER.latitude,
     longitude: DEFAULT_MAP_CENTER.longitude,
@@ -242,6 +243,17 @@ export default function Hazard() {
     } as never);
   }
 
+  const normalizedSearchQuery = searchQuery.trim();
+  const backendSearchQuery = debouncedSearchQuery.length >= 2 ? debouncedSearchQuery : undefined;
+
+  React.useEffect(() => {
+    const handle = setTimeout(() => {
+      setDebouncedSearchQuery(normalizedSearchQuery);
+    }, 250);
+
+    return () => clearTimeout(handle);
+  }, [normalizedSearchQuery]);
+
   const loadHazards = React.useCallback(async () => {
     const generation = ++loadGenerationRef.current;
     try {
@@ -251,6 +263,7 @@ export default function Hazard() {
       const page = await hazardsService.getHazardsPage({
         status: selectedFilter,
         limit: HAZARDS_PAGE_LIMIT,
+        query: backendSearchQuery,
       });
       if (generation !== loadGenerationRef.current) {
         return;
@@ -274,7 +287,7 @@ export default function Hazard() {
         setIsLoadingMore(false);
       }
     }
-  }, [selectedFilter]);
+  }, [backendSearchQuery, selectedFilter]);
 
   const loadMoreHazards = React.useCallback(async () => {
     if (isLoading || isLoadingMore || !hasMore || !nextCursor) {
@@ -288,6 +301,7 @@ export default function Hazard() {
         status: selectedFilter,
         cursor: nextCursor,
         limit: HAZARDS_PAGE_LIMIT,
+        query: backendSearchQuery,
       });
 
       if (generation !== loadGenerationRef.current) {
@@ -312,7 +326,7 @@ export default function Hazard() {
         setIsLoadingMore(false);
       }
     }
-  }, [hasMore, isLoading, isLoadingMore, nextCursor, selectedFilter]);
+  }, [backendSearchQuery, hasMore, isLoading, isLoadingMore, nextCursor, selectedFilter]);
 
   useFocusEffect(
     React.useCallback(() => {

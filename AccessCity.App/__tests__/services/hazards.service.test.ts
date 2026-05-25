@@ -72,10 +72,11 @@ describe('hazardsService', () => {
       status: 'Reported',
       cursor: 'current cursor',
       limit: 25,
+      query: 'blocked pavement',
     });
 
     expect(api.get).toHaveBeenCalledWith(
-      '/hazards/page?minLat=52.4&minLng=-1.95&maxLat=52.5&maxLng=-1.85&status=Reported&cursor=current%20cursor&limit=25',
+      '/hazards/page?minLat=52.4&minLng=-1.95&maxLat=52.5&maxLng=-1.85&status=Reported&cursor=current%20cursor&limit=25&query=blocked%20pavement',
       { skipAuth: true }
     );
     expect(page.items).toHaveLength(1);

@@ -52,13 +52,12 @@ export function ScenicHeader({
         locations={[0, 0.48, 1]}
         style={[styles.canvas, isCompact && styles.canvasCompact]}
       >
-        <View pointerEvents="none" style={styles.gridLineOne} />
-        <View pointerEvents="none" style={styles.gridLineTwo} />
-        <View pointerEvents="none" style={styles.gridLineThree} />
-        <View pointerEvents="none" style={styles.artworkHalo} />
+        <View style={[styles.gridLineOne, styles.nonInteractive]} />
+        <View style={[styles.gridLineTwo, styles.nonInteractive]} />
+        <View style={[styles.gridLineThree, styles.nonInteractive]} />
+        <View style={[styles.artworkHalo, styles.nonInteractive]} />
         <View
-          pointerEvents="none"
-          style={[styles.artworkLayer, isCompact && styles.artworkLayerCompact]}
+          style={[styles.artworkLayer, isCompact && styles.artworkLayerCompact, styles.nonInteractive]}
         >
           <Image
             accessibilityIgnoresInvertColors
@@ -68,7 +67,7 @@ export function ScenicHeader({
           />
         </View>
         {!isCompact ? (
-          <View pointerEvents="none" style={styles.panelPreview}>
+          <View style={[styles.panelPreview, styles.nonInteractive]}>
             <View style={styles.previewTopRow}>
               <View style={styles.previewDot} />
               <View style={styles.previewDotMuted} />
@@ -114,6 +113,9 @@ export function ScenicHeader({
 }
 
 const styles = StyleSheet.create({
+  nonInteractive: {
+    pointerEvents: 'none',
+  },
   shell: {
     borderRadius: AppTheme.radius.xl,
     backgroundColor: AppTheme.color.surface,

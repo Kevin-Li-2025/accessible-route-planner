@@ -35,6 +35,7 @@ public interface IHazardReportService
         HazardStatus? status,
         int? limit,
         string? cursor,
+        string? query,
         CancellationToken cancellationToken);
 
     Task<HazardReport> CreateAsync(CreateHazardRequest request, CancellationToken cancellationToken);
@@ -97,6 +98,7 @@ public sealed class HazardReportService : IHazardReportService
                 maxLng,
                 status,
                 cursorReportedBefore: null,
+                normalizedSearchQuery: null,
                 cappedLimit,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -110,10 +112,12 @@ public sealed class HazardReportService : IHazardReportService
         HazardStatus? status,
         int? limit,
         string? cursor,
+        string? query,
         CancellationToken cancellationToken)
     {
         var cappedLimit = Math.Clamp(limit ?? DefaultPageLimit, 1, MaxPageLimit);
         var cursorReportedBefore = DecodeCursor(cursor);
+        var normalizedSearchQuery = NormalizeSearchQuery(query);
 
         var dbRows = await QueryPersistedHazardsPageAsync(
                 minLat,
@@ -122,6 +126,7 @@ public sealed class HazardReportService : IHazardReportService
                 maxLng,
                 status,
                 cursorReportedBefore,
+                normalizedSearchQuery,
                 cappedLimit,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -138,6 +143,7 @@ public sealed class HazardReportService : IHazardReportService
         var rows = mergedRows
             .Where(h => h.Location is not null)
             .Where(h => !cursorReportedBefore.HasValue || h.ReportedAt < cursorReportedBefore.Value)
+            .Where(h => MatchesSearch(h, normalizedSearchQuery))
             .OrderByDescending(h => h.ReportedAt)
             .DistinctBy(h => h.Id)
             .Take(cappedLimit + 1)
@@ -153,6 +159,7 @@ public sealed class HazardReportService : IHazardReportService
         double? maxLng,
         HazardStatus? status,
         DateTime? cursorReportedBefore,
+        string? normalizedSearchQuery,
         int cappedLimit,
         CancellationToken cancellationToken)
     {
@@ -172,6 +179,14 @@ public sealed class HazardReportService : IHazardReportService
         if (cursorReportedBefore.HasValue)
         {
             query = query.Where(h => h.ReportedAt < cursorReportedBefore.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(normalizedSearchQuery))
+        {
+            query = query.Where(h =>
+                h.Type.ToLower().Contains(normalizedSearchQuery)
+                || h.Description.ToLower().Contains(normalizedSearchQuery)
+                || (!string.IsNullOrEmpty(h.Source) && h.Source.ToLower().Contains(normalizedSearchQuery)));
         }
 
         return await query
@@ -194,6 +209,38 @@ public sealed class HazardReportService : IHazardReportService
 
         return new HazardPageResponse(items, nextCursor, cappedLimit, hasMore);
     }
+
+    private static string? NormalizeSearchQuery(string? query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return null;
+        }
+
+        var normalized = query.Trim();
+        if (normalized.Length > 80)
+        {
+            normalized = normalized[..80];
+        }
+
+        return normalized.ToLowerInvariant();
+    }
+
+    private static bool MatchesSearch(HazardReport hazard, string? normalizedSearchQuery)
+    {
+        if (string.IsNullOrWhiteSpace(normalizedSearchQuery))
+        {
+            return true;
+        }
+
+        return ContainsSearchTerm(hazard.Type, normalizedSearchQuery)
+               || ContainsSearchTerm(hazard.Description, normalizedSearchQuery)
+               || ContainsSearchTerm(hazard.Source, normalizedSearchQuery);
+    }
+
+    private static bool ContainsSearchTerm(string? value, string normalizedSearchQuery) =>
+        !string.IsNullOrWhiteSpace(value)
+        && value.Contains(normalizedSearchQuery, StringComparison.OrdinalIgnoreCase);
 
     public async Task<HazardReport> CreateAsync(CreateHazardRequest request, CancellationToken cancellationToken)
     {

@@ -29,7 +29,7 @@ export function PremiumTabBar({ state, descriptors, navigation }: BottomTabBarPr
   const visibleRoutes = state.routes.filter((route) => VISIBLE_TAB_ROUTES.has(route.name));
 
   return (
-    <View pointerEvents="box-none" style={styles.root}>
+    <View style={[styles.root, styles.rootHitTest]}>
       <View style={styles.bar}>
         {visibleRoutes.map((route) => {
           const descriptor = descriptors[route.key];
@@ -102,6 +102,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: AppTheme.space.lg,
     paddingTop: 2,
     paddingBottom: 6,
+  },
+  rootHitTest: {
+    pointerEvents: 'box-none',
   },
   bar: {
     width: '100%',

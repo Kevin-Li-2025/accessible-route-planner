@@ -47,6 +47,7 @@ export type HazardPageRequest = {
   status?: string;
   cursor?: string | null;
   limit?: number;
+  query?: string;
 } & HazardBoundsRequest;
 
 export type HazardListRequest = {
@@ -84,6 +85,10 @@ function buildHazardQuery(request: HazardListRequest | HazardPageRequest = {}) {
 
   if ('limit' in request && request.limit) {
     query.push(`limit=${encodeURIComponent(String(request.limit))}`);
+  }
+
+  if ('query' in request && request.query?.trim()) {
+    query.push(`query=${encodeURIComponent(request.query.trim())}`);
   }
 
   return query.length ? `?${query.join('&')}` : '';

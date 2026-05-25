@@ -70,6 +70,7 @@ public class HazardsController : ControllerBase
         [FromQuery] HazardStatus? status,
         [FromQuery] int? limit,
         [FromQuery] string? cursor,
+        [FromQuery] string? query,
         CancellationToken cancellationToken = default)
     {
         var page = await _hazards.GetHazardsPageAsync(
@@ -80,6 +81,7 @@ public class HazardsController : ControllerBase
             status,
             limit,
             cursor,
+            query,
             cancellationToken);
 
         return Ok(page);
