@@ -116,7 +116,7 @@ function formatRouteImpactLabel(route: RouteResponse | null, routeStatus: 'idle'
   if (routeStatus === 'error') return 'Route impact unavailable';
 
   const warningCount = route?.warnings?.length ?? 0;
-  if (warningCount > 0) return `${warningCount} affect this route`;
+  if (warningCount > 0) return `${warningCount} route warnings`;
   if (route) return 'No reports affect this route';
   return 'Route impact pending';
 }

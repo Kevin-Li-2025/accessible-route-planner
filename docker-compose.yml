@@ -42,6 +42,7 @@ services:
       Routing__MaxHazardsPerRequest: ${Routing__MaxHazardsPerRequest:-500}
       Routing__MaxRiskQueryRadiusMetres: ${Routing__MaxRiskQueryRadiusMetres:-2500}
       Routing__MaxRouteGraphEdges: ${Routing__MaxRouteGraphEdges:-20000}
+      Routing__RouteGraphMaxSnapDistanceMetres: ${Routing__RouteGraphMaxSnapDistanceMetres:-150}
       Routing__AsyncFirstForCacheMiss: ${Routing__AsyncFirstForCacheMiss:-true}
       Routing__AsyncFirstCacheProbeMilliseconds: ${Routing__AsyncFirstCacheProbeMilliseconds:-0}
       Routing__DispatchJobsToWorker: ${Routing__DispatchJobsToWorker:-true}
@@ -55,7 +56,7 @@ services:
       Routing__RouteGraphMinEdgesPerPrepartitionedShard: ${Routing__RouteGraphMinEdgesPerPrepartitionedShard:-250}
       Routing__RouteGraphPackedArtifactsEnabled: ${Routing__RouteGraphPackedArtifactsEnabled:-true}
       Routing__RouteGraphMaxDistributedSnapshotBytes: ${Routing__RouteGraphMaxDistributedSnapshotBytes:-8388608}
-      Routing__RouteGraphFileArtifactStoreEnabled: ${Routing__RouteGraphFileArtifactStoreEnabled:-false}
+      Routing__RouteGraphFileArtifactStoreEnabled: ${Routing__RouteGraphFileArtifactStoreEnabled:-true}
       Routing__RouteGraphFileArtifactDirectory: ${Routing__RouteGraphFileArtifactDirectory:-/app/route-graph-artifacts}
       Routing__RouteGraphFileArtifactWriteThroughEnabled: ${Routing__RouteGraphFileArtifactWriteThroughEnabled:-true}
       Routing__RouteGraphFileArtifactManifestEnabled: ${Routing__RouteGraphFileArtifactManifestEnabled:-true}
@@ -241,6 +242,7 @@ services:
       Routing__JobComputationQueueTimeoutSeconds: ${Routing__JobComputationQueueTimeoutSeconds:-60}
       Routing__DispatchJobsToWorker: ${Routing__DispatchJobsToWorker:-true}
       Routing__RouteJobDispatchConcurrency: ${Routing__RouteJobDispatchConcurrency:-2}
+      Routing__RouteGraphMaxSnapDistanceMetres: ${Routing__RouteGraphMaxSnapDistanceMetres:-150}
       Routing__RouteGraphWarmupEnabled: ${Routing__RouteGraphWarmupEnabled:-true}
       Routing__RouteGraphWarmupDelaySeconds: ${Routing__RouteGraphWarmupDelaySeconds:-10}
       Routing__RouteGraphWarmupIntervalSeconds: ${Routing__RouteGraphWarmupIntervalSeconds:-240}
@@ -256,7 +258,7 @@ services:
       Routing__RouteGraphMinEdgesPerPrepartitionedShard: ${Routing__RouteGraphMinEdgesPerPrepartitionedShard:-250}
       Routing__RouteGraphPackedArtifactsEnabled: ${Routing__RouteGraphPackedArtifactsEnabled:-true}
       Routing__RouteGraphMaxDistributedSnapshotBytes: ${Routing__RouteGraphMaxDistributedSnapshotBytes:-8388608}
-      Routing__RouteGraphFileArtifactStoreEnabled: ${Routing__RouteGraphFileArtifactStoreEnabled:-false}
+      Routing__RouteGraphFileArtifactStoreEnabled: ${Routing__RouteGraphFileArtifactStoreEnabled:-true}
       Routing__RouteGraphFileArtifactDirectory: ${Routing__RouteGraphFileArtifactDirectory:-/app/route-graph-artifacts}
       Routing__RouteGraphFileArtifactWriteThroughEnabled: ${Routing__RouteGraphFileArtifactWriteThroughEnabled:-true}
       Routing__RouteGraphFileArtifactManifestEnabled: ${Routing__RouteGraphFileArtifactManifestEnabled:-true}

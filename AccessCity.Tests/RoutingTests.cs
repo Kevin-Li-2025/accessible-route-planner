@@ -337,6 +337,38 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
     }
 
     [Fact]
+    public async Task SafePath_Does_Not_Snap_To_Distant_RouteGraph_Fixture()
+    {
+        var client = await _factory.CreateAuthenticatedClientAsync();
+        await _factory.ImportOsmAsync(client);
+
+        var request = new
+        {
+            Start = new { X = -1.89, Y = 52.48 },
+            End = new { X = -1.88, Y = 52.485 },
+            Profile = "manual-wheelchair",
+            Preferences = new List<string> { "avoid-reported-hazards", "prefer-crossings" },
+            SafetyWeight = 0.75
+        };
+
+        var response = await client.PostAsJsonAsync("/api/v1/routing/safe-path", request, JsonOptions);
+        response.EnsureSuccessStatusCode();
+
+        var result = await response.Content.ReadFromJsonAsync<RouteResponse>(JsonOptions);
+        Assert.NotNull(result);
+        Assert.NotNull(result!.Path);
+        Assert.True(result.Distance > 500, $"Expected full route distance, got {result.Distance}m.");
+
+        var first = result.Path!.Coordinates.First();
+        var last = result.Path.Coordinates.Last();
+        var startSnap = RiskScoringService.HaversineDistance(52.48, -1.89, first.Y, first.X);
+        var endSnap = RiskScoringService.HaversineDistance(52.485, -1.88, last.Y, last.X);
+
+        Assert.True(startSnap < 250, $"Route start was snapped {startSnap:F0}m away from the requested origin.");
+        Assert.True(endSnap < 250, $"Route end was snapped {endSnap:F0}m away from the requested destination.");
+    }
+
+    [Fact]
     public async Task SafePath_WithAccessibilityProfile_Warns_When_Osm_Accessibility_Tags_Are_Missing()
     {
         var client = await _factory.CreateAuthenticatedClientAsync();

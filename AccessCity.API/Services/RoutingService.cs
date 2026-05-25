@@ -1,5 +1,7 @@
+using AccessCity.API.Configuration;
 using AccessCity.API.Models;
 using AccessCity.API.Services.External;
+using Microsoft.Extensions.Options;
 using NetTopologySuite.Geometries;
 
 namespace AccessCity.API.Services;
@@ -41,6 +43,7 @@ public class RoutingService : IRoutingService
     private readonly IRouteCacheService _routeCache;
     private readonly IHazardRiskGrid _hazardRiskGrid;
     private readonly IHazardSpatialIndex _hazardSpatialIndex;
+    private readonly RoutingOptions _routingOptions;
 
     private const double WalkingSpeed = 1.3;
     private const double MaxHeuristicSpeedMetresPerSecond = 2.0;
@@ -65,7 +68,8 @@ public class RoutingService : IRoutingService
         IRiskTileCacheService tileCache,
         IRouteCacheService routeCache,
         IHazardRiskGrid hazardRiskGrid,
-        IHazardSpatialIndex hazardSpatialIndex)
+        IHazardSpatialIndex hazardSpatialIndex,
+        IOptions<RoutingOptions> routingOptions)
     {
         _riskService = riskService;
         _aiRisk = aiRisk;
@@ -76,6 +80,7 @@ public class RoutingService : IRoutingService
         _routeCache = routeCache;
         _hazardRiskGrid = hazardRiskGrid;
         _hazardSpatialIndex = hazardSpatialIndex;
+        _routingOptions = routingOptions.Value;
     }
 
     /// <summary>
@@ -104,23 +109,34 @@ public class RoutingService : IRoutingService
 
         RouteResponse response;
         RouteGraphData? graphForScoring = null;
+        List<string> accessibilityGraphWarnings = new();
 
         if (RequiresVerifiedAccessibility(request))
         {
             try
             {
                 graphForScoring = await _graphRepo.LoadGraphAsync(request.Start, request.End, cancellationToken);
-                if (graphForScoring.HasCoverage && !graphForScoring.IsTruncated)
+                if (HasUsableGraphEndpointCoverage(graphForScoring, request, MaxGraphSnapDistanceMetres, out _, out _))
                 {
-                    response = FindSafePathOnRealGraph(request, hazardList, graphForScoring);
-                    await CacheRouteAsync(cacheKey, response);
-                    return response;
+                    var graphResponse = FindSafePathOnRealGraph(request, hazardList, graphForScoring);
+                    if (HasDrawableRoute(graphResponse))
+                    {
+                        await CacheRouteAsync(cacheKey, graphResponse);
+                        return graphResponse;
+                    }
+
+                    accessibilityGraphWarnings = graphResponse.Warnings;
+                }
+                else
+                {
+                    graphForScoring = null;
                 }
             }
             catch (OperationCanceledException) { throw; }
             catch
             {
                 // Fall through to OSRM with an explicit degraded-confidence warning.
+                graphForScoring = null;
             }
         }
 
@@ -132,6 +148,7 @@ public class RoutingService : IRoutingService
         {
             var graphData = graphForScoring ?? await TryLoadRouteGraphAsync(request, cancellationToken);
             response = await BuildBestOsrmRouteResponseAsync(request, hazardList, alternatives, graphData, cancellationToken);
+            AddWarnings(response, accessibilityGraphWarnings);
             await CacheRouteAsync(cacheKey, response);
             return response;
         }
@@ -140,11 +157,16 @@ public class RoutingService : IRoutingService
         try
         {
             var realGraph = await _graphRepo.LoadGraphAsync(request.Start, request.End, cancellationToken);
-            if (realGraph.HasCoverage && !realGraph.IsTruncated)
+            if (HasUsableGraphEndpointCoverage(realGraph, request, MaxGraphSnapDistanceMetres, out _, out _))
             {
-                response = FindSafePathOnRealGraph(request, hazardList, realGraph);
-                await CacheRouteAsync(cacheKey, response);
-                return response;
+                var graphResponse = FindSafePathOnRealGraph(request, hazardList, realGraph);
+                if (HasDrawableRoute(graphResponse))
+                {
+                    await CacheRouteAsync(cacheKey, graphResponse);
+                    return graphResponse;
+                }
+
+                accessibilityGraphWarnings.AddRange(graphResponse.Warnings);
             }
         }
         catch (OperationCanceledException) { throw; }
@@ -152,6 +174,7 @@ public class RoutingService : IRoutingService
 
         // ── Tier 3: Synthetic grid fallback ──
         response = FindSafePathFallback(request, hazardList);
+        AddWarnings(response, accessibilityGraphWarnings);
         await CacheRouteAsync(cacheKey, response);
         return response;
     }
@@ -253,13 +276,38 @@ public class RoutingService : IRoutingService
         try
         {
             var graphData = await _graphRepo.LoadGraphAsync(request.Start, request.End, cancellationToken);
-            return graphData.IsTruncated ? null : graphData;
+            return HasUsableGraphEndpointCoverage(graphData, request, MaxGraphSnapDistanceMetres, out _, out _)
+                ? graphData
+                : null;
         }
         catch (OperationCanceledException) { throw; }
         catch
         {
             return null;
         }
+    }
+
+    private double MaxGraphSnapDistanceMetres => Math.Max(1.0, _routingOptions.RouteGraphMaxSnapDistanceMetres);
+
+    private static bool HasDrawableRoute(RouteResponse response) =>
+        response.Path is not null
+        && response.Path.Coordinates.Length >= 2
+        && response.Distance > 0;
+
+    private static void AddWarnings(RouteResponse response, IEnumerable<string> warnings)
+    {
+        var newWarnings = warnings
+            .Where(warning => !string.IsNullOrWhiteSpace(warning))
+            .ToArray();
+        if (newWarnings.Length == 0)
+        {
+            return;
+        }
+
+        response.Warnings = newWarnings
+            .Concat(response.Warnings)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private async Task<RouteResponse> BuildBestOsrmRouteResponseAsync(
@@ -1775,6 +1823,37 @@ public class RoutingService : IRoutingService
     {
         var nearest = FindNearestNode(graphData, point, maxDistanceMetres: double.PositiveInfinity);
         return nearest?.Id ?? graphData.Nodes.Keys.First();
+    }
+
+    private static bool HasUsableGraphEndpointCoverage(
+        RouteGraphData graphData,
+        RouteRequest request,
+        double maxSnapDistanceMetres,
+        out double startSnapDistanceMetres,
+        out double endSnapDistanceMetres)
+    {
+        startSnapDistanceMetres = double.PositiveInfinity;
+        endSnapDistanceMetres = double.PositiveInfinity;
+
+        if (!graphData.HasCoverage || graphData.IsTruncated || graphData.Nodes.Count == 0)
+        {
+            return false;
+        }
+
+        var startNode = FindNearestNode(graphData, request.Start, maxDistanceMetres: double.PositiveInfinity);
+        var endNode = FindNearestNode(graphData, request.End, maxDistanceMetres: double.PositiveInfinity);
+        if (startNode is null || endNode is null)
+        {
+            return false;
+        }
+
+        startSnapDistanceMetres = RiskScoringService.HaversineDistance(
+            request.Start.Y, request.Start.X, startNode.Location.Y, startNode.Location.X);
+        endSnapDistanceMetres = RiskScoringService.HaversineDistance(
+            request.End.Y, request.End.X, endNode.Location.Y, endNode.Location.X);
+
+        return startSnapDistanceMetres <= maxSnapDistanceMetres
+               && endSnapDistanceMetres <= maxSnapDistanceMetres;
     }
 
     private static GraphNode? FindNearestNode(

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import MapLibreGL from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -8,6 +8,23 @@ import { API_BASE_URL } from '../../services/api';
 
 const TILE_URL = `${API_BASE_URL}/api/v1/tiles/{z}/{x}/{y}.pbf`;
 const EMPTY_ROUTE_DATA = { type: 'FeatureCollection', features: [] };
+const FALLBACK_ROUTE_PADDING = 0.0015;
+const FALLBACK_SVG_STYLE: React.CSSProperties = {
+  position: 'absolute',
+  inset: '7% 7% 13% 7%',
+  width: '86%',
+  height: '80%',
+  overflow: 'visible',
+  pointerEvents: 'none',
+};
+
+type LngLat = [number, number];
+type FallbackBounds = {
+  minLng: number;
+  minLat: number;
+  maxLng: number;
+  maxLat: number;
+};
 
 interface MapViewProps {
   centerCoordinate?: [number, number];
@@ -16,6 +33,70 @@ interface MapViewProps {
   onMarkerPress?: (hazard: Hazard) => void;
   onMapPress?: (point: { lng: number, lat: number }) => void;
   showHazards?: boolean;
+}
+
+function readRouteCoordinates(routeGeoJSON: any): LngLat[] {
+  const feature = routeGeoJSON?.features?.[0];
+  const coordinates = feature?.geometry?.coordinates;
+  if (!Array.isArray(coordinates)) {
+    return [];
+  }
+
+  return coordinates
+    .filter((coord: unknown): coord is LngLat =>
+      Array.isArray(coord)
+      && coord.length >= 2
+      && Number.isFinite(coord[0])
+      && Number.isFinite(coord[1]))
+    .map((coord) => [coord[0], coord[1]]);
+}
+
+function buildFallbackBounds(
+  routeCoordinates: LngLat[],
+  markers: Hazard[],
+  centerCoordinate: [number, number]
+): FallbackBounds {
+  const points: LngLat[] = [
+    ...routeCoordinates,
+    ...markers.map((marker) => [marker.longitude, marker.latitude] as LngLat),
+  ];
+
+  if (points.length === 0) {
+    points.push(centerCoordinate);
+  }
+
+  let minLng = Math.min(...points.map((point) => point[0]));
+  let maxLng = Math.max(...points.map((point) => point[0]));
+  let minLat = Math.min(...points.map((point) => point[1]));
+  let maxLat = Math.max(...points.map((point) => point[1]));
+
+  if (Math.abs(maxLng - minLng) < FALLBACK_ROUTE_PADDING) {
+    minLng -= FALLBACK_ROUTE_PADDING;
+    maxLng += FALLBACK_ROUTE_PADDING;
+  }
+  if (Math.abs(maxLat - minLat) < FALLBACK_ROUTE_PADDING) {
+    minLat -= FALLBACK_ROUTE_PADDING;
+    maxLat += FALLBACK_ROUTE_PADDING;
+  }
+
+  const lngPadding = Math.max(FALLBACK_ROUTE_PADDING, (maxLng - minLng) * 0.12);
+  const latPadding = Math.max(FALLBACK_ROUTE_PADDING, (maxLat - minLat) * 0.12);
+
+  return {
+    minLng: minLng - lngPadding,
+    maxLng: maxLng + lngPadding,
+    minLat: minLat - latPadding,
+    maxLat: maxLat + latPadding,
+  };
+}
+
+function projectFallbackPoint(point: LngLat, bounds: FallbackBounds) {
+  const lngSpan = bounds.maxLng - bounds.minLng || 1;
+  const latSpan = bounds.maxLat - bounds.minLat || 1;
+  return {
+    x: ((point[0] - bounds.minLng) / lngSpan) * 100,
+    y: ((bounds.maxLat - point[1]) / latSpan) * 100,
+  };
 }
 
 export default function WebMapView({
@@ -36,6 +117,20 @@ export default function WebMapView({
   const pendingRouteDataRef = useRef(routeGeoJSON ?? EMPTY_ROUTE_DATA);
   const hasCenteredRef = useRef(false);
   const [mapUnavailable, setMapUnavailable] = useState(false);
+  const fallbackRouteCoordinates = useMemo(() => readRouteCoordinates(routeGeoJSON), [routeGeoJSON]);
+  const fallbackBounds = useMemo(
+    () => buildFallbackBounds(fallbackRouteCoordinates, markers, centerCoordinate),
+    [centerCoordinate, fallbackRouteCoordinates, markers]
+  );
+  const fallbackRoutePoints = useMemo(
+    () => fallbackRouteCoordinates
+      .map((coordinate) => {
+        const point = projectFallbackPoint(coordinate, fallbackBounds);
+        return `${point.x.toFixed(2)},${point.y.toFixed(2)}`;
+      })
+      .join(' '),
+    [fallbackBounds, fallbackRouteCoordinates]
+  );
 
   useEffect(() => {
     onMapPressRef.current = onMapPress;
@@ -234,26 +329,53 @@ export default function WebMapView({
         >
           <View style={styles.fallbackGridHorizontal} />
           <View style={styles.fallbackGridVertical} />
-          {routeGeoJSON?.features?.length ? <View style={styles.fallbackRoute} /> : null}
-          {showHazards ? markers.slice(0, 8).map((hazard, index) => (
-            <TouchableOpacity
-              key={String(hazard.id)}
-              activeOpacity={0.84}
-              accessibilityRole="button"
-              accessibilityLabel={`Open ${hazard.title}`}
-              onPress={(event) => {
-                event.stopPropagation();
-                onMarkerPress?.(hazard);
-              }}
-              style={[
-                styles.fallbackMarker,
-                {
-                  left: `${16 + ((index * 17) % 68)}%`,
-                  top: `${24 + ((index * 23) % 48)}%`,
-                },
-              ]}
-            />
-          )) : null}
+          {fallbackRoutePoints ? (
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 100 100"
+              preserveAspectRatio="none"
+              style={FALLBACK_SVG_STYLE}
+            >
+              <polyline
+                points={fallbackRoutePoints}
+                fill="none"
+                stroke="rgba(47, 128, 237, 0.18)"
+                strokeWidth="3.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <polyline
+                points={fallbackRoutePoints}
+                fill="none"
+                stroke="#2F80ED"
+                strokeWidth="1.15"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          ) : null}
+          {showHazards ? markers.slice(0, 24).map((hazard) => {
+            const point = projectFallbackPoint([hazard.longitude, hazard.latitude], fallbackBounds);
+            return (
+              <TouchableOpacity
+                key={String(hazard.id)}
+                activeOpacity={0.84}
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${hazard.title}`}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  onMarkerPress?.(hazard);
+                }}
+                style={[
+                  styles.fallbackMarker,
+                  {
+                    left: `${Math.min(96, Math.max(4, point.x))}%`,
+                    top: `${Math.min(94, Math.max(6, point.y))}%`,
+                  },
+                ]}
+              />
+            );
+          }) : null}
           <View style={styles.fallbackLabel}>
             <Text style={styles.fallbackTitle}>Map view</Text>
             <Text style={styles.fallbackSubtitle}>Route and reports remain available</Text>
@@ -305,20 +427,6 @@ const styles = StyleSheet.create({
     borderRightWidth: 1,
     borderColor: 'rgba(26, 23, 16, 0.1)',
     transform: [{ rotate: '18deg' }],
-  },
-  fallbackRoute: {
-    position: 'absolute',
-    left: '26%',
-    top: '36%',
-    width: '46%',
-    height: 5,
-    borderRadius: 999,
-    backgroundColor: '#2F80ED',
-    transform: [{ rotate: '-21deg' }],
-    shadowColor: '#2F80ED',
-    shadowOpacity: 0.18,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
   },
   fallbackMarker: {
     position: 'absolute',
