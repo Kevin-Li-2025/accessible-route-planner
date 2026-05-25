@@ -46,7 +46,9 @@ python export_project_sidewalk_subset.py \
   --train-per-task 1000 \
   --validation-per-task 200 \
   --test-per-task 200 \
-  --hf-download-min-interval 0.12 \
+  --hf-download-min-interval 0.08 \
+  --hf-download-timeout-seconds 45 \
+  --validator-download-workers 8 \
   --include-rampnet-crop \
   --rampnet-crop-train 500 \
   --rampnet-crop-validation 100 \
@@ -57,7 +59,7 @@ python export_project_sidewalk_subset.py \
   --rampnet-panorama-test 100
 ```
 
-The export format always writes separate `train.jsonl`, `validation.jsonl`, and `test.jsonl` files. Use `validation` only for threshold calibration/model selection and reserve `test` for final holdout reporting. `RampNet crop` rows strengthen curb-ramp positives; `RampNet panorama` rows add large-scale curb-ramp positive/negative labels from `curb_ramp_points_normalized`.
+The exporter writes separate `train.jsonl`, `validation.jsonl`, and `test.jsonl` files. It downloads selected validator images directly from the Hub file URLs so large balanced exports do not fill the Hugging Face cache with unused images; tune `--validator-download-workers`, `--hf-download-min-interval`, and `--hf-download-timeout-seconds` for the network you are using. Use `validation` only for threshold calibration/model selection and reserve `test` for final holdout reporting. `RampNet crop` rows strengthen curb-ramp positives; `RampNet panorama` rows add large-scale curb-ramp positive/negative labels from `curb_ramp_points_normalized`.
 
 ## L20 Setup
 

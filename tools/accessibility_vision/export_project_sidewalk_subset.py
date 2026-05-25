@@ -6,13 +6,17 @@ import io
 import json
 import os
 import random
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
+import requests
 from datasets import load_dataset
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import HfApi
 from PIL import Image
 from tqdm import tqdm
 
@@ -58,7 +62,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--balanced", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--hf-token", default=os.getenv("HF_TOKEN"), help="Optional Hugging Face token for authenticated exports.")
     parser.add_argument("--hf-download-min-interval", type=float, default=0.08, help="Minimum seconds between individual Hub file downloads.")
+    parser.add_argument("--hf-download-timeout-seconds", type=float, default=45.0)
     parser.add_argument("--hf-rate-limit-sleep-seconds", type=float, default=60.0)
+    parser.add_argument("--validator-download-workers", type=int, default=1)
     parser.add_argument("--include-rampnet-crop", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--rampnet-crop-train", type=int, default=0, help="0 means all rows available in the split.")
     parser.add_argument("--rampnet-crop-validation", type=int, default=0, help="0 means all rows available in the split.")
@@ -103,8 +109,8 @@ def open_image(example: dict[str, Any]) -> Image.Image:
     return image.convert("RGB")
 
 
-def open_image_path(path: str | Path) -> Image.Image:
-    return Image.open(path).convert("RGB")
+def open_image_bytes(payload: bytes) -> Image.Image:
+    return Image.open(io.BytesIO(payload)).convert("RGB")
 
 
 def save_image(image: Image.Image, path: Path, jpeg_quality: int, max_image_side: int) -> tuple[int, int]:
@@ -180,28 +186,35 @@ def list_validator_files(api: HfApi, dataset_name: str, split: str, hf_token: st
     return selected
 
 
-def throttled_hf_download(
+def throttled_hf_download_bytes(
     dataset_name: str,
     file_name: str,
     hf_token: str | None,
     min_interval: float,
+    timeout_seconds: float,
     rate_limit_sleep_seconds: float,
     state: dict[str, float],
-) -> str:
+) -> bytes:
     attempts = 0
+    url = f"https://huggingface.co/datasets/{dataset_name}/resolve/main/{quote(file_name, safe='/')}"
+    headers = {"Authorization": f"Bearer {hf_token}"} if hf_token else None
     while True:
         attempts += 1
         elapsed = time.monotonic() - state.get("last_download_at", 0.0)
         if elapsed < min_interval:
             time.sleep(min_interval - elapsed)
         try:
-            path = hf_hub_download(dataset_name, file_name, repo_type="dataset", token=hf_token)
+            response = requests.get(url, headers=headers, timeout=(10.0, timeout_seconds))
             state["last_download_at"] = time.monotonic()
-            return path
-        except Exception as exc:  # noqa: BLE001
-            if "429" not in str(exc) or attempts >= 6:
+            if response.status_code == 429 and attempts < 6:
+                time.sleep(rate_limit_sleep_seconds)
+                continue
+            response.raise_for_status()
+            return response.content
+        except requests.RequestException:
+            if attempts >= 6:
                 raise
-            time.sleep(rate_limit_sleep_seconds)
+            time.sleep(min(rate_limit_sleep_seconds, 5.0 * attempts))
 
 
 def export_validator_split(
@@ -214,7 +227,9 @@ def export_validator_split(
     hf_token: str | None,
     seed: int,
     hf_download_min_interval: float,
+    hf_download_timeout_seconds: float,
     hf_rate_limit_sleep_seconds: float,
+    validator_download_workers: int,
     download_state: dict[str, float],
     rows: list[dict[str, Any]],
     counters: dict[str, int],
@@ -241,30 +256,79 @@ def export_validator_split(
         rng.shuffle(selected)
 
         progress = tqdm(total=len(selected), desc=f"{split} validator {task_name}")
-        for file_name, target in selected:
-            image_path = throttled_hf_download(
-                dataset_name,
-                file_name,
-                hf_token,
-                hf_download_min_interval,
-                hf_rate_limit_sleep_seconds,
-                download_state,
-            )
-            append_row(
-                rows,
-                output_dir,
-                split,
-                task_name,
-                target,
-                dataset_name,
-                "validator",
-                open_image_path(image_path),
-                counters,
-                jpeg_quality,
-                max_image_side,
-                {"source_path": file_name},
-            )
-            progress.update(1)
+        key = f"{split}:{task_name}:validator"
+        workers = max(1, int(validator_download_workers))
+        if workers == 1:
+            for file_name, target in selected:
+                payload = throttled_hf_download_bytes(
+                    dataset_name,
+                    file_name,
+                    hf_token,
+                    hf_download_min_interval,
+                    hf_download_timeout_seconds,
+                    hf_rate_limit_sleep_seconds,
+                    download_state,
+                )
+                append_row(
+                    rows,
+                    output_dir,
+                    split,
+                    task_name,
+                    target,
+                    dataset_name,
+                    "validator",
+                    open_image_bytes(payload),
+                    counters,
+                    jpeg_quality,
+                    max_image_side,
+                    {"source_path": file_name},
+                )
+                progress.update(1)
+        else:
+            thread_state = threading.local()
+
+            def export_one(index: int, file_name: str, target: int) -> tuple[int, dict[str, Any]]:
+                state = getattr(thread_state, "download_state", None)
+                if state is None:
+                    state = {}
+                    thread_state.download_state = state
+                payload = throttled_hf_download_bytes(
+                    dataset_name,
+                    file_name,
+                    hf_token,
+                    hf_download_min_interval,
+                    hf_download_timeout_seconds,
+                    hf_rate_limit_sleep_seconds,
+                    state,
+                )
+                local_rows: list[dict[str, Any]] = []
+                append_row(
+                    local_rows,
+                    output_dir,
+                    split,
+                    task_name,
+                    target,
+                    dataset_name,
+                    "validator",
+                    open_image_bytes(payload),
+                    {key: index},
+                    jpeg_quality,
+                    max_image_side,
+                    {"source_path": file_name},
+                )
+                return index, local_rows[0]
+
+            completed: list[tuple[int, dict[str, Any]]] = []
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = [
+                    executor.submit(export_one, index, file_name, target)
+                    for index, (file_name, target) in enumerate(selected)
+                ]
+                for future in as_completed(futures):
+                    completed.append(future.result())
+                    progress.update(1)
+            rows.extend(row for _index, row in sorted(completed, key=lambda item: item[0]))
+            counters[key] = max(counters.get(key, 0), len(selected))
         progress.close()
 
 
@@ -384,7 +448,9 @@ def export_split(
         args.hf_token,
         args.seed,
         args.hf_download_min_interval,
+        args.hf_download_timeout_seconds,
         args.hf_rate_limit_sleep_seconds,
+        args.validator_download_workers,
         download_state,
         rows,
         counters,
@@ -457,6 +523,8 @@ def main() -> None:
         "balanced": args.balanced,
         "max_image_side": args.max_image_side,
         "hf_download_min_interval": args.hf_download_min_interval,
+        "hf_download_timeout_seconds": args.hf_download_timeout_seconds,
+        "validator_download_workers": args.validator_download_workers,
         "summary": summarize(rows_by_split),
     }
     (args.output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
