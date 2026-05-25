@@ -114,7 +114,8 @@ public sealed class AiAssistEndpointTests : IClassFixture<AccessCityApiFactory>
             {
                 photoUrl = "/api/v1/hazards/photos/test-kerb.jpg",
                 observationText = "Wheelchair cannot cross because there is no dropped kerb.",
-                includeDraftVerification = true
+                includeDraftVerification = true,
+                submitForReview = false
             });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);

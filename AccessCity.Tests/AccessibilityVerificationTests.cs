@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using AccessCity.API.Data;
 using AccessCity.API.Models;
 using AccessCity.API.Services;
@@ -173,6 +174,57 @@ public sealed class AccessibilityVerificationTests : IClassFixture<AccessCityApi
     }
 
     [Fact]
+    public async Task AiAssist_HazardPhotoAnalysis_Queues_Nearest_Asset_Verification()
+    {
+        var client = await _factory.CreateAuthenticatedClientAsync();
+        await _factory.ImportOsmAsync(client);
+        var asset = await FindAssetCentroidAsync("node:1002");
+
+        var createResponse = await client.PostAsJsonAsync(
+            "/api/v1/hazards",
+            new
+            {
+                type = "missing_curb_ramp",
+                description = "Raised kerb, no ramp, narrow pavement, uneven concrete surface.",
+                photoUrl = "/api/v1/hazards/photos/hazard-review.jpg",
+                location = new { x = asset.Longitude, y = asset.Latitude }
+            });
+        createResponse.EnsureSuccessStatusCode();
+        await using var createdStream = await createResponse.Content.ReadAsStreamAsync();
+        using var createdJson = await JsonDocument.ParseAsync(createdStream);
+        var hazardId = createdJson.RootElement.GetProperty("id").GetGuid();
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/v1/ai-assist/hazards/{hazardId}/photo-analysis",
+            new
+            {
+                photoUrl = "/api/v1/hazards/photos/hazard-review.jpg",
+                observationText = "Wheelchair cannot cross because there is no dropped kerb.",
+                includeDraftVerification = true,
+                submitForReview = true,
+                maxAssetDistanceMetres = 80
+            });
+
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<HazardPhotoAiAnalysisResult>();
+        Assert.NotNull(result);
+        Assert.False(result!.ForRouteDecision);
+        Assert.Equal(asset.Id, result.LinkedInfrastructureAssetId);
+        Assert.Equal("queued_for_review", result.ReviewStatus);
+        Assert.NotNull(result.ReviewSubmission);
+        Assert.Equal(AccessibilityVerificationStatus.Pending, result.ReviewSubmission!.Status);
+        Assert.Contains(result.ReviewSubmission.PhotoUrls, url => url.EndsWith("/api/v1/hazards/photos/hazard-review.jpg", StringComparison.Ordinal));
+        Assert.Contains(result.AttributeCandidates, candidate => candidate.Attribute == "curb_ramp" && candidate.Value == "false");
+
+        using var scope = _factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var queued = await dbContext.AccessibilityVerificationSubmissions
+            .CountAsync(submission => submission.InfrastructureAssetId == asset.Id
+                                      && submission.Source == "ai_hazard_photo_review");
+        Assert.True(queued >= 1);
+    }
+
+    [Fact]
     public async Task Reject_Verification_Leaves_Profile_Unchanged()
     {
         var client = await _factory.CreateAuthenticatedClientAsync();
@@ -219,6 +271,17 @@ public sealed class AccessibilityVerificationTests : IClassFixture<AccessCityApi
             .Where(asset => asset.SourceRecordId == sourceRecordId)
             .Select(asset => asset.Id)
             .SingleAsync();
+    }
+
+    private async Task<(long Id, double Latitude, double Longitude)> FindAssetCentroidAsync(string sourceRecordId)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var asset = await dbContext.InfrastructureAssets
+            .Where(candidate => candidate.SourceRecordId == sourceRecordId)
+            .SingleAsync();
+        var centroid = asset.Geometry.Centroid.Coordinate;
+        return (asset.Id, centroid.Y, centroid.X);
     }
 
     private async Task<InfrastructureAccessibilityProfile> GetProfileAsync(long assetId)

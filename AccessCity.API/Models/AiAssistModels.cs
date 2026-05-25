@@ -40,11 +40,14 @@ public sealed class HazardPhotoAiAnalysisRequest
     public string? PhotoUrl { get; set; }
     public string? ObservationText { get; set; }
     public bool IncludeDraftVerification { get; set; } = true;
+    public bool SubmitForReview { get; set; } = true;
+    public double MaxAssetDistanceMetres { get; set; } = 35;
 }
 
 public sealed class HazardPhotoAiAnalysisResult
 {
     public Guid HazardId { get; set; }
+    public long? LinkedInfrastructureAssetId { get; set; }
     public bool ForRouteDecision { get; set; }
     public string Provider { get; set; } = "local-rules";
     public string Model { get; set; } = string.Empty;
@@ -54,6 +57,7 @@ public sealed class HazardPhotoAiAnalysisResult
     public string AdminSummary { get; set; } = string.Empty;
     public List<MissingOsmAttributeCandidate> AttributeCandidates { get; set; } = new();
     public AccessibilityVerificationRequest? DraftVerification { get; set; }
+    public AccessibilityVerificationResponse? ReviewSubmission { get; set; }
     public List<string> Guardrails { get; set; } = new();
     public List<string> Limitations { get; set; } = new();
 }

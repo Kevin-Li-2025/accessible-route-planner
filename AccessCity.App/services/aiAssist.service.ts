@@ -63,6 +63,7 @@ export type HazardPhotoAiAnalysisRequest = {
 
 export type HazardPhotoAiAnalysisResult = {
   hazardId: string;
+  linkedInfrastructureAssetId?: number | null;
   forRouteDecision: boolean;
   provider: string;
   model: string;
@@ -72,6 +73,7 @@ export type HazardPhotoAiAnalysisResult = {
   adminSummary: string;
   attributeCandidates: MissingOsmAttributeCandidate[];
   draftVerification?: Record<string, unknown> | null;
+  reviewSubmission?: Record<string, unknown> | null;
   guardrails: string[];
   limitations: string[];
 };

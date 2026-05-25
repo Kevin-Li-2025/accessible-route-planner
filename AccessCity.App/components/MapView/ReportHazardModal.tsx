@@ -63,6 +63,7 @@ type ReportPhotoAiAnalysisSummary = {
   model?: string;
   candidateCount?: number;
   topCandidates?: string[];
+  reviewStatus?: string;
 };
 
 function renderOptionIcon(
@@ -553,7 +554,8 @@ function formatPhotoAnalysisText(summary: ReportPhotoAiAnalysisSummary) {
   if (summary.status === 'ready') {
     const candidateCount = summary.candidateCount ?? 0;
     const provider = summary.provider ? ` · ${summary.provider}` : '';
-    return `${candidateCount} review candidate${candidateCount === 1 ? '' : 's'} found${provider}`;
+    const reviewStatus = formatAiType(summary.reviewStatus ?? 'review_required').toLowerCase();
+    return `${candidateCount} review candidate${candidateCount === 1 ? '' : 's'} found · ${reviewStatus}${provider}`;
   }
 
   if (summary.status === 'error') {

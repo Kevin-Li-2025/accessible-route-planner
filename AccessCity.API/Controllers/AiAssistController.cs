@@ -1,4 +1,6 @@
+using System.IdentityModel.Tokens.Jwt;
 using System.Globalization;
+using System.Security.Claims;
 using System.Text.Json;
 using AccessCity.API.Common;
 using AccessCity.API.Configuration;
@@ -152,7 +154,20 @@ public sealed class AiAssistController : ControllerBase
             },
             cancellationToken);
 
-        return Ok(ToHazardPhotoAnalysisResult(hazard.Id, absolutePhotoUrl, inference));
+        var (linkedAssetId, reviewSubmission, reviewStatus) = await QueueHazardPhotoReviewAsync(
+            hazard,
+            absolutePhotoUrl,
+            inference,
+            request,
+            cancellationToken);
+
+        return Ok(ToHazardPhotoAnalysisResult(
+            hazard.Id,
+            absolutePhotoUrl,
+            inference,
+            linkedAssetId,
+            reviewSubmission,
+            reviewStatus));
     }
 
     /// <summary>
@@ -427,6 +442,96 @@ public sealed class AiAssistController : ControllerBase
     private static string BuildHazardPhotoCaption(HazardReport hazard) =>
         $"Field photo for {hazard.Type} hazard reported at {hazard.ReportedAt:O}.";
 
+    private async Task<(long? LinkedAssetId, AccessibilityVerificationResponse? ReviewSubmission, string ReviewStatus)> QueueHazardPhotoReviewAsync(
+        HazardReport hazard,
+        string absolutePhotoUrl,
+        AccessibilityAiInferenceResult inference,
+        HazardPhotoAiAnalysisRequest? request,
+        CancellationToken cancellationToken)
+    {
+        var shouldSubmit = request?.SubmitForReview ?? true;
+        if (!shouldSubmit)
+        {
+            return (null, null, inference.AttributeCandidates.Count > 0 ? "review_required" : "no_candidates");
+        }
+
+        if (inference.DraftVerification is null || inference.AttributeCandidates.Count == 0)
+        {
+            return (null, null, "no_candidates");
+        }
+
+        var maxDistance = Math.Clamp(request?.MaxAssetDistanceMetres ?? 35, 1, 250);
+        var linkedAssetId = await _accessibilityVerifications.FindNearestAssetIdAsync(
+            hazard.Location.Y,
+            hazard.Location.X,
+            maxDistance,
+            cancellationToken);
+
+        if (!linkedAssetId.HasValue)
+        {
+            return (null, null, "no_nearby_asset");
+        }
+
+        var existing = (await _accessibilityVerifications.ListAsync(linkedAssetId.Value, cancellationToken))
+            .FirstOrDefault(submission =>
+                string.Equals(submission.Status, AccessibilityVerificationStatus.Pending, StringComparison.OrdinalIgnoreCase)
+                && submission.PhotoUrls.Any(url => string.Equals(url, absolutePhotoUrl, StringComparison.OrdinalIgnoreCase)));
+        if (existing is not null)
+        {
+            return (linkedAssetId, existing, "already_queued");
+        }
+
+        var draft = BuildHazardPhotoReviewDraft(hazard, absolutePhotoUrl, inference);
+        var submission = await _accessibilityVerifications.SubmitAsync(
+            linkedAssetId.Value,
+            draft,
+            ResolveUserId(),
+            cancellationToken);
+
+        return submission is null
+            ? (linkedAssetId, null, "queue_failed")
+            : (linkedAssetId, submission, "queued_for_review");
+    }
+
+    private static AccessibilityVerificationRequest BuildHazardPhotoReviewDraft(
+        HazardReport hazard,
+        string absolutePhotoUrl,
+        AccessibilityAiInferenceResult inference)
+    {
+        var draft = inference.DraftVerification ?? new AccessibilityVerificationRequest();
+        var photos = draft.Photos.Count > 0
+            ? draft.Photos
+            : [new AccessibilityPhotoInput
+            {
+                Source = "hazard_photo",
+                Url = absolutePhotoUrl,
+                Caption = BuildHazardPhotoCaption(hazard),
+                TakenAtUtc = hazard.ReportedAt
+            }];
+
+        var notes = string.Join(
+            " ",
+            new[]
+            {
+                $"AI-generated hazard photo review for hazard {hazard.Id}.",
+                $"Provider: {inference.Provider}; model: {inference.Model}.",
+                $"Hazard type: {hazard.Type}.",
+                inference.AdminSummary,
+                draft.Notes
+            }.Where(part => !string.IsNullOrWhiteSpace(part)));
+
+        return new AccessibilityVerificationRequest
+        {
+            ObservedAtUtc = draft.ObservedAtUtc ?? hazard.ReportedAt,
+            Source = "ai_hazard_photo_review",
+            Notes = notes,
+            Path = draft.Path,
+            Entrance = draft.Entrance,
+            Restroom = draft.Restroom,
+            Photos = photos
+        };
+    }
+
     private string ResolveAbsolutePhotoUrl(string photoUrl)
     {
         if (Uri.TryCreate(photoUrl, UriKind.Absolute, out var absolute)
@@ -445,22 +550,35 @@ public sealed class AiAssistController : ControllerBase
     private static HazardPhotoAiAnalysisResult ToHazardPhotoAnalysisResult(
         Guid hazardId,
         string photoUrl,
-        AccessibilityAiInferenceResult inference)
+        AccessibilityAiInferenceResult inference,
+        long? linkedAssetId,
+        AccessibilityVerificationResponse? reviewSubmission,
+        string reviewStatus)
     {
         return new HazardPhotoAiAnalysisResult
         {
             HazardId = hazardId,
+            LinkedInfrastructureAssetId = linkedAssetId,
             ForRouteDecision = false,
             Provider = inference.Provider,
             Model = inference.Model,
             GeneratedAtUtc = inference.GeneratedAtUtc,
             PhotoUrl = photoUrl,
-            ReviewStatus = inference.AttributeCandidates.Count > 0 ? "review_required" : "no_candidates",
+            ReviewStatus = reviewStatus,
             AdminSummary = inference.AdminSummary,
             AttributeCandidates = inference.AttributeCandidates,
             DraftVerification = inference.DraftVerification,
+            ReviewSubmission = reviewSubmission,
             Guardrails = inference.Guardrails,
             Limitations = inference.Limitations
         };
+    }
+
+    private string ResolveUserId()
+    {
+        return User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? User.FindFirstValue(JwtRegisteredClaimNames.NameId)
+            ?? User.Identity?.Name
+            ?? "anonymous";
     }
 }

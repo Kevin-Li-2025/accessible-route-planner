@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using AccessCity.API.Data;
 using AccessCity.API.Models;
 using Microsoft.EntityFrameworkCore;
+using NetTopologySuite.Geometries;
 
 namespace AccessCity.API.Services;
 
@@ -18,6 +19,12 @@ public interface IAccessibilityVerificationService
 
     Task<IReadOnlyList<AccessibilityVerificationResponse>> ListAsync(
         long assetId,
+        CancellationToken cancellationToken);
+
+    Task<long?> FindNearestAssetIdAsync(
+        double latitude,
+        double longitude,
+        double maxDistanceMetres,
         CancellationToken cancellationToken);
 
     Task<AccessibilityVerificationResponse?> ApplyAsync(
@@ -107,6 +114,49 @@ public sealed class AccessibilityVerificationService : IAccessibilityVerificatio
             .ToListAsync(cancellationToken);
 
         return submissions.Select(submission => ToResponse(submission)).ToList();
+    }
+
+    public async Task<long?> FindNearestAssetIdAsync(
+        double latitude,
+        double longitude,
+        double maxDistanceMetres,
+        CancellationToken cancellationToken)
+    {
+        if (!IsValidLatitude(latitude) || !IsValidLongitude(longitude))
+        {
+            return null;
+        }
+
+        var cappedDistance = Math.Clamp(maxDistanceMetres, 1, 250);
+        var point = new Point(longitude, latitude) { SRID = 4326 };
+        var envelope = CreateSearchEnvelope(latitude, longitude, cappedDistance);
+        var isRelational = _dbContext.Database.ProviderName != "Microsoft.EntityFrameworkCore.InMemory";
+
+        IQueryable<InfrastructureAsset> query = _dbContext.InfrastructureAssets.AsNoTracking();
+        if (isRelational)
+        {
+            query = query.Where(asset => asset.Geometry.Intersects(envelope));
+        }
+
+        var candidates = await query
+            .OrderByDescending(asset => asset.LastObservedAt ?? asset.UpdatedAt)
+            .Take(500)
+            .ToListAsync(cancellationToken);
+
+        return candidates
+            .Where(asset => asset.Geometry is not null)
+            .Where(asset => !isRelational || asset.Geometry.Intersects(envelope))
+            .Select(asset =>
+            {
+                var centroid = asset.Geometry.Centroid.Coordinate;
+                var distance = DistanceMetres(latitude, longitude, centroid.Y, centroid.X);
+                return new { asset.Id, Distance = distance };
+            })
+            .Where(asset => asset.Distance <= cappedDistance)
+            .OrderBy(asset => asset.Distance)
+            .ThenBy(asset => asset.Id)
+            .Select(asset => (long?)asset.Id)
+            .FirstOrDefault();
     }
 
     public async Task<AccessibilityVerificationResponse?> ApplyAsync(
@@ -322,6 +372,45 @@ public sealed class AccessibilityVerificationService : IAccessibilityVerificatio
             RawTagCount = current.RawTagCount
         };
     }
+
+    private static Polygon CreateSearchEnvelope(double latitude, double longitude, double radiusMetres)
+    {
+        var latDelta = radiusMetres / 111_320d;
+        var cosLat = Math.Cos(latitude * Math.PI / 180);
+        var lngDelta = Math.Abs(cosLat) < 0.01
+            ? latDelta
+            : radiusMetres / (111_320d * Math.Abs(cosLat));
+        var factory = new GeometryFactory(new PrecisionModel(), 4326);
+        return factory.CreatePolygon(
+        [
+            new Coordinate(longitude - lngDelta, latitude - latDelta),
+            new Coordinate(longitude + lngDelta, latitude - latDelta),
+            new Coordinate(longitude + lngDelta, latitude + latDelta),
+            new Coordinate(longitude - lngDelta, latitude + latDelta),
+            new Coordinate(longitude - lngDelta, latitude - latDelta)
+        ]);
+    }
+
+    private static bool IsValidLatitude(double latitude) =>
+        !double.IsNaN(latitude) && !double.IsInfinity(latitude) && latitude is >= -90 and <= 90;
+
+    private static bool IsValidLongitude(double longitude) =>
+        !double.IsNaN(longitude) && !double.IsInfinity(longitude) && longitude is >= -180 and <= 180;
+
+    private static double DistanceMetres(double lat1, double lng1, double lat2, double lng2)
+    {
+        const double earthRadiusMetres = 6_371_000;
+        var dLat = ToRadians(lat2 - lat1);
+        var dLng = ToRadians(lng2 - lng1);
+        var rLat1 = ToRadians(lat1);
+        var rLat2 = ToRadians(lat2);
+        var a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2)
+                + Math.Cos(rLat1) * Math.Cos(rLat2) * Math.Sin(dLng / 2) * Math.Sin(dLng / 2);
+        var c = 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
+        return earthRadiusMetres * c;
+    }
+
+    private static double ToRadians(double degrees) => degrees * Math.PI / 180;
 
     private static AccessibilityPathAttributes MergePath(
         AccessibilityPathAttributes current,

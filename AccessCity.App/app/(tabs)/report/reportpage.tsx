@@ -390,6 +390,7 @@ export default function ReportPage() {
             model: photoAnalysis?.model,
             candidateCount: photoAnalysis?.attributeCandidates.length,
             topCandidates: photoAnalysis?.attributeCandidates.map((candidate) => candidate.attribute),
+            reviewStatus: photoAnalysis?.reviewStatus,
           } : null}
           onNext={handleNext}
           onBack={handleBack}
