@@ -3,6 +3,7 @@ using AccessCity.API.Data;
 using AccessCity.API.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using NetTopologySuite.Geometries;
 
 namespace AccessCity.API.Services;
 
@@ -60,6 +61,8 @@ public sealed class HazardQueryService : IHazardQueryService
         if (CanUseSpatialIndexSnapshot())
         {
             return _spatialIndex.QueryBoundingBox(minLon, minLat, maxLon, maxLat)
+                .OrderBy(h => DistanceToSegmentMetres(h, request.Start, request.End))
+                .ThenByDescending(h => h.ReportedAt)
                 .Take(limit)
                 .ToList();
         }
@@ -108,6 +111,8 @@ public sealed class HazardQueryService : IHazardQueryService
         if (CanUseSpatialIndexSnapshot())
         {
             return _spatialIndex.QueryNearby(latitude, longitude, queryRadius)
+                .OrderBy(h => DistanceToPointMetres(h, latitude, longitude))
+                .ThenByDescending(h => h.ReportedAt)
                 .Take(limit)
                 .ToList();
         }
@@ -155,6 +160,45 @@ public sealed class HazardQueryService : IHazardQueryService
 
     private bool CanUseSpatialIndexSnapshot() =>
         _spatialIndex.IsWarmedUp && !_spatialIndex.RequiresAuthoritativeRefresh;
+
+    private static double DistanceToPointMetres(HazardReport hazard, double latitude, double longitude)
+    {
+        if (hazard.Location is null)
+        {
+            return double.PositiveInfinity;
+        }
+
+        return HaversineMetres(latitude, longitude, hazard.Location.Y, hazard.Location.X);
+    }
+
+    private static double DistanceToSegmentMetres(HazardReport hazard, Coordinate start, Coordinate end)
+    {
+        if (hazard.Location is null)
+        {
+            return double.PositiveInfinity;
+        }
+
+        var averageLatitude = (start.Y + end.Y + hazard.Location.Y) / 3.0;
+        var latitudeScale = 111_320.0;
+        var longitudeScale = 111_320.0 * Math.Max(0.1, Math.Cos(ToRadians(averageLatitude)));
+        var endX = (end.X - start.X) * longitudeScale;
+        var endY = (end.Y - start.Y) * latitudeScale;
+        var pointX = (hazard.Location.X - start.X) * longitudeScale;
+        var pointY = (hazard.Location.Y - start.Y) * latitudeScale;
+        var lengthSquared = endX * endX + endY * endY;
+
+        if (lengthSquared <= double.Epsilon)
+        {
+            return Math.Sqrt(pointX * pointX + pointY * pointY);
+        }
+
+        var t = Math.Clamp((pointX * endX + pointY * endY) / lengthSquared, 0.0, 1.0);
+        var projectionX = t * endX;
+        var projectionY = t * endY;
+        var dx = pointX - projectionX;
+        var dy = pointY - projectionY;
+        return Math.Sqrt(dx * dx + dy * dy);
+    }
 
     private static double MetresToLongitudeDegrees(double metres, double latitude)
     {

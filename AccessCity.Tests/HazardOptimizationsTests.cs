@@ -121,6 +121,94 @@ public class HazardOptimizationsTests
     }
 
     [Fact]
+    public async Task HazardQuery_WarmedPointLookup_PrioritizesClosestHazardsBeforeLimit()
+    {
+        var dbOptions = new DbContextOptionsBuilder<HazardDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
+        await using var dbContext = new HazardDbContext(dbOptions);
+        var index = new HazardSpatialIndex();
+        var lat = 52.4862;
+        var lon = -1.8904;
+        var far = new HazardReport
+        {
+            Id = Guid.NewGuid(),
+            Location = new Point(lon + MetresToLongitudeDegrees(2_000, lat), lat) { SRID = 4326 },
+            Type = "blocked_pavement",
+            Status = HazardStatus.Reported,
+            ReportedAt = DateTime.UtcNow
+        };
+        var near = new HazardReport
+        {
+            Id = Guid.NewGuid(),
+            Location = new Point(lon + MetresToLongitudeDegrees(50, lat), lat) { SRID = 4326 },
+            Type = "missing_curb_ramp",
+            Status = HazardStatus.Reported,
+            ReportedAt = DateTime.UtcNow.AddMinutes(-5)
+        };
+        index.Rebuild(new[] { far, near });
+        var queries = new HazardQueryService(
+            dbContext,
+            index,
+            Options.Create(new RoutingOptions
+            {
+                MaxHazardsPerRequest = 1,
+                MaxRiskQueryRadiusMetres = 2_500
+            }));
+
+        var hazards = await queries.LoadHazardsNearPointAsync(lat, lon, 2_500, CancellationToken.None);
+
+        var hazard = Assert.Single(hazards);
+        Assert.Equal(near.Id, hazard.Id);
+    }
+
+    [Fact]
+    public async Task HazardQuery_WarmedRouteLookup_PrioritizesHazardsClosestToRouteBeforeLimit()
+    {
+        var dbOptions = new DbContextOptionsBuilder<HazardDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
+        await using var dbContext = new HazardDbContext(dbOptions);
+        var index = new HazardSpatialIndex();
+        var nearRoute = new HazardReport
+        {
+            Id = Guid.NewGuid(),
+            Location = new Point(-1.8904, 52.4801) { SRID = 4326 },
+            Type = "missing_curb_ramp",
+            Status = HazardStatus.Reported,
+            ReportedAt = DateTime.UtcNow.AddMinutes(-5)
+        };
+        var farFromRoute = new HazardReport
+        {
+            Id = Guid.NewGuid(),
+            Location = new Point(-1.8904, 52.4900) { SRID = 4326 },
+            Type = "blocked_pavement",
+            Status = HazardStatus.Reported,
+            ReportedAt = DateTime.UtcNow
+        };
+        index.Rebuild(new[] { farFromRoute, nearRoute });
+        var queries = new HazardQueryService(
+            dbContext,
+            index,
+            Options.Create(new RoutingOptions
+            {
+                HazardQueryPaddingMetres = 1_500,
+                MaxHazardsPerRequest = 1,
+                MaxRiskQueryRadiusMetres = 2_500
+            }));
+        var request = new RouteRequest
+        {
+            Start = new Coordinate(-1.9000, 52.4800),
+            End = new Coordinate(-1.8800, 52.4800)
+        };
+
+        var hazards = await queries.LoadHazardsForRouteAsync(request, CancellationToken.None);
+
+        var hazard = Assert.Single(hazards);
+        Assert.Equal(nearRoute.Id, hazard.Id);
+    }
+
+    [Fact]
     public void HazardRiskGrid_ComputesCorrectRiskValues()
     {
         // Arrange
