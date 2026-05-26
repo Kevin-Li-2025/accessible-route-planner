@@ -116,6 +116,7 @@ public sealed class HazardRiskGrid : IHazardRiskGrid
         if (nearbyHazards.Count == 0) return 0.0;
 
         double riskSum = 0;
+        var contributingHazards = 0;
         foreach (var hazard in nearbyHazards)
         {
             if (hazard.Location is null) continue;
@@ -123,9 +124,10 @@ public sealed class HazardRiskGrid : IHazardRiskGrid
                 lat, lon, hazard.Location.Y, hazard.Location.X);
             double severity = HazardSeverityLookup.GetSeverity(hazard.Type);
             riskSum += severity * Math.Exp(-dist / DecayLambda);
+            contributingHazards++;
         }
 
-        return Math.Clamp(riskSum, 0.0, 1.0);
+        return RiskScoringService.NormalizeHazardRisk(riskSum, contributingHazards);
     }
 
     private sealed record GridSnapshot(

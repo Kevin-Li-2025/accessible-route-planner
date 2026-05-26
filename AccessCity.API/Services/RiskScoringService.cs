@@ -138,6 +138,8 @@ namespace AccessCity.API.Services
 
             foreach (var hazard in activeHazards)
             {
+                if (hazard.Location is null) continue;
+
                 double distMetres = HaversineDistance(
                     latitude, longitude,
                     hazard.Location.Y, hazard.Location.X);
@@ -158,7 +160,7 @@ namespace AccessCity.API.Services
                 });
             }
 
-            double hazardProximity = Sigmoid(proximitySum, k: 3.0);
+            double hazardProximity = NormalizeHazardRisk(proximitySum, nearbyHazards.Count);
 
             double areaKmSq = Math.PI * Math.Pow(radiusMetres / 1000.0, 2);
             double densityPerKmSq = nearbyHazards.Count / Math.Max(areaKmSq, 0.001);
@@ -296,6 +298,8 @@ namespace AccessCity.API.Services
 
             foreach (var hazard in activeHazards)
             {
+                if (hazard.Location is null) continue;
+
                 double dist = EquirectangularDistance(
                     latitude, longitude,
                     hazard.Location.Y, hazard.Location.X);
@@ -307,7 +311,7 @@ namespace AccessCity.API.Services
                 count++;
             }
 
-            return Clamp01(Sigmoid(riskSum, k: 3.0));
+            return NormalizeHazardRisk(riskSum, count);
         }
 
         /// <summary>
@@ -534,6 +538,16 @@ namespace AccessCity.API.Services
             if (double.IsPositiveInfinity(x)) return 1.0;
             if (double.IsNegativeInfinity(x)) return 0.0;
             return 1.0 / (1.0 + Math.Exp(-k * (x - 1.0)));
+        }
+
+        public static double NormalizeHazardRisk(double weightedHazardSum, int contributingHazardCount)
+        {
+            if (contributingHazardCount <= 0 || weightedHazardSum <= 0)
+            {
+                return 0.0;
+            }
+
+            return Clamp01(Sigmoid(weightedHazardSum, k: 3.0));
         }
 
         private static double Clamp01(double v)

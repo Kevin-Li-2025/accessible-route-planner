@@ -2,6 +2,8 @@ using AccessCity.API.Configuration;
 using AccessCity.API.Data;
 using AccessCity.API.Models;
 using AccessCity.API.Services;
+using H3;
+using H3.Model;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using NetTopologySuite.Geometries;
@@ -230,9 +232,9 @@ public class HazardOptimizationsTests
         // Assert
         Assert.True(grid.IsReady);
 
-        // At the exact coordinate of the hazard, risk should be close to severity (0.7)
+        // At the exact coordinate of the hazard, grid risk should use the same calibrated scale as QuickRisk.
         double exactRisk = grid.GetRisk(52.4862, -1.8904);
-        Assert.True(exactRisk > 0.4 && exactRisk <= 1.0, $"Exact risk is {exactRisk}");
+        Assert.True(exactRisk > 0.10 && exactRisk <= 0.50, $"Exact risk is {exactRisk}");
 
         // Far away from the hazard, risk should decay to 0
         double farRisk = grid.GetRisk(52.5500, -1.9500);
@@ -261,13 +263,42 @@ public class HazardOptimizationsTests
         // Assert
         Assert.True(grid.IsReady);
 
-        // At the exact coordinate of the hazard, risk should be close to severity (0.7) with slight H3 center offset decay
+        // At the exact coordinate of the hazard, risk should use the same calibrated scale as QuickRisk,
+        // with slight H3 center offset decay.
         double exactRisk = grid.GetRisk(52.4862, -1.8904);
-        Assert.True(exactRisk > 0.25 && exactRisk <= 1.0, $"Exact H3 risk is {exactRisk}");
+        Assert.True(exactRisk > 0.05 && exactRisk <= 0.50, $"Exact H3 risk is {exactRisk}");
 
         // Far away from the hazard, risk should decay to 0
         double farRisk = grid.GetRisk(52.5500, -1.9500);
         Assert.Equal(0.0, farRisk);
+    }
+
+    [Fact]
+    public void H3HazardRiskGrid_UsesSameCalibrationAsQuickRisk()
+    {
+        const double degreesToRadians = Math.PI / 180.0;
+        var h3Cell = H3Index.FromLatLng(new LatLng(52.4862 * degreesToRadians, -1.8904 * degreesToRadians), 9);
+        var cellCenter = h3Cell.ToLatLng();
+        var lat = cellCenter.Latitude / degreesToRadians;
+        var lon = cellCenter.Longitude / degreesToRadians;
+        var index = new HazardSpatialIndex();
+        var hazard = new HazardReport
+        {
+            Id = Guid.NewGuid(),
+            Location = new Point(lon, lat) { SRID = 4326 },
+            Type = "missing_curb_ramp",
+            Status = HazardStatus.Reported
+        };
+        index.Rebuild(new List<HazardReport> { hazard });
+        var grid = new H3HazardRiskGrid();
+        grid.Rebuild(index);
+        using var dbContext = CreateInMemoryDbContext();
+        var riskService = new RiskScoringService(dbContext);
+
+        var quickRisk = riskService.QuickRisk(lat, lon, new[] { hazard }, 300);
+        var gridRisk = grid.GetRisk(lat, lon);
+
+        Assert.InRange(Math.Abs(quickRisk - gridRisk), 0.0, 0.03);
     }
 
     private static double MetresToLongitudeDegrees(double metres, double latitude)
@@ -275,5 +306,13 @@ public class HazardOptimizationsTests
         var radians = latitude * Math.PI / 180.0;
         var metresPerDegree = 111_320.0 * Math.Max(0.1, Math.Cos(radians));
         return metres / metresPerDegree;
+    }
+
+    private static AppDbContext CreateInMemoryDbContext()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase($"hazard_optimization_{Guid.NewGuid():N}")
+            .Options;
+        return new AppDbContext(options);
     }
 }

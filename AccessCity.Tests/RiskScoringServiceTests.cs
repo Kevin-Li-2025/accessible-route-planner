@@ -86,7 +86,30 @@ public class RiskScoringServiceTests
         var result = await svc.EvaluateRiskAsync(52.48, -1.89, 500, Enumerable.Empty<HazardReport>());
 
         Assert.Equal(0, result.NearbyHazardCount);
+        Assert.Equal(0, result.HazardProximityRisk);
         Assert.InRange(result.OverallRisk, 0, 0.5);
+    }
+
+    [Fact]
+    public async Task EvaluateRisk_HazardWithMissingLocation_IsIgnored()
+    {
+        var svc = CreateService();
+        var hazards = new[]
+        {
+            new HazardReport
+            {
+                Id = Guid.NewGuid(),
+                Location = null!,
+                Type = "missing_curb_ramp",
+                Status = HazardStatus.Reported,
+                ReportedAt = DateTime.UtcNow
+            }
+        };
+
+        var result = await svc.EvaluateRiskAsync(52.48, -1.89, 500, hazards);
+
+        Assert.Equal(0, result.NearbyHazardCount);
+        Assert.Equal(0, result.HazardProximityRisk);
     }
 
     // ─────────── EvaluateRisk: nearby high-severity hazard ───────────
@@ -145,7 +168,28 @@ public class RiskScoringServiceTests
     {
         var svc = CreateService();
         double risk = svc.QuickRisk(52.48, -1.89, Enumerable.Empty<HazardReport>());
-        Assert.InRange(risk, 0, 0.5);
+        Assert.Equal(0, risk);
+    }
+
+    [Fact]
+    public void QuickRisk_HazardWithMissingLocation_IsIgnored()
+    {
+        var svc = CreateService();
+        var risk = svc.QuickRisk(
+            52.48,
+            -1.89,
+            new[]
+            {
+                new HazardReport
+                {
+                    Id = Guid.NewGuid(),
+                    Location = null!,
+                    Type = "missing_curb_ramp",
+                    Status = HazardStatus.Reported
+                }
+            });
+
+        Assert.Equal(0, risk);
     }
 
     [Fact]
