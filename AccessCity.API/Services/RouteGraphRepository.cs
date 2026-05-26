@@ -77,17 +77,31 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         var loadRegions = ComputeLoadRegions(region);
         var stopwatch = Stopwatch.StartNew();
         var coverage = await _routeGraphStatus.GetStatusAsync(cancellationToken);
+        var graphVersion = coverage.Version;
+        if (!coverage.HasCoverage)
+        {
+            var manifest = await _artifactStore.TryReadManifestAsync(cancellationToken);
+            if (manifest is null || manifest.Shards.Length == 0)
+            {
+                _metrics.CacheLookup("route_graph", hit: false, stopwatch.Elapsed.TotalMilliseconds);
+                return new RouteGraphData
+                {
+                    ShardKey = BuildCacheKey(
+                        region,
+                        edgeLimit,
+                        graphVersion,
+                        loadRegions.Count > 1 ? $"bundle{loadRegions.Count}" : "region")
+                };
+            }
+
+            graphVersion = BuildArtifactManifestVersion(manifest);
+        }
+
         var cacheKey = BuildCacheKey(
             region,
             edgeLimit,
-            coverage.Version,
+            graphVersion,
             loadRegions.Count > 1 ? $"bundle{loadRegions.Count}" : "region");
-
-        if (!coverage.HasCoverage)
-        {
-            _metrics.CacheLookup("route_graph", hit: false, stopwatch.Elapsed.TotalMilliseconds);
-            return new RouteGraphData { ShardKey = cacheKey };
-        }
 
         if (_cache.TryGetValue(cacheKey, out RouteGraphData? cached) && cached is not null)
         {
@@ -811,6 +825,18 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
     private static string BuildCacheKey(GraphShardRegion region, int edgeLimit, string graphVersion, string scope) =>
         string.Create(CultureInfo.InvariantCulture,
             $"route_graph:v7:{RouteGraphArtifactCodec.SchemaVersion}:ew{RouteEdgeCostModel.EdgeWeightVersion}:alt{RouteGraphPreprocessor.AltAlgorithmVersion}:{scope}:{graphVersion}:{edgeLimit}:{region.MinLon:F4}:{region.MinLat:F4}:{region.MaxLon:F4}:{region.MaxLat:F4}");
+
+    private static string BuildArtifactManifestVersion(RouteGraphArtifactManifest manifest)
+    {
+        if (!string.IsNullOrWhiteSpace(manifest.ArtifactSetId))
+        {
+            return $"artifact:{manifest.ArtifactSetId}";
+        }
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"artifact:{manifest.SourceName}:{manifest.CreatedAtUtc:O}:{manifest.TotalPayloadBytes}");
+    }
 
     private static void BuildSpatialBuckets(RouteGraphData graphData)
         => RouteGraphSpatialIndex.BuildSpatialBuckets(graphData);

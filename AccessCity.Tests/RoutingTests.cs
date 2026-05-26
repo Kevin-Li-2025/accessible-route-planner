@@ -784,6 +784,7 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
         await using var transaction = await dbContext.Database.BeginTransactionAsync();
         await dbContext.RouteEdges.ExecuteDeleteAsync();
         await dbContext.RouteNodes.ExecuteDeleteAsync();
+        routeGraphStatus.InvalidateLocalCache();
 
         using var secondMemory = new MemoryCache(new MemoryCacheOptions());
         var secondRepository = new RouteGraphRepository(
