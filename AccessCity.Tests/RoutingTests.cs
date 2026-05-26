@@ -934,6 +934,111 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
             Times.Never);
     }
 
+    [Fact]
+    public async Task RouteGraphRepository_Reuses_File_Manifest_Shards_From_L1_Cache_For_Nearby_Routes()
+    {
+        var dbOptions = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase($"route_graph_manifest_l1_{Guid.NewGuid():N}")
+            .Options;
+        await using var dbContext = new AppDbContext(dbOptions);
+        using var memoryCache = new MemoryCache(new MemoryCacheOptions());
+        var distributedCache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
+        var routeGraphStatus = new Mock<IRouteGraphStatusService>();
+        routeGraphStatus
+            .Setup(status => status.GetStatusAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RouteGraphCoverageStatus(
+                0,
+                0,
+                false,
+                "osm:empty:unit-test",
+                null,
+                null,
+                null,
+                null,
+                "empty graph"));
+        var routingOptions = Options.Create(new RoutingOptions
+        {
+            RouteGraphPackedArtifactsEnabled = true,
+            RouteGraphFileArtifactStoreEnabled = true,
+            RouteGraphFileArtifactManifestEnabled = true,
+            RouteGraphFileArtifactWriteThroughEnabled = false,
+            RouteGraphMaxDistributedSnapshotBytes = 1,
+            RouteGraphMaxFileArtifactShardLoadCount = 1,
+            RouteGraphShardSizeDegrees = 0.01,
+            MaxRouteGraphEdges = 1_000
+        });
+
+        var graph = CreateTinyRouteGraphData("shared-manifest-shard");
+        var artifact = RouteGraphArtifactCodec.Pack(graph);
+        var payload = RouteGraphArtifactCodec.SerializeRedisPayload(artifact);
+        var readResult = new RouteGraphArtifactStoreReadResult(
+            artifact,
+            "shared-manifest-shard.acrg",
+            payload.Length,
+            DateTime.UtcNow,
+            "unit-test",
+            payload);
+        var manifestShard = new RouteGraphArtifactManifestShard(
+            graph.ShardKey!,
+            -1.9300,
+            52.4600,
+            -1.8600,
+            52.5100,
+            graph.Nodes.Count,
+            graph.LoadedEdgeCount,
+            payload.Length,
+            DateTime.UtcNow,
+            "unit-test",
+            "shared-manifest-shard.acrg",
+            "valid");
+        var manifest = new RouteGraphArtifactManifest(
+            RouteGraphArtifactCodec.SchemaVersion,
+            RouteEdgeCostModel.Version,
+            RouteEdgeCostModel.EdgeWeightVersion,
+            RouteGraphPreprocessor.AltAlgorithmVersion,
+            routingOptions.Value.RouteGraphShardSizeDegrees,
+            "unit-test.osm",
+            DateTime.UtcNow,
+            new[] { manifestShard });
+        var artifactStore = new Mock<IRouteGraphArtifactStore>();
+        artifactStore.SetupGet(store => store.IsEnabled).Returns(true);
+        artifactStore
+            .Setup(store => store.TryReadManifestAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(manifest);
+        artifactStore
+            .Setup(store => store.TryReadManifestShardAsync(
+                It.Is<RouteGraphArtifactManifestShard>(shard => shard.CacheKey == graph.ShardKey),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(readResult);
+
+        var repository = new RouteGraphRepository(
+            dbContext,
+            memoryCache,
+            distributedCache,
+            new AccessCityMetrics(),
+            routeGraphStatus.Object,
+            routingOptions,
+            NullLogger<RouteGraphRepository>.Instance,
+            artifactStore.Object);
+
+        var first = await repository.LoadGraphAsync(
+            new Coordinate(-1.8904, 52.4862),
+            new Coordinate(-1.8894, 52.4862));
+        var second = await repository.LoadGraphAsync(
+            new Coordinate(-1.9004, 52.4862),
+            new Coordinate(-1.8994, 52.4862));
+        var distributedShardPayload = await distributedCache.GetAsync(graph.ShardKey!);
+
+        Assert.True(first.HasCoverage);
+        Assert.True(second.HasCoverage);
+        Assert.Null(distributedShardPayload);
+        artifactStore.Verify(
+            store => store.TryReadManifestShardAsync(
+                It.Is<RouteGraphArtifactManifestShard>(shard => shard.CacheKey == graph.ShardKey),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
     private static string BuildRouteGraphCacheKey(
         Coordinate start,
         Coordinate end,

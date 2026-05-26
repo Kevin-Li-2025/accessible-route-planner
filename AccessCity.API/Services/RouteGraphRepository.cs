@@ -258,7 +258,10 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         foreach (var shard in matchingShards)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var graphData = await TryGetDistributedSnapshotAsync(shard.CacheKey, cancellationToken);
+            var graphData = _cache.TryGetValue(shard.CacheKey, out RouteGraphData? cachedShard)
+                            && cachedShard is { HasCoverage: true }
+                ? cachedShard
+                : await TryGetDistributedSnapshotAsync(shard.CacheKey, cancellationToken);
             if (graphData is null)
             {
                 var fileArtifact = await _artifactStore.TryReadManifestShardAsync(shard, cancellationToken);
@@ -285,6 +288,7 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
                 continue;
             }
 
+            _cache.Set(shard.CacheKey, graphData, ttl);
             shards.Add(graphData);
         }
 
