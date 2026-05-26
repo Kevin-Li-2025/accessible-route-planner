@@ -85,11 +85,13 @@ class MicroBatchPredictor:
         device: torch.device,
         max_batch_images: int,
         max_wait_ms: float,
+        ensemble_weight_tensor: torch.Tensor | None = None,
     ) -> None:
         if not members:
             raise ValueError("At least one model member is required.")
         self.members = members
         self.device = device
+        self.ensemble_weight_tensor = ensemble_weight_tensor
         self.max_batch_images = max(1, max_batch_images)
         self.max_wait_seconds = max(0.0, max_wait_ms / 1000.0)
         self.requests: queue.Queue[BatchRequest | None] = queue.Queue()
@@ -171,7 +173,11 @@ class MicroBatchPredictor:
                         logits = logits / member.temperature_tensor
                     probability_sets.append(torch.sigmoid(logits).detach().cpu())
 
-            probabilities = torch.stack(probability_sets, dim=0).mean(dim=0)
+            stacked_probabilities = torch.stack(probability_sets, dim=0)
+            if self.ensemble_weight_tensor is not None:
+                probabilities = (stacked_probabilities * self.ensemble_weight_tensor[:, None, :]).sum(dim=0)
+            else:
+                probabilities = stacked_probabilities.mean(dim=0)
             image_count = len(all_tensors)
             latency_ms = (time.perf_counter() - started) * 1000
             offset = 0
@@ -239,6 +245,25 @@ def load_ensemble_metrics(metrics_path: Path | None, tasks: list[str]) -> tuple[
         for task in tasks
     }
     return payload, thresholds
+
+
+def load_ensemble_weight_tensor(
+    ensemble_metrics: dict[str, Any],
+    member_count: int,
+    task_count: int,
+) -> torch.Tensor | None:
+    calibration_metrics = ensemble_metrics.get("calibrationMetrics") or {}
+    matrix = calibration_metrics.get("ensembleWeightMatrix")
+    if matrix is None:
+        return None
+
+    weights = torch.tensor(matrix, dtype=torch.float32)
+    if weights.shape != (member_count, task_count):
+        raise RuntimeError(
+            f"ensemble weight matrix shape {tuple(weights.shape)} does not match "
+            f"{member_count} members and {task_count} tasks"
+        )
+    return weights / weights.sum(dim=0, keepdim=True).clamp_min(1e-6)
 
 
 def load_image(photo: PhotoInput, timeout: float = 5.0) -> Image.Image:
@@ -408,6 +433,7 @@ def create_app(
     members: list[ModelMember] = []
     quality_gates: list[QualityGateResult] = []
     member_transforms: list[transforms.Compose] = []
+    ensemble_weight_tensor = load_ensemble_weight_tensor(ensemble_metrics, len(checkpoints), len(tasks))
     uses_ensemble_release = bool(ensemble_metrics) and len(checkpoints) > 1
     release_quality_gate = validate_checkpoint_quality(
         {
@@ -471,7 +497,7 @@ def create_app(
                 ]
             )
         )
-    predictor = MicroBatchPredictor(members, device, max_batch_images, max_batch_wait_ms)
+    predictor = MicroBatchPredictor(members, device, max_batch_images, max_batch_wait_ms, ensemble_weight_tensor)
     model_label = members[0].name if len(members) == 1 else "ensemble"
 
     @asynccontextmanager
@@ -503,6 +529,7 @@ def create_app(
             "tasks": tasks,
             "device": str(device),
             "thresholds": thresholds,
+            "ensembleWeights": (ensemble_metrics.get("calibrationMetrics") or {}).get("ensembleWeights"),
             "microBatching": predictor.snapshot_stats(),
             "calibration": {
                 "split": ensemble_metrics.get("calibrationSplit") or checkpoints[0].get("calibration_split"),

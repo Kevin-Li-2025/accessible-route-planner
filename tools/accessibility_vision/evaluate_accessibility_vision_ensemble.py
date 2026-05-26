@@ -19,7 +19,7 @@ from train_accessibility_vision import TASKS, AccessibilityDataset, expected_cal
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate an averaged ensemble of AccessCity vision checkpoints.")
+    parser = argparse.ArgumentParser(description="Evaluate a calibrated ensemble of AccessCity vision checkpoints.")
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--checkpoint", dest="checkpoints", type=Path, action="append", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -29,7 +29,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--seed", type=int, default=20260524)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--weighting", choices=["uniform", "validation"], default="uniform")
     parser.add_argument("--threshold-grid", default="0.25,0.30,0.35,0.40,0.45,0.50,0.55,0.60,0.65,0.70,0.75")
+    parser.add_argument("--weight-grid", default="0.00,0.05,0.10,0.15,0.20,0.25,0.30,0.35,0.40,0.45,0.50,0.55,0.60,0.65,0.70,0.75,0.80,0.85,0.90,0.95,1.00")
     parser.add_argument("--calibration-bins", type=int, default=10)
     return parser.parse_args()
 
@@ -107,38 +109,107 @@ def collect_checkpoint_scores(
     )
 
 
-def best_thresholds(
-    scores: np.ndarray,
+def candidate_weight_vectors(member_count: int, weight_grid: list[float]) -> list[np.ndarray]:
+    candidates: list[np.ndarray] = []
+
+    def add(weights: np.ndarray) -> None:
+        total = float(weights.sum())
+        if total <= 0:
+            return
+        normalized = (weights / total).astype(np.float32)
+        if not any(np.allclose(normalized, existing, atol=1e-6) for existing in candidates):
+            candidates.append(normalized)
+
+    add(np.ones(member_count, dtype=np.float32))
+    for member_id in range(member_count):
+        one_hot = np.zeros(member_count, dtype=np.float32)
+        one_hot[member_id] = 1.0
+        add(one_hot)
+
+    if member_count == 2:
+        for weight in weight_grid:
+            add(np.array([weight, 1.0 - weight], dtype=np.float32))
+    else:
+        for left in range(member_count):
+            for right in range(left + 1, member_count):
+                for weight in weight_grid:
+                    weights = np.zeros(member_count, dtype=np.float32)
+                    weights[left] = weight
+                    weights[right] = 1.0 - weight
+                    add(weights)
+
+    return candidates
+
+
+def apply_task_weights(score_stack: np.ndarray, task_weights: np.ndarray) -> np.ndarray:
+    return (score_stack * task_weights[:, np.newaxis, :]).sum(axis=0)
+
+
+def format_ensemble_weights(members: list[dict[str, Any]], task_weights: np.ndarray) -> dict[str, dict[str, float]]:
+    formatted: dict[str, dict[str, float]] = {}
+    for task_id, task_name in enumerate(TASKS):
+        formatted[task_name] = {
+            member["path"]: round(float(task_weights[member_id, task_id]), 6)
+            for member_id, member in enumerate(members)
+        }
+    return formatted
+
+
+def best_thresholds_and_weights(
+    score_stack: np.ndarray,
     targets: np.ndarray,
     mask: np.ndarray,
+    members: list[dict[str, Any]],
+    weighting: str,
     threshold_grid: list[float],
+    weight_grid: list[float],
     calibration_bins: int,
 ) -> dict[str, Any]:
     metrics: dict[str, Any] = {"tasks": {}, "macro_f1": 0.0}
     f1_values: list[float] = []
+    task_weights = np.zeros((score_stack.shape[0], len(TASKS)), dtype=np.float32)
+    uniform_weights = np.ones(score_stack.shape[0], dtype=np.float32) / score_stack.shape[0]
+    weight_candidates = [uniform_weights] if weighting == "uniform" else candidate_weight_vectors(score_stack.shape[0], weight_grid)
     for task_id, task_name in enumerate(TASKS):
         selected = mask[:, task_id] > 0
         y_true = targets[selected, task_id].astype(np.int32)
-        y_score = scores[selected, task_id].astype(np.float32)
-        best = {"threshold": 0.5, "f1": -1.0}
-        for threshold in threshold_grid:
-            y_pred = (y_score >= threshold).astype(np.int32)
-            f1 = f1_score(y_true, y_pred, zero_division=0)
-            if f1 > best["f1"]:
-                best = {"threshold": threshold, "f1": f1}
+        member_scores = score_stack[:, selected, task_id].astype(np.float32)
+        best = {
+            "threshold": 0.5,
+            "f1": -1.0,
+            "weights": uniform_weights,
+            "scores": member_scores.mean(axis=0),
+        }
+        for weights in weight_candidates:
+            y_score = np.average(member_scores, axis=0, weights=weights).astype(np.float32)
+            for threshold in threshold_grid:
+                y_pred = (y_score >= threshold).astype(np.int32)
+                f1 = f1_score(y_true, y_pred, zero_division=0)
+                if f1 > best["f1"]:
+                    best = {"threshold": threshold, "f1": f1, "weights": weights, "scores": y_score}
+        task_weights[:, task_id] = best["weights"]
+        y_score = best["scores"]
         task_metrics = task_metrics_for_threshold(y_true, y_score, best["threshold"], calibration_bins)
+        task_metrics["ensembleWeights"] = {
+            members[member_id]["path"]: round(float(best["weights"][member_id]), 6)
+            for member_id in range(len(members))
+        }
         metrics["tasks"][task_name] = task_metrics
         f1_values.append(task_metrics["f1"])
     metrics["macro_f1"] = float(np.mean(f1_values)) if f1_values else 0.0
     metrics["macro_ece"] = macro_ece(metrics)
+    metrics["ensembleWeights"] = format_ensemble_weights(members, task_weights)
+    metrics["ensembleWeightMatrix"] = task_weights.tolist()
     return metrics
 
 
 def evaluate_fixed_thresholds(
-    scores: np.ndarray,
+    score_stack: np.ndarray,
     targets: np.ndarray,
     mask: np.ndarray,
     thresholds: dict[str, float],
+    task_weights: np.ndarray,
+    members: list[dict[str, Any]],
     calibration_bins: int,
 ) -> dict[str, Any]:
     metrics: dict[str, Any] = {"tasks": {}, "macro_f1": 0.0}
@@ -146,12 +217,22 @@ def evaluate_fixed_thresholds(
     for task_id, task_name in enumerate(TASKS):
         selected = mask[:, task_id] > 0
         y_true = targets[selected, task_id].astype(np.int32)
-        y_score = scores[selected, task_id].astype(np.float32)
+        y_score = np.average(
+            score_stack[:, selected, task_id].astype(np.float32),
+            axis=0,
+            weights=task_weights[:, task_id],
+        ).astype(np.float32)
         task_metrics = task_metrics_for_threshold(y_true, y_score, thresholds[task_name], calibration_bins)
+        task_metrics["ensembleWeights"] = {
+            members[member_id]["path"]: round(float(task_weights[member_id, task_id]), 6)
+            for member_id in range(len(members))
+        }
         metrics["tasks"][task_name] = task_metrics
         f1_values.append(task_metrics["f1"])
     metrics["macro_f1"] = float(np.mean(f1_values)) if f1_values else 0.0
     metrics["macro_ece"] = macro_ece(metrics)
+    metrics["ensembleWeights"] = format_ensemble_weights(members, task_weights)
+    metrics["ensembleWeightMatrix"] = task_weights.tolist()
     return metrics
 
 
@@ -196,7 +277,7 @@ def macro_ece(metrics: dict[str, Any]) -> float | None:
     return float(np.mean(values)) if values else None
 
 
-def average_scores(
+def collect_member_score_stack(
     checkpoint_paths: list[Path],
     rows: list[dict[str, Any]],
     args: argparse.Namespace,
@@ -217,7 +298,7 @@ def average_scores(
             raise RuntimeError(f"{checkpoint_path} produced a different dataset order.")
     if target_ref is None or mask_ref is None:
         raise RuntimeError("At least one checkpoint is required.")
-    return np.mean(np.stack(scores, axis=0), axis=0), target_ref, mask_ref, members
+    return np.stack(scores, axis=0), target_ref, mask_ref, members
 
 
 def main() -> None:
@@ -225,39 +306,46 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device(args.device if args.device == "cuda" and torch.cuda.is_available() else "cpu")
     thresholds = [float(item) for item in args.threshold_grid.split(",") if item.strip()]
+    weight_grid = [float(item) for item in args.weight_grid.split(",") if item.strip()]
 
     calibration_rows = load_exported_split(args.dataset_root, args.calibration_split, 0, args.seed)
     holdout_rows = load_exported_split(args.dataset_root, args.holdout_split, 0, args.seed)
 
-    calibration_scores, calibration_targets, calibration_mask, members = average_scores(
+    calibration_score_stack, calibration_targets, calibration_mask, members = collect_member_score_stack(
         args.checkpoints,
         calibration_rows,
         args,
         device,
     )
-    calibration_metrics = best_thresholds(
-        calibration_scores,
+    calibration_metrics = best_thresholds_and_weights(
+        calibration_score_stack,
         calibration_targets,
         calibration_mask,
+        members,
+        args.weighting,
         thresholds,
+        weight_grid,
         args.calibration_bins,
     )
     fixed_thresholds = {
         task: metrics["threshold"]
         for task, metrics in calibration_metrics["tasks"].items()
     }
+    task_weights = np.asarray(calibration_metrics["ensembleWeightMatrix"], dtype=np.float32)
 
-    holdout_scores, holdout_targets, holdout_mask, _members = average_scores(
+    holdout_score_stack, holdout_targets, holdout_mask, _members = collect_member_score_stack(
         args.checkpoints,
         holdout_rows,
         args,
         device,
     )
     holdout_metrics = evaluate_fixed_thresholds(
-        holdout_scores,
+        holdout_score_stack,
         holdout_targets,
         holdout_mask,
         fixed_thresholds,
+        task_weights,
+        members,
         args.calibration_bins,
     )
     holdout_metrics["holdout_split"] = args.holdout_split
@@ -269,6 +357,7 @@ def main() -> None:
         "holdoutSplit": args.holdout_split,
         "calibrationRows": len(calibration_rows),
         "holdoutRows": len(holdout_rows),
+        "weighting": args.weighting,
         "calibrationMetrics": calibration_metrics,
         "holdoutMetrics": holdout_metrics,
     }

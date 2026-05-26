@@ -180,6 +180,7 @@ Current highest-accuracy candidate:
 - untouched test holdout: macro F1 `0.8212`, macro ECE `0.0752`;
 - L20 smoke benchmark: 120 requests at 16 concurrency, 0 failures, 114.45 req/s, p50 `102.8 ms`, p95 `372.8 ms`, p99 `377.0 ms`;
 - use it when the GPU budget can tolerate two forward passes per request. Keep the single `convnext_small` checkpoint as the lower-latency default until the ensemble latency benchmark is acceptable for the review workflow.
+- validation-learned per-task weighting is implemented as an ablation, but it did not beat uniform averaging on the untouched holdout (`current+tiny` weighted macro F1 `0.8124`; `current+tiny+base` weighted macro F1 `0.8178`). Keep uniform averaging as the promoted high-accuracy candidate unless a future validation strategy also improves holdout.
 
 Latest SOTA-chasing ablation:
 
@@ -273,13 +274,13 @@ python evaluate_accessibility_vision_ensemble.py \
   --dataset-root data/projectsidewalk-rampnet-best-v7 \
   --checkpoint models/accesscity-vision-current/best.pt \
   --checkpoint runs/projectsidewalk-rampnet-best-convnext-tiny-v7-ema-20260525T231819Z/best.pt \
-  --output-dir runs/projectsidewalk-rampnet-ensemble-current-tiny-v8 \
+  --output-dir runs/projectsidewalk-rampnet-uniform-ensemble-current-tiny-v9 \
   --device cuda
 
 python serve_accessibility_vision.py \
   --checkpoint models/accesscity-vision-current/best.pt \
   --checkpoint runs/projectsidewalk-rampnet-best-convnext-tiny-v7-ema-20260525T231819Z/best.pt \
-  --ensemble-metrics runs/projectsidewalk-rampnet-ensemble-current-tiny-v8/ensemble_metrics.json \
+  --ensemble-metrics runs/projectsidewalk-rampnet-uniform-ensemble-current-tiny-v9/ensemble_metrics.json \
   --host 0.0.0.0 \
   --port 8095 \
   --require-holdout-metrics \
@@ -287,6 +288,8 @@ python serve_accessibility_vision.py \
   --min-holdout-macro-f1 0.70 \
   --max-holdout-macro-ece 0.12
 ```
+
+Use `--weighting validation` only for controlled ablations. It searches per-task member weights on the validation split and writes those weights into `ensemble_metrics.json`, which the serving layer can deploy, but this must still win on the untouched holdout before promotion.
 
 The service exposes:
 
