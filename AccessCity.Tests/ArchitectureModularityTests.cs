@@ -302,11 +302,13 @@ public sealed class ArchitectureModularityTests
         Assert.Contains("Configure<HotPathWarmupOptions>", dependencyInjection, StringComparison.Ordinal);
         Assert.Contains("HotPathWarmupBackgroundService", dependencyInjection, StringComparison.Ordinal);
         Assert.Contains("CachedReadinessService", warmupService, StringComparison.Ordinal);
+        Assert.Contains("IRealHazardDataService", warmupService, StringComparison.Ordinal);
         Assert.Contains("IRiskScoreCacheService", warmupService, StringComparison.Ordinal);
         Assert.Contains("ISpatialQueryService", warmupService, StringComparison.Ordinal);
         Assert.Contains("BucketCorridorRadiusSteps", warmupService, StringComparison.Ordinal);
         Assert.Contains("HotPathWarmup__Enabled: \"true\"", configMap, StringComparison.Ordinal);
         Assert.Contains("HotPathWarmup__Enabled: \"false\"", configMap, StringComparison.Ordinal);
+        Assert.Contains("HotPathWarmup__WarmHazards: \"true\"", configMap, StringComparison.Ordinal);
         Assert.Contains("HotPathWarmup__BucketCorridorRadiusSteps: \"20\"", configMap, StringComparison.Ordinal);
         Assert.Contains("HotPathWarmup__Points__0__Name: \"birmingham-core\"", configMap, StringComparison.Ordinal);
     }

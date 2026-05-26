@@ -1,5 +1,6 @@
 using AccessCity.API.Configuration;
 using AccessCity.API.HealthChecks;
+using AccessCity.API.Models;
 using System.Globalization;
 using Microsoft.Extensions.Options;
 using NetTopologySuite.Geometries;
@@ -91,6 +92,11 @@ public sealed class HotPathWarmupBackgroundService : BackgroundService
             }
         }
 
+        if (_options.WarmHazards)
+        {
+            await WarmHazardPagesAsync(serviceProvider, cancellationToken).ConfigureAwait(false);
+        }
+
         if (_options.WarmRisk && points.Count > 0)
         {
             await WarmRiskScoresAsync(serviceProvider, points, cancellationToken).ConfigureAwait(false);
@@ -107,12 +113,31 @@ public sealed class HotPathWarmupBackgroundService : BackgroundService
         }
 
         _logger.LogInformation(
-            "Warmed hot paths for {PointCount} points (readiness={WarmReadiness}, risk={WarmRisk}, poi={WarmPoi}, routeGraph={WarmRouteGraph}).",
+            "Warmed hot paths for {PointCount} points (readiness={WarmReadiness}, hazards={WarmHazards}, risk={WarmRisk}, poi={WarmPoi}, routeGraph={WarmRouteGraph}).",
             points.Count,
             _options.WarmReadiness,
+            _options.WarmHazards,
             _options.WarmRisk,
             _options.WarmPoi,
             _options.WarmRouteGraph);
+    }
+
+    private static async Task WarmHazardPagesAsync(
+        IServiceProvider serviceProvider,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var hazards = serviceProvider.GetRequiredService<IRealHazardDataService>();
+        await hazards
+            .GetActiveHazardsAsync(status: HazardStatus.Reported, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        await hazards
+            .GetActiveHazardsAsync(status: null, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task WarmRiskScoresAsync(

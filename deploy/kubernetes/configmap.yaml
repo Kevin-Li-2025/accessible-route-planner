@@ -109,6 +109,7 @@ data:
   HotPathWarmup__BucketCorridorStepDegrees: "0.0001"
   HotPathWarmup__RiskRadiusMetres: "500"
   HotPathWarmup__PoiRadiusMetres: "750"
+  HotPathWarmup__WarmHazards: "true"
   HotPathWarmup__WarmRouteGraph: "false"
   HotPathWarmup__Points__0__Name: "birmingham-core"
   HotPathWarmup__Points__0__Lat: "52.4862"

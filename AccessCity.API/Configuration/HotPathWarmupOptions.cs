@@ -14,6 +14,7 @@ public sealed class HotPathWarmupOptions
     public double RiskRadiusMetres { get; set; } = 500;
     public double PoiRadiusMetres { get; set; } = 750;
     public bool WarmReadiness { get; set; } = true;
+    public bool WarmHazards { get; set; } = true;
     public bool WarmRisk { get; set; } = true;
     public bool WarmPoi { get; set; } = true;
     public bool WarmRouteGraph { get; set; }

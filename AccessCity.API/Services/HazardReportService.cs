@@ -77,8 +77,7 @@ public sealed class HazardReportService : IHazardReportService
         HazardStatus? status,
         CancellationToken cancellationToken)
     {
-        _ = cancellationToken;
-        return await _realHazardData.GetActiveHazardsAsync(minLat, minLng, maxLat, maxLng, status);
+        return await _realHazardData.GetActiveHazardsAsync(minLat, minLng, maxLat, maxLng, status, cancellationToken);
     }
 
     public async Task<List<HazardReport>> GetPersistedHazardsAsync(
@@ -137,7 +136,7 @@ public sealed class HazardReportService : IHazardReportService
         }
 
         var mergedRows = await _realHazardData
-            .GetActiveHazardsAsync(minLat, minLng, maxLat, maxLng, status)
+            .GetActiveHazardsAsync(minLat, minLng, maxLat, maxLng, status, cancellationToken)
             .ConfigureAwait(false);
 
         var rows = mergedRows
@@ -277,7 +276,7 @@ public sealed class HazardReportService : IHazardReportService
         }
 
         var reportedHazards = await _realHazardData
-            .GetActiveHazardsAsync(null, null, null, null, HazardStatus.Reported)
+            .GetActiveHazardsAsync(null, null, null, null, HazardStatus.Reported, cancellationToken)
             .ConfigureAwait(false);
         hazard = reportedHazards.FirstOrDefault(h => h.Id == id);
         if (hazard is not null)
@@ -286,7 +285,7 @@ public sealed class HazardReportService : IHazardReportService
         }
 
         var allHazards = await _realHazardData
-            .GetActiveHazardsAsync(null, null, null, null, null)
+            .GetActiveHazardsAsync(null, null, null, null, null, cancellationToken)
             .ConfigureAwait(false);
         return allHazards.FirstOrDefault(h => h.Id == id);
     }

@@ -21,7 +21,13 @@ namespace AccessCity.API.Services;
 public interface IRealHazardDataService
 {
     /// <summary>Returns hazards from OSM in the given bbox. Uses default UK (Birmingham) bbox if null.</summary>
-    Task<List<HazardReport>> GetActiveHazardsAsync(double? minLat = null, double? minLng = null, double? maxLat = null, double? maxLng = null, HazardStatus? status = null);
+    Task<List<HazardReport>> GetActiveHazardsAsync(
+        double? minLat = null,
+        double? minLng = null,
+        double? maxLat = null,
+        double? maxLng = null,
+        HazardStatus? status = null,
+        CancellationToken cancellationToken = default);
 }
 
 public class RealHazardDataService : IRealHazardDataService
@@ -74,7 +80,13 @@ public class RealHazardDataService : IRealHazardDataService
             Math.Max(1, configuration.GetValue("ExternalApis:Overpass:HazardFetchBudgetSeconds", 12)));
     }
 
-    public async Task<List<HazardReport>> GetActiveHazardsAsync(double? minLat = null, double? minLng = null, double? maxLat = null, double? maxLng = null, HazardStatus? status = null)
+    public async Task<List<HazardReport>> GetActiveHazardsAsync(
+        double? minLat = null,
+        double? minLng = null,
+        double? maxLat = null,
+        double? maxLng = null,
+        HazardStatus? status = null,
+        CancellationToken cancellationToken = default)
     {
         var minLatVal = minLat ?? DefaultMinLat;
         var minLngVal = minLng ?? DefaultMinLng;
@@ -95,7 +107,7 @@ public class RealHazardDataService : IRealHazardDataService
         if (_cache.TryGetValue(cacheKey, out List<HazardReport>? cached))
             return cached ?? new List<HazardReport>();
 
-        var distributedCached = await TryGetDistributedHazardsAsync(cacheKey).ConfigureAwait(false);
+        var distributedCached = await TryGetDistributedHazardsAsync(cacheKey, cancellationToken).ConfigureAwait(false);
         if (distributedCached is not null)
         {
             _cache.Set(cacheKey, distributedCached, CacheExpiration);
@@ -111,7 +123,8 @@ public class RealHazardDataService : IRealHazardDataService
                     minLngVal,
                     maxLatVal,
                     maxLngVal,
-                    status),
+                    status,
+                    cancellationToken),
                 LazyThreadSafetyMode.ExecutionAndPublication));
 
         var loadTask = lazyLoad.Value;
@@ -134,12 +147,13 @@ public class RealHazardDataService : IRealHazardDataService
         double minLngVal,
         double maxLatVal,
         double maxLngVal,
-        HazardStatus? status)
+        HazardStatus? status,
+        CancellationToken cancellationToken)
     {
         if (_cache.TryGetValue(cacheKey, out List<HazardReport>? cached))
             return cached ?? new List<HazardReport>();
 
-        var distributedCached = await TryGetDistributedHazardsAsync(cacheKey).ConfigureAwait(false);
+        var distributedCached = await TryGetDistributedHazardsAsync(cacheKey, cancellationToken).ConfigureAwait(false);
         if (distributedCached is not null)
         {
             _cache.Set(cacheKey, distributedCached, CacheExpiration);
@@ -148,10 +162,10 @@ public class RealHazardDataService : IRealHazardDataService
 
         var includeOsm = _realtimeOverpassEnabled && (status == null || status == HazardStatus.Reported);
         var osmTask = includeOsm
-            ? FetchAndMapHazardsAsync(minLatVal, minLngVal, maxLatVal, maxLngVal, DateTime.UtcNow)
+            ? FetchAndMapHazardsAsync(minLatVal, minLngVal, maxLatVal, maxLngVal, DateTime.UtcNow, cancellationToken)
             : Task.FromResult(new OsmHazardFetchResult(new List<HazardReport>(), Completed: true));
 
-        var dbTask = FetchDbHazardsInBBoxAsync(minLatVal, minLngVal, maxLatVal, maxLngVal, status);
+        var dbTask = FetchDbHazardsInBBoxAsync(minLatVal, minLngVal, maxLatVal, maxLngVal, status, cancellationToken);
 
         await Task.WhenAll(osmTask, dbTask).ConfigureAwait(false);
 
@@ -162,7 +176,7 @@ public class RealHazardDataService : IRealHazardDataService
 
         if (includeOsm && !osmResult.Completed && list.Count == 0)
         {
-            var stale = await TryGetDistributedHazardsAsync(StaleCacheKey(cacheKey)).ConfigureAwait(false);
+            var stale = await TryGetDistributedHazardsAsync(StaleCacheKey(cacheKey), cancellationToken).ConfigureAwait(false);
             if (stale is { Count: > 0 })
             {
                 _cache.Set(cacheKey, stale, FailureCacheExpiration);
@@ -174,21 +188,23 @@ public class RealHazardDataService : IRealHazardDataService
             ? FailureCacheExpiration
             : CacheExpiration;
         _cache.Set(cacheKey, list, cacheTtl);
-        await TrySetDistributedHazardsAsync(cacheKey, list, cacheTtl).ConfigureAwait(false);
+        await TrySetDistributedHazardsAsync(cacheKey, list, cacheTtl, cancellationToken).ConfigureAwait(false);
 
         if (list.Count > 0)
         {
-            await TrySetDistributedHazardsAsync(StaleCacheKey(cacheKey), list, StaleCacheExpiration).ConfigureAwait(false);
+            await TrySetDistributedHazardsAsync(StaleCacheKey(cacheKey), list, StaleCacheExpiration, cancellationToken).ConfigureAwait(false);
         }
 
         return list;
     }
 
-    private async Task<List<HazardReport>?> TryGetDistributedHazardsAsync(string cacheKey)
+    private async Task<List<HazardReport>?> TryGetDistributedHazardsAsync(
+        string cacheKey,
+        CancellationToken cancellationToken)
     {
         try
         {
-            var payload = await _distributedCache.GetStringAsync(cacheKey).ConfigureAwait(false);
+            var payload = await _distributedCache.GetStringAsync(cacheKey, cancellationToken).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(payload))
             {
                 return null;
@@ -213,7 +229,8 @@ public class RealHazardDataService : IRealHazardDataService
     private async Task TrySetDistributedHazardsAsync(
         string cacheKey,
         IReadOnlyCollection<HazardReport> hazards,
-        TimeSpan cacheTtl)
+        TimeSpan cacheTtl,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -227,7 +244,8 @@ public class RealHazardDataService : IRealHazardDataService
                 .SetStringAsync(
                     cacheKey,
                     payload,
-                    new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = cacheTtl })
+                    new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = cacheTtl },
+                    cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -241,7 +259,8 @@ public class RealHazardDataService : IRealHazardDataService
         double minLngVal,
         double maxLatVal,
         double maxLngVal,
-        HazardStatus? status)
+        HazardStatus? status,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -264,8 +283,12 @@ public class RealHazardDataService : IRealHazardDataService
             return await dbQuery
                 .OrderByDescending(h => h.ReportedAt)
                 .Take(MaxDbHazardsPerResponse)
-                .ToListAsync()
+                .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -276,15 +299,21 @@ public class RealHazardDataService : IRealHazardDataService
 
     private async Task<OsmHazardFetchResult> FetchAndMapHazardsAsync(
         double minLatVal, double minLngVal, double maxLatVal, double maxLngVal,
-        DateTime snapshotUtc)
+        DateTime snapshotUtc,
+        CancellationToken cancellationToken)
     {
         using var budget = new CancellationTokenSource(_osmFetchBudget);
+        using var linkedBudget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, budget.Token);
         List<OverpassElement>? elements;
         try
         {
             elements = await _openStreetMapClient
-                .GetHazardLikeDataAsync(minLatVal, minLngVal, maxLatVal, maxLngVal, budget.Token)
+                .GetHazardLikeDataAsync(minLatVal, minLngVal, maxLatVal, maxLngVal, linkedBudget.Token)
                 .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (OperationCanceledException ex)
         {
