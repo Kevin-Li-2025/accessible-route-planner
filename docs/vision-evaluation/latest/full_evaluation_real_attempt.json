@@ -1,6 +1,6 @@
 {
   "schemaVersion": "accesscity-accessibility-vision-eval.v1",
-  "generatedAtUnix": 1779803900,
+  "generatedAtUnix": 1779804589,
   "inputs": {
     "datasetRoot": "/home/hhai/accesscity-vision/data/projectsidewalk-rampnet-best-v7",
     "checkpoints": [
@@ -31,7 +31,7 @@
         "--dataset-root",
         "/home/hhai/accesscity-vision/data/projectsidewalk-rampnet-best-v7",
         "--output-dir",
-        "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-real-attempt/classifier",
+        "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/classifier",
         "--calibration-split",
         "validation",
         "--holdout-split",
@@ -51,10 +51,10 @@
         "--checkpoint",
         "/home/hhai/accesscity-vision/runs/projectsidewalk-rampnet-sota-convnext-base-v8-20260526T001117Z/best.pt"
       ],
-      "outputPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-real-attempt/classifier/ensemble_metrics.json",
-      "stdoutPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-real-attempt/logs/classifier_holdout.stdout.txt",
-      "stderrPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-real-attempt/logs/classifier_holdout.stderr.txt",
-      "elapsedSeconds": 31.292,
+      "outputPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/classifier/ensemble_metrics.json",
+      "stdoutPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/logs/classifier_holdout.stdout.txt",
+      "stderrPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/logs/classifier_holdout.stderr.txt",
+      "elapsedSeconds": 31.584,
       "exitCode": 0
     },
     {
@@ -71,16 +71,16 @@
         "--split",
         "validation",
         "--output-dir",
-        "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-real-attempt/rampnet_detection",
+        "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/rampnet_detection",
         "--max-examples",
         "8",
         "--device",
         "cuda"
       ],
       "outputPath": null,
-      "stdoutPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-real-attempt/logs/rampnet_detection.stdout.txt",
-      "stderrPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-real-attempt/logs/rampnet_detection.stderr.txt",
-      "elapsedSeconds": 3.271,
+      "stdoutPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/logs/rampnet_detection.stdout.txt",
+      "stderrPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/logs/rampnet_detection.stderr.txt",
+      "elapsedSeconds": 3.659,
       "exitCode": 1
     },
     {
@@ -99,10 +99,10 @@
         "--health-endpoint",
         "http://127.0.0.1:18095/health"
       ],
-      "outputPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-real-attempt/serving_latency/benchmark_accessibility_vision.json",
-      "stdoutPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-real-attempt/logs/serving_latency.stdout.txt",
-      "stderrPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-real-attempt/logs/serving_latency.stderr.txt",
-      "elapsedSeconds": 1.481,
+      "outputPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/serving_latency/benchmark_accessibility_vision.json",
+      "stdoutPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/logs/serving_latency.stdout.txt",
+      "stderrPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/logs/serving_latency.stderr.txt",
+      "elapsedSeconds": 1.446,
       "exitCode": 0
     }
   ],
@@ -131,7 +131,7 @@
     {
       "name": "serving_latency_p95",
       "status": "passed",
-      "value": 394.359,
+      "value": 389.369,
       "threshold": "<= 500.0 ms",
       "detail": "Interactive review endpoint p95 should stay below the release ceiling."
     },
@@ -205,6 +205,104 @@
       "ece": 0.06268341468647123
     }
   ],
+  "classifierCityMetrics": [
+    {
+      "city": "new",
+      "rows": 53,
+      "macroF1": 0.5092063492063492,
+      "macroEce": 0.34199600890278814,
+      "obstacleF1": 0.0,
+      "surfaceProblemF1": 0.0
+    },
+    {
+      "city": "newberg",
+      "rows": 23,
+      "macroF1": 0.5740740740740741,
+      "macroEce": 0.3435379262223388,
+      "obstacleF1": 0.0,
+      "surfaceProblemF1": 0.8888888888888888
+    },
+    {
+      "city": "amsterdam",
+      "rows": 46,
+      "macroF1": 0.5828571428571429,
+      "macroEce": 0.17044540930357013,
+      "obstacleF1": 0.8,
+      "surfaceProblemF1": 0.4
+    },
+    {
+      "city": "pittsburgh",
+      "rows": 24,
+      "macroF1": 0.6833333333333333,
+      "macroEce": 0.24853747457265857,
+      "obstacleF1": 0.0,
+      "surfaceProblemF1": 0.75
+    },
+    {
+      "city": "taipei",
+      "rows": 135,
+      "macroF1": 0.6887591370378255,
+      "macroEce": 0.17064156879847836,
+      "obstacleF1": 0.5714285714285714,
+      "surfaceProblemF1": 0.375
+    },
+    {
+      "city": "mendota",
+      "rows": 92,
+      "macroF1": 0.7184848484848485,
+      "macroEce": 0.16074722359577814,
+      "obstacleF1": 0.0,
+      "surfaceProblemF1": 0.9333333333333333
+    },
+    {
+      "city": "keelung",
+      "rows": 27,
+      "macroF1": 0.7577777777777778,
+      "macroEce": 0.2355939460865089,
+      "obstacleF1": 0.4,
+      "surfaceProblemF1": 0.6666666666666666
+    },
+    {
+      "city": "teaneck",
+      "rows": 59,
+      "macroF1": 0.7652747252747253,
+      "macroEce": 0.19765397522184586,
+      "obstacleF1": 1.0,
+      "surfaceProblemF1": 0.4
+    },
+    {
+      "city": "chicago",
+      "rows": 181,
+      "macroF1": 0.7743976522828016,
+      "macroEce": 0.154533518240792,
+      "obstacleF1": 0.8705882352941177,
+      "surfaceProblemF1": 0.7741935483870968
+    },
+    {
+      "city": "oradell",
+      "rows": 27,
+      "macroF1": 0.7846153846153847,
+      "macroEce": 0.19529010078736714,
+      "obstacleF1": 1.0,
+      "surfaceProblemF1": 0.9230769230769231
+    },
+    {
+      "city": "sea",
+      "rows": 275,
+      "macroF1": 0.8304603157478333,
+      "macroEce": 0.11507653393548645,
+      "obstacleF1": 0.6730769230769231,
+      "surfaceProblemF1": 0.6666666666666666
+    },
+    {
+      "city": "rampnet",
+      "rows": 200,
+      "macroF1": 0.9627118644067797,
+      "macroEce": 0.05673334851860999,
+      "obstacleF1": null,
+      "surfaceProblemF1": null
+    }
+  ],
   "classifierSummary": {
     "macroF1": 0.8177768648339907,
     "macroEce": 0.08089021677523851
@@ -220,8 +318,8 @@
   },
   "servingLatencySummary": {
     "failures": 0,
-    "throughputRps": 120.209,
-    "p95Ms": 394.359,
-    "p99Ms": 399.168
+    "throughputRps": 122.382,
+    "p95Ms": 389.369,
+    "p99Ms": 400.344
   }
 }

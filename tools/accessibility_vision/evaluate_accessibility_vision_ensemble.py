@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -216,6 +218,8 @@ def evaluate_fixed_thresholds(
     f1_values: list[float] = []
     for task_id, task_name in enumerate(TASKS):
         selected = mask[:, task_id] > 0
+        if not selected.any():
+            continue
         y_true = targets[selected, task_id].astype(np.int32)
         y_score = np.average(
             score_stack[:, selected, task_id].astype(np.float32),
@@ -234,6 +238,60 @@ def evaluate_fixed_thresholds(
     metrics["ensembleWeights"] = format_ensemble_weights(members, task_weights)
     metrics["ensembleWeightMatrix"] = task_weights.tolist()
     return metrics
+
+
+def infer_city(row: dict[str, Any]) -> str:
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    for key in ("city", "source_city", "sourceCity"):
+        value = metadata.get(key) or row.get(key)
+        if value:
+            return normalize_city_name(str(value))
+
+    source_path = str(metadata.get("source_path") or row.get("source_path") or row.get("image") or "")
+    basename = Path(source_path).name.lower()
+    match = re.match(r"([a-z][a-z0-9-]+)_", basename)
+    if match:
+        return normalize_city_name(match.group(1))
+    return "unknown"
+
+
+def normalize_city_name(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9-]+", "-", value.strip().lower()).strip("-")
+    return normalized or "unknown"
+
+
+def evaluate_city_slices(
+    score_stack: np.ndarray,
+    targets: np.ndarray,
+    mask: np.ndarray,
+    rows: list[dict[str, Any]],
+    thresholds: dict[str, float],
+    task_weights: np.ndarray,
+    members: list[dict[str, Any]],
+    calibration_bins: int,
+    min_rows: int = 20,
+) -> dict[str, Any]:
+    city_to_indices: dict[str, list[int]] = defaultdict(list)
+    for index, row in enumerate(rows):
+        city_to_indices[infer_city(row)].append(index)
+
+    slices: dict[str, Any] = {}
+    for city, indices in sorted(city_to_indices.items()):
+        if len(indices) < min_rows:
+            continue
+        index_array = np.asarray(indices, dtype=np.int64)
+        metrics = evaluate_fixed_thresholds(
+            score_stack[:, index_array, :],
+            targets[index_array, :],
+            mask[index_array, :],
+            thresholds,
+            task_weights,
+            members,
+            calibration_bins,
+        )
+        metrics["rows"] = int(len(indices))
+        slices[city] = metrics
+    return slices
 
 
 def task_metrics_for_threshold(
@@ -355,6 +413,16 @@ def main() -> None:
     )
     holdout_metrics["holdout_split"] = args.holdout_split
     holdout_metrics["ensemble_members"] = members
+    holdout_metrics["by_city"] = evaluate_city_slices(
+        holdout_score_stack,
+        holdout_targets,
+        holdout_mask,
+        holdout_rows,
+        fixed_thresholds,
+        task_weights,
+        members,
+        args.calibration_bins,
+    )
 
     result = {
         "ensembleMembers": members,

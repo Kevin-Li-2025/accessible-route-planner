@@ -18,16 +18,16 @@ The vision model is review-only: results must not directly alter route decisions
 | classifier_holdout_macro_f1 | passed | 0.8178 | >= 0.7 | Untouched holdout macro F1 must meet the release floor. |
 | classifier_holdout_macro_ece | passed | 0.0809 | <= 0.12 | Calibration error must stay under the release ceiling. |
 | rampnet_point_detection_ap | smoke_only | n/a | n/a | Synthetic smoke passed, but no real RampNet holdout was evaluated. |
-| serving_latency_p95 | passed | 117.7810 | <= 500.0 ms | Interactive review endpoint p95 should stay below the release ceiling. |
+| serving_latency_p95 | passed | 112.7920 | <= 500.0 ms | Interactive review endpoint p95 should stay below the release ceiling. |
 | serving_latency_failures | passed | 0 | == 0 | Serving benchmark should have zero failed requests. |
 
 ## Step Status
 
 | Step | Status | Reason | Output |
 | --- | --- | --- | --- |
-| classifier_holdout | passed |  | `/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-smoke/classifier/ensemble_metrics.json` |
-| rampnet_detection | passed | Synthetic smoke only; not a production detection metric. | `/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-smoke/rampnet_detection_smoke/rampnet_detection_metrics.json` |
-| serving_latency | passed |  | `/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-smoke/serving_latency/benchmark_accessibility_vision.json` |
+| classifier_holdout | passed |  | `/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-smoke/classifier/ensemble_metrics.json` |
+| rampnet_detection | passed | Synthetic smoke only; not a production detection metric. | `/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-smoke/rampnet_detection_smoke/rampnet_detection_metrics.json` |
+| serving_latency | passed |  | `/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-smoke/serving_latency/benchmark_accessibility_vision.json` |
 
 ## Classifier Holdout
 
@@ -41,6 +41,23 @@ The vision model is review-only: results must not directly alter route decisions
 | obstacle_present | 200 | 0.7699 | 0.7794 | 0.7328 | 0.6439 | 0.8500 | 0.0993 | 0.4000 |
 | surface_problem_present | 200 | 0.7712 | 0.7821 | 0.7010 | 0.7234 | 0.6800 | 0.1297 | 0.5500 |
 | crosswalk_present | 200 | 0.9603 | 0.9601 | 0.9048 | 0.8636 | 0.9500 | 0.0627 | 0.5500 |
+
+## City/Domain Slices
+
+| City | Rows | Macro F1 | Macro ECE | Obstacle F1 | Surface F1 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| new | 53 | 0.5092 | 0.3420 | 0.0000 | 0.0000 |
+| newberg | 23 | 0.5741 | 0.3435 | 0.0000 | 0.8889 |
+| amsterdam | 46 | 0.5829 | 0.1704 | 0.8000 | 0.4000 |
+| pittsburgh | 24 | 0.6833 | 0.2485 | 0.0000 | 0.7500 |
+| taipei | 135 | 0.6888 | 0.1706 | 0.5714 | 0.3750 |
+| mendota | 92 | 0.7185 | 0.1607 | 0.0000 | 0.9333 |
+| keelung | 27 | 0.7578 | 0.2356 | 0.4000 | 0.6667 |
+| teaneck | 59 | 0.7653 | 0.1977 | 1.0000 | 0.4000 |
+| chicago | 181 | 0.7744 | 0.1545 | 0.8706 | 0.7742 |
+| oradell | 27 | 0.7846 | 0.1953 | 1.0000 | 0.9231 |
+| sea | 275 | 0.8305 | 0.1151 | 0.6731 | 0.6667 |
+| rampnet | 200 | 0.9627 | 0.0567 | n/a | n/a |
 
 ## RampNet-Style Detection
 
@@ -58,10 +75,10 @@ The vision model is review-only: results must not directly alter route decisions
 - Requests: `160`
 - Concurrency: `16`
 - Failures: `0`
-- Throughput RPS: `171.9160`
-- p50 ms: `89.2840`
-- p95 ms: `117.7810`
-- p99 ms: `123.5330`
+- Throughput RPS: `160.7290`
+- p50 ms: `98.4420`
+- p95 ms: `112.7920`
+- p99 ms: `124.2360`
 
 ## Interpretation
 

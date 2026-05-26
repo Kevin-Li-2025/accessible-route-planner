@@ -8,7 +8,7 @@ A release-grade evaluation includes all of the following:
 
 - Classifier holdout metrics on an untouched `test` split: AP, AUROC, F1, precision, recall, threshold, Brier score, ECE, and confusion counts per task.
 - Macro quality gates: holdout macro F1 and macro ECE.
-- City-shift reporting when the dataset is city-split, kept separate from random holdout numbers.
+- City/domain-shift reporting from exported metadata, kept separate from random holdout numbers.
 - RampNet-style detection metrics for curb ramps on panorama/keypoint data: point AP, precision, recall, F1, image-level AP/AUROC/F1/ECE, latency p50/p95/p99, and per-city slices.
 - Serving latency against the deployed local model endpoint: throughput, failures, p50/p95/p99, model inference latency, and queue wait.
 - A machine-readable `full_evaluation.json` and human-readable `full_evaluation.md`.

@@ -470,6 +470,33 @@ def summarize_task_table(metrics: dict[str, Any] | None) -> list[dict[str, Any]]
     return rows
 
 
+def summarize_city_table(metrics: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not metrics:
+        return []
+    by_city = metrics.get("by_city") or metrics.get("byCity") or {}
+    if not isinstance(by_city, dict):
+        return []
+
+    rows = []
+    for city, city_metrics in by_city.items():
+        if not isinstance(city_metrics, dict):
+            continue
+        tasks = city_metrics.get("tasks") or {}
+        obstacle = tasks.get("obstacle_present") if isinstance(tasks, dict) else None
+        surface = tasks.get("surface_problem_present") if isinstance(tasks, dict) else None
+        rows.append(
+            {
+                "city": city,
+                "rows": city_metrics.get("rows"),
+                "macroF1": city_metrics.get("macro_f1"),
+                "macroEce": city_metrics.get("macro_ece"),
+                "obstacleF1": obstacle.get("f1") if isinstance(obstacle, dict) else None,
+                "surfaceProblemF1": surface.get("f1") if isinstance(surface, dict) else None,
+            }
+        )
+    return sorted(rows, key=lambda row: (row.get("macroF1") is None, row.get("macroF1") or 0.0))
+
+
 def markdown_metric(value: Any) -> str:
     if value is None:
         return "n/a"
@@ -488,6 +515,7 @@ def write_markdown_report(
     latency_metrics: dict[str, Any] | None,
 ) -> None:
     task_rows = summarize_task_table(classifier_metrics)
+    city_rows = summarize_city_table(classifier_metrics)
     lines = [
         "# AccessCity Accessibility Vision Full Evaluation",
         "",
@@ -540,6 +568,23 @@ def write_markdown_report(
             )
     else:
         lines.append("Classifier holdout was not run. Supply `--dataset-root` and one or more `--checkpoint` files.")
+
+    lines.extend(["", "## City/Domain Slices", ""])
+    if city_rows:
+        lines.extend(
+            [
+                "| City | Rows | Macro F1 | Macro ECE | Obstacle F1 | Surface F1 |",
+                "| --- | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for row in city_rows:
+            lines.append(
+                f"| {row['city']} | {markdown_metric(row.get('rows'))} | "
+                f"{markdown_metric(row.get('macroF1'))} | {markdown_metric(row.get('macroEce'))} | "
+                f"{markdown_metric(row.get('obstacleF1'))} | {markdown_metric(row.get('surfaceProblemF1'))} |"
+            )
+    else:
+        lines.append("No city/domain slices were emitted. Export metadata must include source city or city-prefixed source paths.")
 
     lines.extend(["", "## RampNet-Style Detection", ""])
     if rampnet_metrics:
@@ -629,6 +674,7 @@ def main() -> int:
         "steps": [step.to_json() for step in steps],
         "gates": gates,
         "classifierTaskMetrics": summarize_task_table(classifier_metrics),
+        "classifierCityMetrics": summarize_city_table(classifier_metrics),
         "classifierSummary": {
             "macroF1": classifier_metrics.get("macro_f1") if classifier_metrics else None,
             "macroEce": classifier_metrics.get("macro_ece") if classifier_metrics else None,
