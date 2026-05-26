@@ -4,6 +4,7 @@ using AccessCity.API.Models.External;
 using AccessCity.API.Services.External;
 using AccessCity.API.Data;
 using Microsoft.EntityFrameworkCore;
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Diagnostics;
 using System.Text.Json;
@@ -73,6 +74,7 @@ namespace AccessCity.API.Services
         private readonly AppDbContext _dbContext;
         private readonly TimeSpan _externalSignalBudget;
         private readonly bool _realtimeExternalSignalsEnabled;
+        private static readonly ConcurrentDictionary<string, Lazy<Task<double>>> InfrastructureRiskInFlight = new();
 
         private const string CrimeCacheKeyPrefix = "ukcrime:";
         private const string EnvCacheKeyPrefix = "env:";
@@ -572,6 +574,32 @@ namespace AccessCity.API.Services
                 return cached.Value;
             }
 
+            var fill = InfrastructureRiskInFlight.GetOrAdd(
+                cacheKey,
+                _ => new Lazy<Task<double>>(
+                    () => ComputeAndCacheInfrastructureRiskAsync(cacheKey, lat, lng, radiusMetres, cancellationToken),
+                    LazyThreadSafetyMode.ExecutionAndPublication));
+
+            try
+            {
+                return await fill.Value;
+            }
+            finally
+            {
+                if (fill.IsValueCreated && fill.Value.IsCompleted)
+                {
+                    InfrastructureRiskInFlight.TryRemove(new KeyValuePair<string, Lazy<Task<double>>>(cacheKey, fill));
+                }
+            }
+        }
+
+        private async Task<double> ComputeAndCacheInfrastructureRiskAsync(
+            string cacheKey,
+            double lat,
+            double lng,
+            double radiusMetres,
+            CancellationToken cancellationToken)
+        {
             var risk = await ComputeInfrastructureRiskAsync(lat, lng, radiusMetres, cancellationToken);
             await SetCachedAsync(cacheKey, risk, InfrastructureRiskCacheExpiry);
             return risk;

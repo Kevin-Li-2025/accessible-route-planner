@@ -321,6 +321,50 @@ public class RiskScoringServiceTests
         Assert.Equal(0.81, risk);
     }
 
+    [Fact]
+    public async Task EstimateInfrastructureRiskAsync_CoalescesConcurrentColdRequests()
+    {
+        await using var db = CreateInMemoryDbContext();
+        db.RouteNodes.AddRange(
+            new RouteNode
+            {
+                Id = 1,
+                Location = Wgs84.CreatePoint(new Coordinate(-1.8904, 52.48))
+            },
+            new RouteNode
+            {
+                Id = 2,
+                Location = Wgs84.CreatePoint(new Coordinate(-1.8900, 52.4804))
+            });
+        db.RouteEdges.Add(new RouteEdge
+        {
+            Id = 1,
+            FromNodeId = 1,
+            ToNodeId = 2,
+            Geometry = Wgs84.CreateLineString(new[]
+            {
+                new Coordinate(-1.8904, 52.48),
+                new Coordinate(-1.8900, 52.4804)
+            }),
+            LightingQuality = 0.2,
+            HasStairs = true,
+            KerbHeight = 0.08,
+            DistanceMetres = 50
+        });
+        await db.SaveChangesAsync();
+
+        var cache = new MemoryCache(new MemoryCacheOptions());
+        var svc = CreateService(db: db, cache: cache);
+
+        var tasks = Enumerable.Range(0, 16)
+            .Select(_ => svc.EstimateInfrastructureRiskAsync(52.48, -1.89, 200))
+            .ToArray();
+        var risks = await Task.WhenAll(tasks);
+
+        Assert.All(risks, risk => Assert.Equal(risks[0], risk));
+        Assert.Equal(risks[0], svc.QuickInfrastructureRisk(52.48, -1.89, 200));
+    }
+
     // ─────────── Environmental data mocking ───────────
 
     [Fact]
