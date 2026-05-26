@@ -123,15 +123,29 @@ def run_command(name: str, command: list[str], output_dir: Path) -> StepResult:
     elapsed = time.perf_counter() - started
     stdout_path.write_text(completed.stdout, encoding="utf-8")
     stderr_path.write_text(completed.stderr, encoding="utf-8")
+    reason = None
+    if completed.returncode != 0:
+        reason = summarize_command_failure(completed.stderr, completed.stdout)
     return StepResult(
         name=name,
         status="passed" if completed.returncode == 0 else "failed",
+        reason=reason,
         command=command,
         stdout_path=str(stdout_path),
         stderr_path=str(stderr_path),
         elapsed_seconds=round(elapsed, 3),
         exit_code=completed.returncode,
     )
+
+
+def summarize_command_failure(stderr: str, stdout: str, max_length: int = 260) -> str:
+    lines = [line.strip() for line in (stderr or stdout).splitlines() if line.strip()]
+    if not lines:
+        return "Command exited non-zero without stderr."
+    summary = lines[-1]
+    if len(summary) <= max_length:
+        return summary
+    return summary[: max_length - 1].rstrip() + "..."
 
 
 def endpoint_is_live(url: str, timeout_seconds: float = 2.0) -> bool:

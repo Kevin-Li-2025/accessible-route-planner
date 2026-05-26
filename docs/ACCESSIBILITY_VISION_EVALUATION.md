@@ -69,3 +69,12 @@ Expected gate state for a smoke-only local run:
 ## Current Local Validation
 
 On this workstation, the full runner was validated with synthetic RampNet smoke because no real checkpoint or exported Project Sidewalk dataset is checked into the repo. The generated report correctly marks the classifier and serving checks as missing, and marks RampNet as `smoke_only`. That is the desired behavior: the tooling refuses to convert an offline smoke check into a production accuracy claim.
+
+## Current GPU Validation
+
+The latest L20 GPU evaluation artifacts live under `docs/vision-evaluation/latest/`.
+
+- Classifier holdout passed: macro F1 `0.8178`, macro ECE `0.0809`.
+- Serving latency passed with zero failed requests: p95 `394.359 ms` on the real RampNet attempt and p95 `117.781 ms` on the smoke run.
+- Real RampNet detector evaluation is still missing because the GPU host could not reach Hugging Face and the official RampNet model/data were not cached locally.
+- Synthetic RampNet smoke passed, but that is only a pipeline check, not a production accuracy metric.

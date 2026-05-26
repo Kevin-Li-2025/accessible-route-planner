@@ -1,0 +1,228 @@
+{
+  "schemaVersion": "accesscity-accessibility-vision-eval.v1",
+  "generatedAtUnix": 1779803937,
+  "inputs": {
+    "datasetRoot": "/home/hhai/accesscity-vision/data/projectsidewalk-rampnet-best-v7",
+    "checkpoints": [
+      "/home/hhai/accesscity-vision/models/accesscity-vision-convnext-small-v7/best.pt",
+      "/home/hhai/accesscity-vision/runs/projectsidewalk-rampnet-best-convnext-tiny-v7-ema-20260525T231819Z/best.pt",
+      "/home/hhai/accesscity-vision/runs/projectsidewalk-rampnet-sota-convnext-base-v8-20260526T001117Z/best.pt"
+    ],
+    "calibrationSplit": "validation",
+    "holdoutSplit": "test",
+    "rampnetSyntheticSmoke": true,
+    "serveEndpoint": "http://127.0.0.1:18095/v1/accessibility-vision/analyze"
+  },
+  "environment": {
+    "python": "3.12.3",
+    "torchInstalled": true,
+    "torchvisionInstalled": true,
+    "transformersInstalled": true,
+    "cudaAvailable": true
+  },
+  "steps": [
+    {
+      "name": "classifier_holdout",
+      "status": "passed",
+      "reason": null,
+      "command": [
+        "/home/hhai/vllm-l20-exp/bin/python",
+        "/home/hhai/accesscity-vision/evaluate_accessibility_vision_ensemble.py",
+        "--dataset-root",
+        "/home/hhai/accesscity-vision/data/projectsidewalk-rampnet-best-v7",
+        "--output-dir",
+        "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-smoke/classifier",
+        "--calibration-split",
+        "validation",
+        "--holdout-split",
+        "test",
+        "--batch-size",
+        "64",
+        "--num-workers",
+        "4",
+        "--device",
+        "cuda",
+        "--weighting",
+        "validation",
+        "--checkpoint",
+        "/home/hhai/accesscity-vision/models/accesscity-vision-convnext-small-v7/best.pt",
+        "--checkpoint",
+        "/home/hhai/accesscity-vision/runs/projectsidewalk-rampnet-best-convnext-tiny-v7-ema-20260525T231819Z/best.pt",
+        "--checkpoint",
+        "/home/hhai/accesscity-vision/runs/projectsidewalk-rampnet-sota-convnext-base-v8-20260526T001117Z/best.pt"
+      ],
+      "outputPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-smoke/classifier/ensemble_metrics.json",
+      "stdoutPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-smoke/logs/classifier_holdout.stdout.txt",
+      "stderrPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-smoke/logs/classifier_holdout.stderr.txt",
+      "elapsedSeconds": 31.289,
+      "exitCode": 0
+    },
+    {
+      "name": "rampnet_detection",
+      "status": "passed",
+      "reason": "Synthetic smoke only; not a production detection metric.",
+      "command": [
+        "/home/hhai/vllm-l20-exp/bin/python",
+        "/home/hhai/accesscity-vision/evaluate_rampnet_detection.py",
+        "--dataset",
+        "projectsidewalk/rampnet-dataset",
+        "--model",
+        "projectsidewalk/rampnet-model",
+        "--split",
+        "validation",
+        "--output-dir",
+        "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-smoke/rampnet_detection_smoke",
+        "--max-examples",
+        "256",
+        "--device",
+        "cuda",
+        "--synthetic-smoke"
+      ],
+      "outputPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-smoke/rampnet_detection_smoke/rampnet_detection_metrics.json",
+      "stdoutPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-smoke/logs/rampnet_detection.stdout.txt",
+      "stderrPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-smoke/logs/rampnet_detection.stderr.txt",
+      "elapsedSeconds": 2.942,
+      "exitCode": 0
+    },
+    {
+      "name": "serving_latency",
+      "status": "passed",
+      "reason": null,
+      "command": [
+        "/home/hhai/vllm-l20-exp/bin/python",
+        "/home/hhai/accesscity-vision/benchmark_accessibility_vision.py",
+        "--endpoint",
+        "http://127.0.0.1:18095/v1/accessibility-vision/analyze",
+        "--requests",
+        "160",
+        "--concurrency",
+        "16",
+        "--health-endpoint",
+        "http://127.0.0.1:18095/health"
+      ],
+      "outputPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-smoke/serving_latency/benchmark_accessibility_vision.json",
+      "stdoutPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-smoke/logs/serving_latency.stdout.txt",
+      "stderrPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T135739Z-smoke/logs/serving_latency.stderr.txt",
+      "elapsedSeconds": 1.074,
+      "exitCode": 0
+    }
+  ],
+  "gates": [
+    {
+      "name": "classifier_holdout_macro_f1",
+      "status": "passed",
+      "value": 0.8177768648339907,
+      "threshold": ">= 0.7",
+      "detail": "Untouched holdout macro F1 must meet the release floor."
+    },
+    {
+      "name": "classifier_holdout_macro_ece",
+      "status": "passed",
+      "value": 0.08089021677523851,
+      "threshold": "<= 0.12",
+      "detail": "Calibration error must stay under the release ceiling."
+    },
+    {
+      "name": "rampnet_point_detection_ap",
+      "status": "smoke_only",
+      "value": null,
+      "threshold": null,
+      "detail": "Synthetic smoke passed, but no real RampNet holdout was evaluated."
+    },
+    {
+      "name": "serving_latency_p95",
+      "status": "passed",
+      "value": 117.781,
+      "threshold": "<= 500.0 ms",
+      "detail": "Interactive review endpoint p95 should stay below the release ceiling."
+    },
+    {
+      "name": "serving_latency_failures",
+      "status": "passed",
+      "value": 0,
+      "threshold": "== 0",
+      "detail": "Serving benchmark should have zero failed requests."
+    }
+  ],
+  "classifierTaskMetrics": [
+    {
+      "task": "curb_ramp_present",
+      "count": 400,
+      "positiveRate": 0.625,
+      "threshold": 0.4,
+      "averagePrecision": 0.9783645334124862,
+      "auroc": 0.9668,
+      "f1": 0.9351669941060904,
+      "precision": 0.918918918918919,
+      "recall": 0.952,
+      "ece": 0.03190027033910154
+    },
+    {
+      "task": "curb_ramp_absent",
+      "count": 200,
+      "positiveRate": 0.5,
+      "threshold": 0.5,
+      "averagePrecision": 0.8963494138357326,
+      "auroc": 0.9054,
+      "f1": 0.8151658767772512,
+      "precision": 0.7747747747747747,
+      "recall": 0.86,
+      "ece": 0.08086811535060406
+    },
+    {
+      "task": "obstacle_present",
+      "count": 200,
+      "positiveRate": 0.5,
+      "threshold": 0.4,
+      "averagePrecision": 0.7699459423007744,
+      "auroc": 0.7794000000000001,
+      "f1": 0.7327586206896551,
+      "precision": 0.6439393939393939,
+      "recall": 0.85,
+      "ece": 0.09929987587034703
+    },
+    {
+      "task": "surface_problem_present",
+      "count": 200,
+      "positiveRate": 0.5,
+      "threshold": 0.55,
+      "averagePrecision": 0.7712087251163242,
+      "auroc": 0.7820999999999999,
+      "f1": 0.7010309278350515,
+      "precision": 0.723404255319149,
+      "recall": 0.68,
+      "ece": 0.12969940762966872
+    },
+    {
+      "task": "crosswalk_present",
+      "count": 200,
+      "positiveRate": 0.5,
+      "threshold": 0.55,
+      "averagePrecision": 0.9603253440808336,
+      "auroc": 0.9601,
+      "f1": 0.9047619047619048,
+      "precision": 0.8636363636363636,
+      "recall": 0.95,
+      "ece": 0.06268341468647123
+    }
+  ],
+  "classifierSummary": {
+    "macroF1": 0.8177768648339907,
+    "macroEce": 0.08089021677523851
+  },
+  "rampnetSummary": {
+    "pointAveragePrecision": 1.0,
+    "pointF1": 1.0,
+    "imageAveragePrecision": 1.0,
+    "imageAuroc": 1.0,
+    "imageF1": 1.0,
+    "imageEce": 0.20188162693132955,
+    "latencyP95Ms": 34.88087844848633
+  },
+  "servingLatencySummary": {
+    "failures": 0,
+    "throughputRps": 171.916,
+    "p95Ms": 117.781,
+    "p99Ms": 123.533
+  }
+}
