@@ -6,7 +6,7 @@ The first production target is a fast multi-task classifier, not a route-decisio
 
 ## Model Choice
 
-Default: `convnext_tiny`. Use `convnext_small` for L20 accuracy experiments when the weaker hazard heads need more capacity and the deployment can tolerate a larger checkpoint. Do not promote a larger backbone unless untouched holdout F1 and calibration beat the current release; higher validation F1 alone is not enough.
+Default: `convnext_tiny`. Use `convnext_small` for the promoted balanced model and `convnext_base` for SOTA-chasing L20 accuracy experiments when the weaker hazard heads need more capacity and the deployment can tolerate a larger checkpoint. Do not promote a larger backbone unless untouched holdout F1 and calibration beat the current release; higher validation F1 alone is not enough.
 
 Why this first:
 
@@ -163,6 +163,8 @@ python train_accessibility_vision.py \
 
 Use this as the default serious training recipe on the L20. It increases capacity, image resolution, training stability, and calibration discipline while keeping release selection tied to untouched holdout metrics. Use `--train-augmentation strong` only as an ablation; in the current Project Sidewalk + RampNet split it underperformed the standard augmentation recipe on holdout F1. Promote a run only if holdout macro F1 improves without a material macro ECE or weaker-head regression. If the larger checkpoint is too slow for interactive photo review, distill it back into `convnext_tiny` after it becomes the teacher.
 
+For SOTA-chasing ablations, run `--model convnext_base --image-size 320 --batch-size 24 --learning-rate 6e-5`. Treat it as a teacher/backbone experiment until its holdout F1, calibration, and inference latency are measured against the current promoted `convnext_small` release.
+
 Current promoted release pattern:
 
 - dataset: `projectsidewalk-rampnet-best-v7`, with train-only expansion for curb ramps, obstacles, and surface problems;
@@ -171,6 +173,18 @@ Current promoted release pattern:
 - untouched test holdout: macro F1 `0.8174`, macro ECE `0.0808`;
 - strongest gains over the prior promoted tiny checkpoint: `curb_ramp_present` F1 `0.9077 -> 0.9349`, `crosswalk_present` F1 `0.8920 -> 0.9065`, and macro F1 `0.8021 -> 0.8174`;
 - known weak heads to target next: `obstacle_present` F1 `0.7163` and `surface_problem_present` F1 `0.7024`; these need more reviewed city-specific hard examples rather than reusing final holdout rows.
+
+Current highest-accuracy candidate:
+
+- ensemble: promoted `convnext_small` + calibrated `convnext_tiny`, with probabilities averaged and thresholds selected on validation only;
+- untouched test holdout: macro F1 `0.8212`, macro ECE `0.0752`;
+- L20 smoke benchmark: 120 requests at 16 concurrency, 0 failures, 114.45 req/s, p50 `102.8 ms`, p95 `372.8 ms`, p99 `377.0 ms`;
+- use it when the GPU budget can tolerate two forward passes per request. Keep the single `convnext_small` checkpoint as the lower-latency default until the ensemble latency benchmark is acceptable for the review workflow.
+
+Latest SOTA-chasing ablation:
+
+- `convnext_base` at 320 px reached holdout macro F1 `0.8112`, macro ECE `0.0858`;
+- it improved some strong heads, but underperformed the promoted single model and the two-model ensemble, so it should stay as a teacher/backbone experiment rather than a production promotion.
 
 Remote L20 runner:
 
@@ -252,6 +266,28 @@ python serve_accessibility_vision.py \
   --max-holdout-macro-ece 0.12
 ```
 
+Evaluate and serve an averaged ensemble candidate:
+
+```bash
+python evaluate_accessibility_vision_ensemble.py \
+  --dataset-root data/projectsidewalk-rampnet-best-v7 \
+  --checkpoint models/accesscity-vision-current/best.pt \
+  --checkpoint runs/projectsidewalk-rampnet-best-convnext-tiny-v7-ema-20260525T231819Z/best.pt \
+  --output-dir runs/projectsidewalk-rampnet-ensemble-current-tiny-v8 \
+  --device cuda
+
+python serve_accessibility_vision.py \
+  --checkpoint models/accesscity-vision-current/best.pt \
+  --checkpoint runs/projectsidewalk-rampnet-best-convnext-tiny-v7-ema-20260525T231819Z/best.pt \
+  --ensemble-metrics runs/projectsidewalk-rampnet-ensemble-current-tiny-v8/ensemble_metrics.json \
+  --host 0.0.0.0 \
+  --port 8095 \
+  --require-holdout-metrics \
+  --require-temperature-scaling \
+  --min-holdout-macro-f1 0.70 \
+  --max-holdout-macro-ece 0.12
+```
+
 The service exposes:
 
 ```http
@@ -284,5 +320,7 @@ docker run --gpus all -p 8095:8095 \
   -v "$PWD/data/accessibility-vision-models:/models/accesscity-vision:ro" \
   accesscity-accessibility-vision
 ```
+
+For ensemble serving in Docker or Kubernetes, set `VISION_MODEL_CHECKPOINTS` to a comma-separated checkpoint list and set `VISION_ENSEMBLE_METRICS` to the evaluator output JSON mounted alongside the checkpoints.
 
 In Kubernetes, `deploy/kubernetes/vision-deployment.yaml` defines a GPU-backed `accesscity-vision` service. The API config points `AiEnrichment__Provider=local-vision` at `http://accesscity-vision:8095`; the provider fails closed to review-only local rules if the model endpoint is unavailable.

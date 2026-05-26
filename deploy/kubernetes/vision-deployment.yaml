@@ -35,8 +35,6 @@ spec:
             - python3
             - /app/serve_accessibility_vision.py
           args:
-            - --checkpoint
-            - $(VISION_MODEL_CHECKPOINT)
             - --host
             - "0.0.0.0"
             - --port
@@ -50,6 +48,10 @@ spec:
           env:
             - name: VISION_MODEL_CHECKPOINT
               value: /models/accesscity-vision/best.pt
+            - name: VISION_MODEL_CHECKPOINTS
+              value: /models/accesscity-vision/best.pt
+            - name: VISION_ENSEMBLE_METRICS
+              value: ""
             - name: VISION_MAX_BATCH_IMAGES
               value: "32"
             - name: VISION_MAX_BATCH_WAIT_MS

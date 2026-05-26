@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import base64
 import io
+import json
 import os
 import queue
 import threading
@@ -48,9 +49,19 @@ class AnalyzeRequest(BaseModel):
 
 @dataclass
 class BatchRequest:
-    tensors: list[torch.Tensor]
+    tensors_by_member: list[list[torch.Tensor]]
     submitted_at: float
     future: Future[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class ModelMember:
+    name: str
+    image_size: int
+    model: nn.Module
+    temperature_tensor: torch.Tensor | None
+    checkpoint_path: Path
+    holdout_metrics: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -70,15 +81,15 @@ class QualityGateResult:
 class MicroBatchPredictor:
     def __init__(
         self,
-        model: nn.Module,
+        members: list[ModelMember],
         device: torch.device,
-        temperature_tensor: torch.Tensor | None,
         max_batch_images: int,
         max_wait_ms: float,
     ) -> None:
-        self.model = model
+        if not members:
+            raise ValueError("At least one model member is required.")
+        self.members = members
         self.device = device
-        self.temperature_tensor = temperature_tensor
         self.max_batch_images = max(1, max_batch_images)
         self.max_wait_seconds = max(0.0, max_wait_ms / 1000.0)
         self.requests: queue.Queue[BatchRequest | None] = queue.Queue()
@@ -97,13 +108,13 @@ class MicroBatchPredictor:
         self.worker = threading.Thread(target=self._run, name="accesscity-vision-microbatch", daemon=True)
         self.worker.start()
 
-    def submit(self, tensors: list[torch.Tensor]) -> Future[dict[str, Any]]:
+    def submit(self, tensors_by_member: list[list[torch.Tensor]]) -> Future[dict[str, Any]]:
         if self.closed:
             future: Future[dict[str, Any]] = Future()
             future.set_exception(RuntimeError("vision predictor is closed"))
             return future
         future = Future()
-        self.requests.put(BatchRequest(tensors=tensors, submitted_at=time.perf_counter(), future=future))
+        self.requests.put(BatchRequest(tensors_by_member=tensors_by_member, submitted_at=time.perf_counter(), future=future))
         return future
 
     def snapshot_stats(self) -> dict[str, Any]:
@@ -126,7 +137,7 @@ class MicroBatchPredictor:
                 return
 
             batch = [request]
-            image_count = len(request.tensors)
+            image_count = len(request.tensors_by_member[0])
             deadline = time.perf_counter() + self.max_wait_seconds
             while image_count < self.max_batch_images:
                 timeout = deadline - time.perf_counter()
@@ -140,27 +151,33 @@ class MicroBatchPredictor:
                     self.requests.put(None)
                     break
                 batch.append(next_request)
-                image_count += len(next_request.tensors)
+                image_count += len(next_request.tensors_by_member[0])
 
             self._run_batch(batch)
 
     def _run_batch(self, requests: list[BatchRequest]) -> None:
         started = time.perf_counter()
         try:
-            all_tensors = [tensor for request in requests for tensor in request.tensors]
-            image_count = len(all_tensors)
-            with torch.inference_mode():
-                batch = torch.stack(all_tensors).to(self.device)
-                logits = self.model(batch)
-                if self.temperature_tensor is not None:
-                    logits = logits / self.temperature_tensor
-                probabilities = torch.sigmoid(logits).detach().cpu()
+            image_count = sum(len(request.tensors_by_member[0]) for request in requests)
+            probability_sets: list[torch.Tensor] = []
+            for member_index, member in enumerate(self.members):
+                all_tensors = [tensor for request in requests for tensor in request.tensors_by_member[member_index]]
+                if len(all_tensors) != image_count:
+                    raise RuntimeError("ensemble members received different image counts")
+                with torch.inference_mode():
+                    batch = torch.stack(all_tensors).to(self.device)
+                    logits = member.model(batch)
+                    if member.temperature_tensor is not None:
+                        logits = logits / member.temperature_tensor
+                    probability_sets.append(torch.sigmoid(logits).detach().cpu())
 
+            probabilities = torch.stack(probability_sets, dim=0).mean(dim=0)
+            image_count = len(all_tensors)
             latency_ms = (time.perf_counter() - started) * 1000
             offset = 0
             queue_waits = []
             for request in requests:
-                count = len(request.tensors)
+                count = len(request.tensors_by_member[0])
                 max_probs = probabilities[offset : offset + count].max(dim=0).values.tolist()
                 offset += count
                 queue_wait_ms = (started - request.submitted_at) * 1000
@@ -200,11 +217,28 @@ def build_model(model_name: str, num_tasks: int) -> nn.Module:
         in_features = model.classifier[2].in_features
         model.classifier[2] = nn.Linear(in_features, num_tasks)
         return model
+    if model_name == "convnext_base":
+        model = models.convnext_base(weights=None)
+        in_features = model.classifier[2].in_features
+        model.classifier[2] = nn.Linear(in_features, num_tasks)
+        return model
 
     model = models.efficientnet_b0(weights=None)
     in_features = model.classifier[1].in_features
     model.classifier[1] = nn.Linear(in_features, num_tasks)
     return model
+
+
+def load_ensemble_metrics(metrics_path: Path | None, tasks: list[str]) -> tuple[dict[str, Any], dict[str, float]]:
+    if metrics_path is None:
+        return {}, {}
+    payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+    calibration_metrics = payload.get("calibrationMetrics") or {}
+    thresholds = {
+        task: float((calibration_metrics.get("tasks") or {}).get(task, {}).get("threshold", 0.5))
+        for task in tasks
+    }
+    return payload, thresholds
 
 
 def load_image(photo: PhotoInput, timeout: float = 5.0) -> Image.Image:
@@ -218,12 +252,16 @@ def load_image(photo: PhotoInput, timeout: float = 5.0) -> Image.Image:
     raise ValueError("photo must include url or imageBase64")
 
 
-def load_and_transform_photos(photos: list[PhotoInput], transform: transforms.Compose) -> list[torch.Tensor]:
-    tensors = []
+def load_and_transform_photos(
+    photos: list[PhotoInput],
+    member_transforms: list[transforms.Compose],
+) -> list[list[torch.Tensor]]:
+    tensors_by_member: list[list[torch.Tensor]] = [[] for _ in member_transforms]
     for photo in photos[:4]:
         image = load_image(photo)
-        tensors.append(transform(image))
-    return tensors
+        for member_index, transform in enumerate(member_transforms):
+            tensors_by_member[member_index].append(transform(image))
+    return tensors_by_member
 
 
 def task_candidates(tasks: list[str], probs: list[float], thresholds: dict[str, float], floor: float) -> list[dict[str, Any]]:
@@ -333,11 +371,17 @@ def bool_from_env(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def checkpoint_paths_from_env() -> list[Path]:
+    raw = os.getenv("VISION_MODEL_CHECKPOINTS") or os.getenv("VISION_MODEL_CHECKPOINT") or ""
+    return [Path(item.strip()) for item in raw.split(",") if item.strip()]
+
+
 def create_app(
-    checkpoint_path: Path,
+    checkpoint_paths: list[Path],
     device_name: str,
     max_batch_images: int,
     max_batch_wait_ms: float,
+    ensemble_metrics_path: Path | None = None,
     require_holdout_metrics: bool = False,
     min_holdout_macro_f1: float = 0.0,
     max_holdout_macro_ece: float = 1.0,
@@ -345,45 +389,90 @@ def create_app(
     max_calibration_macro_ece: float = 1.0,
     require_temperature_scaling: bool = False,
 ) -> FastAPI:
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    tasks = checkpoint.get("tasks", DEFAULT_TASKS)
-    thresholds = checkpoint.get("thresholds", {})
-    logit_temperatures = checkpoint.get("logit_temperatures") or {}
-    metrics = checkpoint.get("metrics") or {}
-    holdout_metrics = checkpoint.get("holdout_metrics") or {}
-    dataset_summary = checkpoint.get("dataset_summary") or {}
-    model_name = checkpoint.get("model_name", "convnext_tiny")
-    image_size = int(checkpoint.get("image_size", 224))
-    quality_gate = validate_checkpoint_quality(
-        checkpoint,
+    if not checkpoint_paths:
+        raise RuntimeError("At least one checkpoint is required.")
+
+    checkpoints = [torch.load(checkpoint_path, map_location="cpu") for checkpoint_path in checkpoint_paths]
+    tasks = checkpoints[0].get("tasks", DEFAULT_TASKS)
+    for checkpoint_path, checkpoint in zip(checkpoint_paths, checkpoints, strict=True):
+        checkpoint_tasks = checkpoint.get("tasks", DEFAULT_TASKS)
+        if list(checkpoint_tasks) != list(tasks):
+            raise RuntimeError(f"{checkpoint_path} task order {checkpoint_tasks!r} does not match {tasks!r}.")
+    ensemble_metrics, ensemble_thresholds = load_ensemble_metrics(ensemble_metrics_path, tasks)
+    thresholds = ensemble_thresholds or checkpoints[0].get("thresholds", {})
+    metrics = (ensemble_metrics.get("calibrationMetrics") or checkpoints[0].get("metrics") or {})
+    holdout_metrics = (ensemble_metrics.get("holdoutMetrics") or checkpoints[0].get("holdout_metrics") or {})
+    dataset_summary = checkpoints[0].get("dataset_summary") or {}
+
+    device = torch.device(device_name if device_name != "auto" else ("cuda" if torch.cuda.is_available() else "cpu"))
+    members: list[ModelMember] = []
+    quality_gates: list[QualityGateResult] = []
+    member_transforms: list[transforms.Compose] = []
+    uses_ensemble_release = bool(ensemble_metrics) and len(checkpoints) > 1
+    release_quality_gate = validate_checkpoint_quality(
+        {
+            "metrics": metrics,
+            "holdout_metrics": holdout_metrics,
+            "logit_temperatures": {"ensemble": 1.0},
+        },
         require_holdout_metrics=require_holdout_metrics,
         min_holdout_macro_f1=min_holdout_macro_f1,
         max_holdout_macro_ece=max_holdout_macro_ece,
         min_calibration_macro_f1=min_calibration_macro_f1,
         max_calibration_macro_ece=max_calibration_macro_ece,
-        require_temperature_scaling=require_temperature_scaling,
+        require_temperature_scaling=False,
     )
-    if not quality_gate.passed:
-        raise RuntimeError("Checkpoint failed accessibility vision quality gate: " + "; ".join(quality_gate.failures))
+    if not release_quality_gate.passed:
+        raise RuntimeError("Accessibility vision release failed quality gate: " + "; ".join(release_quality_gate.failures))
+    for checkpoint_path, checkpoint in zip(checkpoint_paths, checkpoints, strict=True):
+        quality_gate = validate_checkpoint_quality(
+            checkpoint,
+            require_holdout_metrics=require_holdout_metrics,
+            min_holdout_macro_f1=0.0 if uses_ensemble_release else min_holdout_macro_f1,
+            max_holdout_macro_ece=1.0 if uses_ensemble_release else max_holdout_macro_ece,
+            min_calibration_macro_f1=0.0 if uses_ensemble_release else min_calibration_macro_f1,
+            max_calibration_macro_ece=1.0 if uses_ensemble_release else max_calibration_macro_ece,
+            require_temperature_scaling=require_temperature_scaling,
+        )
+        quality_gates.append(quality_gate)
+        if not quality_gate.passed:
+            raise RuntimeError(
+                f"Checkpoint {checkpoint_path} failed accessibility vision quality gate: "
+                + "; ".join(quality_gate.failures)
+            )
 
-    device = torch.device(device_name if device_name != "auto" else ("cuda" if torch.cuda.is_available() else "cpu"))
-    model = build_model(model_name, len(tasks))
-    model.load_state_dict(checkpoint["model_state"])
-    model.to(device)
-    model.eval()
-    temperature_tensor = None
-    if logit_temperatures:
-        temperature_values = [max(float(logit_temperatures.get(task, 1.0)), 1e-6) for task in tasks]
-        temperature_tensor = torch.tensor(temperature_values, dtype=torch.float32, device=device).view(1, -1)
-    predictor = MicroBatchPredictor(model, device, temperature_tensor, max_batch_images, max_batch_wait_ms)
-
-    transform = transforms.Compose(
-        [
-            transforms.Resize((image_size, image_size)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ]
-    )
+        model_name = checkpoint.get("model_name", "convnext_tiny")
+        image_size = int(checkpoint.get("image_size", 224))
+        model = build_model(model_name, len(tasks))
+        model.load_state_dict(checkpoint["model_state"])
+        model.to(device)
+        model.eval()
+        logit_temperatures = checkpoint.get("logit_temperatures") or {}
+        temperature_tensor = None
+        if logit_temperatures:
+            temperature_values = [max(float(logit_temperatures.get(task, 1.0)), 1e-6) for task in tasks]
+            temperature_tensor = torch.tensor(temperature_values, dtype=torch.float32, device=device).view(1, -1)
+        members.append(
+            ModelMember(
+                name=model_name,
+                image_size=image_size,
+                model=model,
+                temperature_tensor=temperature_tensor,
+                checkpoint_path=checkpoint_path,
+                holdout_metrics=checkpoint.get("holdout_metrics") or {},
+            )
+        )
+        member_transforms.append(
+            transforms.Compose(
+                [
+                    transforms.Resize((image_size, image_size)),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                ]
+            )
+        )
+    predictor = MicroBatchPredictor(members, device, max_batch_images, max_batch_wait_ms)
+    model_label = members[0].name if len(members) == 1 else "ensemble"
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -398,27 +487,38 @@ def create_app(
     def health() -> dict[str, Any]:
         return {
             "status": "ok",
-            "model": model_name,
+            "model": model_label,
+            "ensembleSize": len(members),
+            "members": [
+                {
+                    "model": member.name,
+                    "imageSize": member.image_size,
+                    "checkpoint": str(member.checkpoint_path),
+                    "holdoutMacroF1": member.holdout_metrics.get("macro_f1"),
+                    "holdoutMacroEce": member.holdout_metrics.get("macro_ece"),
+                    "temperatureScaled": member.temperature_tensor is not None,
+                }
+                for member in members
+            ],
             "tasks": tasks,
             "device": str(device),
             "thresholds": thresholds,
-            "temperatureScaled": bool(logit_temperatures),
             "microBatching": predictor.snapshot_stats(),
-            "logitTemperatures": {
-                task: round(float(logit_temperatures.get(task, 1.0)), 4)
-                for task in tasks
-            },
             "calibration": {
-                "split": checkpoint.get("calibration_split"),
+                "split": ensemble_metrics.get("calibrationSplit") or checkpoints[0].get("calibration_split"),
                 "macroF1": metrics.get("macro_f1"),
                 "macroEce": metrics.get("macro_ece"),
             },
             "holdout": {
-                "split": checkpoint.get("holdout_split"),
+                "split": ensemble_metrics.get("holdoutSplit") or checkpoints[0].get("holdout_split"),
                 "macroF1": holdout_metrics.get("macro_f1"),
                 "macroEce": holdout_metrics.get("macro_ece"),
             },
-            "qualityGate": quality_gate.as_dict(),
+            "qualityGate": {
+                "passed": release_quality_gate.passed and all(quality_gate.passed for quality_gate in quality_gates),
+                "release": release_quality_gate.as_dict(),
+                "members": [quality_gate.as_dict() for quality_gate in quality_gates],
+            },
             "datasetRows": {
                 key: value.get("rows") if isinstance(value, dict) else None
                 for key, value in dataset_summary.items()
@@ -432,18 +532,18 @@ def create_app(
 
         started = time.perf_counter()
         try:
-            tensors = await asyncio.to_thread(load_and_transform_photos, request.photos, transform)
-            prediction = await asyncio.wrap_future(predictor.submit(tensors))
+            tensors_by_member = await asyncio.to_thread(load_and_transform_photos, request.photos, member_transforms)
+            prediction = await asyncio.wrap_future(predictor.submit(tensors_by_member))
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=400, detail=f"Could not analyze photo: {exc}") from exc
         max_probs = prediction["probabilities"]
         candidates = task_candidates(tasks, max_probs, thresholds, request.threshold_floor)
         latency_ms = (time.perf_counter() - started) * 1000
         return {
-            "model": model_name,
+            "model": model_label,
+            "ensembleSize": len(members),
             "tasks": tasks,
             "thresholds": {task: round(float(thresholds.get(task, 0.5)), 4) for task in tasks},
-            "temperatureScaled": bool(logit_temperatures),
             "probabilities": {task: round(float(prob), 4) for task, prob in zip(tasks, max_probs, strict=True)},
             "candidates": candidates,
             "forRouteDecision": False,
@@ -464,7 +564,8 @@ def create_app(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Serve AccessCity accessibility vision classifier.")
-    parser.add_argument("--checkpoint", type=Path, required=True)
+    parser.add_argument("--checkpoint", dest="checkpoints", type=Path, action="append")
+    parser.add_argument("--ensemble-metrics", type=Path, default=os.getenv("VISION_ENSEMBLE_METRICS"))
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8095)
     parser.add_argument("--device", default="auto")
@@ -485,12 +586,17 @@ def main() -> None:
         default=bool_from_env("VISION_REQUIRE_TEMPERATURE_SCALING", False),
     )
     args = parser.parse_args()
+    checkpoint_paths = args.checkpoints or checkpoint_paths_from_env()
+    if not checkpoint_paths:
+        parser.error("at least one --checkpoint or VISION_MODEL_CHECKPOINTS entry is required")
+    ensemble_metrics_path = Path(args.ensemble_metrics) if args.ensemble_metrics else None
 
     app = create_app(
-        args.checkpoint,
+        checkpoint_paths,
         args.device,
         args.max_batch_images,
         args.max_batch_wait_ms,
+        ensemble_metrics_path=ensemble_metrics_path,
         require_holdout_metrics=args.require_holdout_metrics,
         min_holdout_macro_f1=args.min_holdout_macro_f1,
         max_holdout_macro_ece=args.max_holdout_macro_ece,
