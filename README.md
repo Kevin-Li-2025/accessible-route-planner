@@ -265,6 +265,7 @@ data/                       local OSM extracts and generated graph artifacts
 ## Documentation Index
 
 - [CI/CD](docs/CI_CD.md)
+- [Accessibility Vision Evaluation](docs/ACCESSIBILITY_VISION_EVALUATION.md)
 - [Distributed Load Testing](docs/DISTRIBUTED_LOAD_TESTING.md)
 - [Geospatial Query Audit](docs/GEOSPATIAL_QUERY_AUDIT.md)
 - [K6 Load Test Results](docs/K6_LOAD_TEST_RESULTS.md)

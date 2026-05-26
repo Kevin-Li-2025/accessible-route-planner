@@ -79,6 +79,31 @@ python evaluate_rampnet_detection.py \
 
 The evaluator reports point-detection AP, precision, recall, F1, image-level AP/AUROC/F1/ECE, latency p50/p95/p99, and per-city slices inferred from panorama coordinates (`nyc`, `portland`, `bend`). Use `--include-cities` / `--exclude-cities` to build city-shift checks, and keep `--synthetic-smoke` for CI or offline validation when Hugging Face is unreachable.
 
+## Full Evaluation Report
+
+Before promoting a checkpoint, run the unified evaluation runner. It orchestrates classifier/ensemble holdout metrics, RampNet-style detection, serving latency, release gates, and a Markdown/JSON report:
+
+```bash
+python run_full_accessibility_vision_eval.py \
+  --output-dir runs/accessibility-vision-full-eval/current \
+  --dataset-root data/projectsidewalk-rampnet-best-v7 \
+  --checkpoint models/accesscity-vision-current/best.pt \
+  --checkpoint runs/projectsidewalk-rampnet-best-convnext-tiny-v7-ema-20260525T231819Z/best.pt \
+  --serve-endpoint http://127.0.0.1:8095/v1/accessibility-vision/analyze \
+  --rampnet-max-examples 512 \
+  --strict
+```
+
+For local CI or offline validation without model artifacts:
+
+```bash
+python run_full_accessibility_vision_eval.py \
+  --output-dir /tmp/accesscity-vision-full-eval \
+  --rampnet-synthetic-smoke
+```
+
+Smoke output must stay clearly marked as `smoke_only` and must not be used as a production accuracy claim. Full methodology is documented in `docs/ACCESSIBILITY_VISION_EVALUATION.md`.
+
 ## City-Shift Validation
 
 Random train/validation/test splits overstate quality for accessibility imagery because the same city style can appear in every split. Build an explicit city-shift classifier split before claiming cross-city performance:
