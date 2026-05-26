@@ -5,11 +5,14 @@ using AccessCity.API.Common;
 using AccessCity.API.Models;
 using AccessCity.API.Models.DTOs;
 using AccessCity.API.Models.Identity;
+using AccessCity.API.Security;
 using AccessCity.API.Services;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http.Timeouts;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 
 namespace AccessCity.API.Controllers;
@@ -45,6 +48,8 @@ public sealed class AccountController : ControllerBase
     }
 
     [HttpGet("profile")]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.HotRead)]
+    [RequestTimeout(AccessCityRequestTimeoutPolicies.ShortRead)]
     [ProducesResponseType(typeof(AccountProfileResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status401Unauthorized)]
     public async Task<ActionResult<AccountProfileResponse>> GetProfile(CancellationToken cancellationToken)
@@ -56,6 +61,7 @@ public sealed class AccountController : ControllerBase
     }
 
     [HttpPut("profile")]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.Write)]
     [ProducesResponseType(typeof(AccountProfileResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status401Unauthorized)]
@@ -94,6 +100,8 @@ public sealed class AccountController : ControllerBase
     }
 
     [HttpGet("notifications")]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.HotRead)]
+    [RequestTimeout(AccessCityRequestTimeoutPolicies.ShortRead)]
     [ProducesResponseType(typeof(NotificationSettingsDto), StatusCodes.Status200OK)]
     public async Task<ActionResult<NotificationSettingsDto>> GetNotificationSettings(CancellationToken cancellationToken)
     {
@@ -104,6 +112,7 @@ public sealed class AccountController : ControllerBase
     }
 
     [HttpPut("notifications")]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.Write)]
     [ProducesResponseType(typeof(NotificationSettingsDto), StatusCodes.Status200OK)]
     public async Task<ActionResult<NotificationSettingsDto>> UpdateNotificationSettings(
         [FromBody] NotificationSettingsDto request,
@@ -135,6 +144,7 @@ public sealed class AccountController : ControllerBase
     }
 
     [HttpPost("support/contact")]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.Write)]
     [ProducesResponseType(typeof(SupportContactResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<SupportContactResponse>> SubmitSupportContact(

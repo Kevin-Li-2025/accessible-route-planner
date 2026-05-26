@@ -1,9 +1,12 @@
+using AccessCity.API.Security;
 using AccessCity.API.Models.DTOs;
 using AccessCity.API.Models.External;
 using AccessCity.API.Services.External;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http.Timeouts;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace AccessCity.API.Controllers;
 
@@ -12,6 +15,8 @@ namespace AccessCity.API.Controllers;
 [ApiController]
 [ApiVersion("1.0")]
 [Route("api/v{version:apiVersion}/safe-haven")]
+[EnableRateLimiting(AccessCityRateLimitPolicies.HotRead)]
+[RequestTimeout(AccessCityRequestTimeoutPolicies.ShortRead)]
 public class SafeHavenController : ControllerBase
 {
     private readonly ISafeHavenPlacesClient _places;

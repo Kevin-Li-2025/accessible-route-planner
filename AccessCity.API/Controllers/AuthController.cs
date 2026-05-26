@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using AccessCity.API.Models.Identity;
+using AccessCity.API.Security;
 using AccessCity.API.Services.Security;
 using AccessCity.API.Common;
 using AccessCity.API.Models.DTOs;
@@ -17,7 +18,7 @@ namespace AccessCity.API.Controllers;
 [ApiController]
 [ApiVersion("1.0")]
 [Route("api/v{version:apiVersion}/[controller]")]
-[EnableRateLimiting("auth")]
+[EnableRateLimiting(AccessCityRateLimitPolicies.Auth)]
 public class AuthController : ControllerBase
 {
     private readonly UserManager<AccessCityUser> _userManager;

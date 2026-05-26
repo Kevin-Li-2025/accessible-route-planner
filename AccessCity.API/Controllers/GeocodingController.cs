@@ -1,7 +1,10 @@
 using System.Globalization;
 using System.Text.Json;
+using AccessCity.API.Security;
 using Asp.Versioning;
+using Microsoft.AspNetCore.Http.Timeouts;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Caching.Memory;
 
 namespace AccessCity.API.Controllers
@@ -9,6 +12,8 @@ namespace AccessCity.API.Controllers
     [ApiController]
     [ApiVersion("1.0")]
     [Route("api/v{version:apiVersion}/geocoding")]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.HotRead)]
+    [RequestTimeout(AccessCityRequestTimeoutPolicies.ShortRead)]
     public class GeocodingController : ControllerBase
     {
         private static readonly TimeSpan GeocodeCacheTtl = TimeSpan.FromMinutes(10);

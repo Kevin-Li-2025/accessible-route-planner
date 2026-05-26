@@ -1,6 +1,7 @@
 using System.Text;
 using System.Security.Claims;
 using System.Threading.RateLimiting;
+using AccessCity.API.Common;
 using AccessCity.API.Configuration;
 using AccessCity.API.Data;
 using AccessCity.API.HealthChecks;
@@ -9,6 +10,7 @@ using AccessCity.API.Messaging.Kafka;
 using AccessCity.API.Models;
 using AccessCity.API.Models.Identity;
 using AccessCity.API.Modules;
+using AccessCity.API.Security;
 using AccessCity.API.Services;
 using AccessCity.API.Services.Security;
 using AccessCity.API.Serialization;
@@ -16,9 +18,12 @@ using AccessCity.API.Validators;
 using FluentValidation;
 using FluentValidation.AspNetCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Http.Timeouts;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Caching.Hybrid;
@@ -303,37 +308,80 @@ public static class DependencyInjection
 
         services.AddAuthorization();
 
-        // Rate limiting
+        services.Configure<AccessCityRateLimitingOptions>(
+            configuration.GetSection(AccessCityRateLimitingOptions.SectionName));
+
+        // Rate limiting. Global limits are intentionally broad; named endpoint
+        // policies shed expensive traffic before it can consume DB, Kafka, or route-worker capacity.
+        var rateLimitOptions = configuration
+            .GetSection(AccessCityRateLimitingOptions.SectionName)
+            .Get<AccessCityRateLimitingOptions>() ?? new AccessCityRateLimitingOptions();
+
         services.AddRateLimiter(options =>
         {
             options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-
-            options.AddFixedWindowLimiter("auth", opt =>
+            options.OnRejected = async (context, cancellationToken) =>
             {
-                opt.PermitLimit = env.IsDevelopment() ? 100 : 5;
-                opt.Window = TimeSpan.FromMinutes(1);
-                opt.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
-                opt.QueueLimit = 0;
-            });
+                if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+                {
+                    context.HttpContext.Response.Headers.RetryAfter =
+                        Math.Ceiling(retryAfter.TotalSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                }
 
-            var globalPermitLimit = configuration.GetValue("RateLimiting:Global:PermitLimit", 100);
-            var globalQueueLimit = configuration.GetValue("RateLimiting:Global:QueueLimit", 10);
+                var endpoint = context.HttpContext.GetEndpoint();
+                var policyName = endpoint?.Metadata.GetMetadata<EnableRateLimitingAttribute>()?.PolicyName
+                    ?? "global";
+
+                context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+                if (!context.HttpContext.Response.HasStarted)
+                {
+                    await context.HttpContext.Response.WriteAsJsonAsync(
+                        new ApiError(
+                            "Too many requests.",
+                            CorrelationId: context.HttpContext.TraceIdentifier,
+                            Detail: $"The {policyName} traffic budget is exhausted. Retry after backoff or use the async job endpoint for route computation."),
+                        cancellationToken);
+                }
+            };
 
             options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
                 RateLimitPartition.GetSlidingWindowLimiter(
                     partitionKey: ResolveRateLimitPartitionKey(context),
-                    factory: _ => new SlidingWindowRateLimiterOptions
-                    {
-                        PermitLimit = globalPermitLimit,
-                        Window = TimeSpan.FromMinutes(1),
-                        SegmentsPerWindow = 4,
-                        QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                        QueueLimit = globalQueueLimit
-                    }));
+                    factory: _ => BuildSlidingWindowOptions(rateLimitOptions.Global)));
+
+            AddPartitionedSlidingPolicy(options, AccessCityRateLimitPolicies.Auth, rateLimitOptions.Auth);
+            AddPartitionedSlidingPolicy(options, AccessCityRateLimitPolicies.RoutingHeavy, rateLimitOptions.RoutingHeavy);
+            AddPartitionedSlidingPolicy(options, AccessCityRateLimitPolicies.RoutingPoll, rateLimitOptions.RoutingPoll);
+            AddPartitionedSlidingPolicy(options, AccessCityRateLimitPolicies.HotRead, rateLimitOptions.HotRead);
+            AddPartitionedSlidingPolicy(options, AccessCityRateLimitPolicies.Tile, rateLimitOptions.Tile);
+            AddPartitionedSlidingPolicy(options, AccessCityRateLimitPolicies.Write, rateLimitOptions.Write);
+            AddPartitionedSlidingPolicy(options, AccessCityRateLimitPolicies.Upload, rateLimitOptions.Upload);
+            AddPartitionedSlidingPolicy(options, AccessCityRateLimitPolicies.AiAssist, rateLimitOptions.AiAssist);
         });
 
         return services;
     }
+
+    private static void AddPartitionedSlidingPolicy(
+        RateLimiterOptions options,
+        string policyName,
+        RateLimitWindowOptions rule)
+    {
+        options.AddPolicy(policyName, context =>
+            RateLimitPartition.GetSlidingWindowLimiter(
+                partitionKey: ResolveRateLimitPartitionKey(context),
+                factory: _ => BuildSlidingWindowOptions(rule)));
+    }
+
+    private static SlidingWindowRateLimiterOptions BuildSlidingWindowOptions(RateLimitWindowOptions rule) =>
+        new()
+        {
+            PermitLimit = Math.Max(1, rule.PermitLimit),
+            Window = TimeSpan.FromSeconds(Math.Max(1, rule.WindowSeconds)),
+            SegmentsPerWindow = Math.Clamp(rule.SegmentsPerWindow, 1, Math.Max(1, rule.WindowSeconds)),
+            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+            QueueLimit = Math.Max(0, rule.QueueLimit)
+        };
 
     private static string ResolveRateLimitPartitionKey(HttpContext context)
     {
@@ -431,6 +479,52 @@ public static class DependencyInjection
         IConfiguration configuration,
         IWebHostEnvironment env)
     {
+        var requestProtection = configuration
+            .GetSection(AccessCityRequestProtectionOptions.SectionName)
+            .Get<AccessCityRequestProtectionOptions>() ?? new AccessCityRequestProtectionOptions();
+
+        services.Configure<AccessCityRequestProtectionOptions>(
+            configuration.GetSection(AccessCityRequestProtectionOptions.SectionName));
+
+        services.Configure<KestrelServerOptions>(options =>
+        {
+            options.Limits.MaxRequestBodySize = Math.Max(1024 * 1024, requestProtection.MaxRequestBodyBytes);
+            options.Limits.RequestHeadersTimeout = TimeSpan.FromSeconds(
+                Math.Clamp(requestProtection.RequestHeadersTimeoutSeconds, 1, 120));
+            options.Limits.KeepAliveTimeout = TimeSpan.FromSeconds(
+                Math.Clamp(requestProtection.KeepAliveTimeoutSeconds, 5, 300));
+
+            if (requestProtection.MaxConcurrentConnections is > 0)
+            {
+                options.Limits.MaxConcurrentConnections = requestProtection.MaxConcurrentConnections;
+            }
+        });
+
+        services.Configure<FormOptions>(options =>
+        {
+            options.MultipartBodyLengthLimit = Math.Max(1024 * 1024, requestProtection.MaxRequestBodyBytes);
+        });
+
+        services.AddRequestTimeouts(options =>
+        {
+            options.DefaultPolicy = BuildRequestTimeoutPolicy(requestProtection.DefaultTimeoutSeconds);
+            options.AddPolicy(
+                AccessCityRequestTimeoutPolicies.ShortRead,
+                BuildRequestTimeoutPolicy(requestProtection.ShortReadTimeoutSeconds));
+            options.AddPolicy(
+                AccessCityRequestTimeoutPolicies.RouteSync,
+                BuildRequestTimeoutPolicy(requestProtection.RouteSyncTimeoutSeconds));
+            options.AddPolicy(
+                AccessCityRequestTimeoutPolicies.RouteAsyncSubmit,
+                BuildRequestTimeoutPolicy(requestProtection.RouteAsyncSubmitTimeoutSeconds));
+            options.AddPolicy(
+                AccessCityRequestTimeoutPolicies.AiAssist,
+                BuildRequestTimeoutPolicy(requestProtection.AiAssistTimeoutSeconds));
+            options.AddPolicy(
+                AccessCityRequestTimeoutPolicies.Upload,
+                BuildRequestTimeoutPolicy(requestProtection.UploadTimeoutSeconds));
+        });
+
         services.Configure<ForwardedHeadersOptions>(options =>
         {
             options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
@@ -479,4 +573,23 @@ public static class DependencyInjection
 
         return services;
     }
+
+    private static RequestTimeoutPolicy BuildRequestTimeoutPolicy(int timeoutSeconds) =>
+        new()
+        {
+            Timeout = TimeSpan.FromSeconds(Math.Max(1, timeoutSeconds)),
+            TimeoutStatusCode = StatusCodes.Status503ServiceUnavailable,
+            WriteTimeoutResponse = async context =>
+            {
+                if (!context.Response.HasStarted)
+                {
+                    await context.Response.WriteAsJsonAsync(
+                        new ApiError(
+                            "Request timed out.",
+                            CorrelationId: context.TraceIdentifier,
+                            Detail: "The request exceeded the production latency budget. Retry with backoff or use the async route job endpoint for heavy route computation."),
+                        context.RequestAborted);
+                }
+            }
+        };
 }

@@ -3,6 +3,7 @@ using AccessCity.API.Configuration;
 using AccessCity.API.Data;
 using AccessCity.API.HealthChecks;
 using AccessCity.API.Hubs;
+using AccessCity.API.Middleware;
 using AccessCity.API.Models;
 using AccessCity.API.Services;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -37,9 +38,12 @@ public static class WebApplicationExtensions
             app.UseHttpsRedirection();
         }
 
+        app.UseRouting();
         app.UseCors();
         app.UseAuthentication();
         app.UseAuthorization();
+        app.UseMiddleware<TrafficBackpressureMiddleware>();
+        app.UseRequestTimeouts();
         app.UseSerilogRequestLogging();
         app.UseRateLimiter();
         app.MapControllers();
@@ -49,7 +53,8 @@ public static class WebApplicationExtensions
         {
             Predicate = _ => false
         })
-            .DisableRateLimiting();
+            .DisableRateLimiting()
+            .DisableRequestTimeout();
         app.MapGet("/health/ready", async (CachedReadinessService readiness, CancellationToken cancellationToken) =>
         {
             var report = await readiness.CheckAsync(cancellationToken);
@@ -58,7 +63,8 @@ public static class WebApplicationExtensions
                 : StatusCodes.Status200OK;
             return Results.Text(report.Status.ToString(), "text/plain", statusCode: statusCode);
         })
-            .DisableRateLimiting();
+            .DisableRateLimiting()
+            .DisableRequestTimeout();
 
         return app;
     }

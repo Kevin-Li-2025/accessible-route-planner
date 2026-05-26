@@ -5,7 +5,10 @@ using AccessCity.API.Common;
 using AccessCity.API.Hubs;
 using AccessCity.API.Models;
 using AccessCity.API.Models.DTOs;
+using AccessCity.API.Security;
 using AccessCity.API.Services;
+using Microsoft.AspNetCore.Http.Timeouts;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace AccessCity.API.Controllers;
 
@@ -43,6 +46,8 @@ public class HazardsController : ControllerBase
     /// Lists hazard reports, optionally filtered by bounding box and status.
     /// </summary>
     [HttpGet]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.HotRead)]
+    [RequestTimeout(AccessCityRequestTimeoutPolicies.ShortRead)]
     [ProducesResponseType(typeof(IEnumerable<HazardReport>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IEnumerable<HazardReport>>> GetHazards(
         [FromQuery] double? minLat,
@@ -60,6 +65,8 @@ public class HazardsController : ControllerBase
     /// Lists persisted hazard reports with bounded keyset pagination for interactive clients.
     /// </summary>
     [HttpGet("page")]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.HotRead)]
+    [RequestTimeout(AccessCityRequestTimeoutPolicies.ShortRead)]
     [ProducesResponseType(typeof(HazardPageResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<HazardPageResponse>> GetHazardsPage(
@@ -91,6 +98,7 @@ public class HazardsController : ControllerBase
     /// Creates a new hazard report and broadcasts a real-time alert via SignalR.
     /// </summary>
     [HttpPost]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.Write)]
     [ProducesResponseType(typeof(HazardReport), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<HazardReport>> ReportHazard(
@@ -111,6 +119,8 @@ public class HazardsController : ControllerBase
     /// Retrieves a single hazard report by ID, falling back to OSM-backed synthetic hazards.
     /// </summary>
     [HttpGet("{id:guid}")]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.HotRead)]
+    [RequestTimeout(AccessCityRequestTimeoutPolicies.ShortRead)]
     [ProducesResponseType(typeof(HazardReport), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<HazardReport>> GetHazardById(Guid id, CancellationToken cancellationToken = default)
@@ -123,6 +133,7 @@ public class HazardsController : ControllerBase
     /// Updates the status of an existing hazard report.
     /// </summary>
     [HttpPatch("{id:guid}")]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.Write)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> UpdateHazardStatus(Guid id, [FromBody] HazardStatus status, CancellationToken cancellationToken = default)
@@ -138,6 +149,8 @@ public class HazardsController : ControllerBase
     /// Attaches an uploaded image to a persisted hazard report.
     /// </summary>
     [HttpPost("{id:guid}/photo")]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.Upload)]
+    [RequestTimeout(AccessCityRequestTimeoutPolicies.Upload)]
     [Consumes("multipart/form-data")]
     [RequestSizeLimit(MaxHazardPhotoBytes)]
     [ProducesResponseType(typeof(HazardPhotoUploadResponse), StatusCodes.Status200OK)]
@@ -194,6 +207,8 @@ public class HazardsController : ControllerBase
     /// Serves hazard images uploaded through the API.
     /// </summary>
     [HttpGet("photos/{fileName}")]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.HotRead)]
+    [RequestTimeout(AccessCityRequestTimeoutPolicies.ShortRead)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public IActionResult GetHazardPhoto(string fileName)

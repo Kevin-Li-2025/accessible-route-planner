@@ -1,9 +1,11 @@
 using AccessCity.API.Models;
 using AccessCity.API.Models.DTOs;
+using AccessCity.API.Security;
 using AccessCity.API.Services;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace AccessCity.API.Controllers;
 
@@ -11,6 +13,7 @@ namespace AccessCity.API.Controllers;
 [ApiController]
 [ApiVersion("1.0")]
 [Route("api/v{version:apiVersion}/admin/osm")]
+[EnableRateLimiting(AccessCityRateLimitPolicies.Write)]
 public class AdminOsmController : ControllerBase
 {
     private readonly IOsmImportService _osmImportService;

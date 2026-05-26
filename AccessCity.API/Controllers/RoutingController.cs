@@ -5,9 +5,12 @@ using AccessCity.API.Configuration;
 using AccessCity.API.Exceptions;
 using AccessCity.API.Models;
 using AccessCity.API.Models.DTOs;
+using AccessCity.API.Security;
 using AccessCity.API.Services;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http.Timeouts;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 
 namespace AccessCity.API.Controllers;
@@ -71,6 +74,8 @@ public class RoutingController : ControllerBase
     /// Returns 504 if computation exceeds 30 seconds.
     /// </summary>
     [HttpPost("safe-path")]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.RoutingHeavy)]
+    [RequestTimeout(AccessCityRequestTimeoutPolicies.RouteSync)]
     [ProducesResponseType(typeof(RouteResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status202Accepted)]
@@ -180,6 +185,8 @@ public class RoutingController : ControllerBase
     /// This prevents HTTP connection pool exhaustion under high concurrency.
     /// </summary>
     [HttpPost("safe-path/async")]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.RoutingHeavy)]
+    [RequestTimeout(AccessCityRequestTimeoutPolicies.RouteAsyncSubmit)]
     [ProducesResponseType(StatusCodes.Status202Accepted)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> SubmitSafePathJob(
@@ -195,6 +202,8 @@ public class RoutingController : ControllerBase
     /// Polls the status of an async route computation job.
     /// </summary>
     [HttpGet("jobs/{jobId}")]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.RoutingPoll)]
+    [RequestTimeout(AccessCityRequestTimeoutPolicies.ShortRead)]
     [ProducesResponseType(typeof(RouteJobResult), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<RouteJobResult>> GetJobStatus(string jobId, CancellationToken cancellationToken)
@@ -210,6 +219,8 @@ public class RoutingController : ControllerBase
     /// Reports whether imported OSM route graph coverage is available for accessibility-aware routing.
     /// </summary>
     [HttpGet("route-graph/status")]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.HotRead)]
+    [RequestTimeout(AccessCityRequestTimeoutPolicies.ShortRead)]
     [ProducesResponseType(typeof(RouteGraphCoverageStatus), StatusCodes.Status200OK)]
     public async Task<ActionResult<RouteGraphCoverageStatus>> GetRouteGraphStatus(CancellationToken cancellationToken)
     {
@@ -221,6 +232,8 @@ public class RoutingController : ControllerBase
     /// alternatives (shortest distance, lowest composite risk, fastest time) when the router returns multiple geometries.
     /// </summary>
     [HttpPost("safe-path/options")]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.RoutingHeavy)]
+    [RequestTimeout(AccessCityRequestTimeoutPolicies.RouteSync)]
     [ProducesResponseType(typeof(SafePathOptionsResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status202Accepted)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status400BadRequest)]
@@ -382,6 +395,8 @@ public class RoutingController : ControllerBase
     /// Evaluates the composite risk score for a given coordinate within a specified radius.
     /// </summary>
     [HttpGet("risk-score")]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.HotRead)]
+    [RequestTimeout(AccessCityRequestTimeoutPolicies.ShortRead)]
     [ProducesResponseType(typeof(RiskScoreResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<RiskScoreResponse>> GetRiskScore(
@@ -408,6 +423,8 @@ public class RoutingController : ControllerBase
     /// Returns a deterministic predictive risk score with time-of-day and weather factors.
     /// </summary>
     [HttpGet("ai-risk-score")]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.HotRead)]
+    [RequestTimeout(AccessCityRequestTimeoutPolicies.ShortRead)]
     [ProducesResponseType(typeof(PredictiveRiskResult), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<PredictiveRiskResult>> GetAiRiskScore(
@@ -434,6 +451,8 @@ public class RoutingController : ControllerBase
     /// Prefer <c>ai-risk-score</c> for the deterministic multi-factor model used in routing.
     /// </summary>
     [HttpGet("hazard-blend-risk")]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.HotRead)]
+    [RequestTimeout(AccessCityRequestTimeoutPolicies.ShortRead)]
     [ProducesResponseType(typeof(PredictiveRiskResult), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<PredictiveRiskResult>> GetHazardBlendRisk(

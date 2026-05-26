@@ -1,9 +1,12 @@
 using AccessCity.API.Common;
 using AccessCity.API.Models;
+using AccessCity.API.Security;
 using AccessCity.API.Services;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http.Timeouts;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 
@@ -15,6 +18,8 @@ namespace AccessCity.API.Controllers;
 [ApiController]
 [ApiVersion("1.0")]
 [Route("api/v{version:apiVersion}/[controller]")]
+[EnableRateLimiting(AccessCityRateLimitPolicies.HotRead)]
+[RequestTimeout(AccessCityRequestTimeoutPolicies.ShortRead)]
 public class SpatialController : ControllerBase
 {
     private readonly ISpatialQueryService _spatialQueries;
@@ -90,6 +95,7 @@ public class SpatialController : ControllerBase
     /// </summary>
     [Authorize]
     [HttpPost("infrastructure/{assetId:long}/accessibility-verifications")]
+    [EnableRateLimiting(AccessCityRateLimitPolicies.Write)]
     [ProducesResponseType(typeof(AccessibilityVerificationResponse), StatusCodes.Status202Accepted)]
     [ProducesResponseType(typeof(ApiError), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<AccessibilityVerificationResponse>> SubmitAccessibilityVerification(
