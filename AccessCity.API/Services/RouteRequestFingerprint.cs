@@ -7,7 +7,7 @@ namespace AccessCity.API.Services;
 
 public static class RouteRequestFingerprint
 {
-    public const string AlgorithmVersion = "route-v10-packed-graph-alt-v1-edge-weight-v1-risk-v3-snap-gate-v1-relaxed-accessibility-v1";
+    public const string AlgorithmVersion = "route-v10-packed-graph-alt-v1-edge-weight-v1-risk-v3-hazctx-v1-snap-gate-v1-relaxed-accessibility-v1";
 
     public static string CanonicalPreferences(IEnumerable<string>? preferences)
     {
@@ -38,7 +38,7 @@ public static class RouteRequestFingerprint
             .OrderBy(hazard => hazard.Id)
             .Select(hazard => string.Create(
                 CultureInfo.InvariantCulture,
-                $"{hazard.Id:N}:{hazard.Status}:{hazard.Type}:{hazard.ReportedAt.Ticks}:{hazard.Location.X:F5}:{hazard.Location.Y:F5}"))
+                $"{hazard.Id:N}:{hazard.Status}:{NormalizeHazardType(hazard.Type)}:{hazard.ReportedAt.Ticks}:{hazard.Location.X:F5}:{hazard.Location.Y:F5}"))
             .ToArray();
 
         if (activeHazards.Length == 0)
@@ -50,4 +50,9 @@ public static class RouteRequestFingerprint
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(payload));
         return $"{AlgorithmVersion}:haz:{Convert.ToHexString(hash, 0, 8).ToLowerInvariant()}";
     }
+
+    private static string NormalizeHazardType(string? hazardType) =>
+        string.IsNullOrWhiteSpace(hazardType)
+            ? "unknown"
+            : HazardSeverityLookup.NormalizeHazardType(hazardType);
 }

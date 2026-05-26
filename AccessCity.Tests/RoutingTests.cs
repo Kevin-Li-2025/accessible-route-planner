@@ -39,6 +39,16 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
         _factory = factory;
     }
 
+    private static HazardReport BuildFingerprintHazard(string type) => new()
+    {
+        Id = Guid.Parse("22222222-2222-2222-2222-222222222222"),
+        Location = new Point(-1.8904, 52.4862) { SRID = 4326 },
+        Type = type,
+        Description = "fingerprint hazard",
+        ReportedAt = new DateTime(2026, 5, 23, 12, 0, 0, DateTimeKind.Utc),
+        Status = HazardStatus.Reported
+    };
+
     [Fact]
     public void RouteRequestFingerprint_Changes_For_Preferences_And_Hazards()
     {
@@ -64,6 +74,21 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
         var resolvedContext = RouteRequestFingerprint.HazardContext(new[] { hazard });
 
         Assert.NotEqual(activeContext, resolvedContext);
+    }
+
+    [Fact]
+    public void RouteRequestFingerprint_Normalizes_Equivalent_Hazard_Types()
+    {
+        var hazardA = BuildFingerprintHazard("blocked pavement");
+        var hazardB = BuildFingerprintHazard("blocked-pavement");
+        var hazardC = BuildFingerprintHazard("pothole");
+
+        var contextA = RouteRequestFingerprint.HazardContext(new[] { hazardA });
+        var contextB = RouteRequestFingerprint.HazardContext(new[] { hazardB });
+        var contextC = RouteRequestFingerprint.HazardContext(new[] { hazardC });
+
+        Assert.Equal(contextA, contextB);
+        Assert.NotEqual(contextA, contextC);
     }
 
     [Fact]

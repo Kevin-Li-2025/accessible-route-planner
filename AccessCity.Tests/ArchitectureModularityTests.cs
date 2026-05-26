@@ -244,7 +244,7 @@ public sealed class ArchitectureModularityTests
         Assert.Contains("RouteEdgeCostModel.ResolveTraversalSeconds", routing, StringComparison.Ordinal);
         Assert.Contains("WheelchairAccessibilityPenaltySeconds", routeGraph, StringComparison.Ordinal);
         Assert.Contains("RouteEdgeCostModel.EdgeWeightVersion", routeGraph, StringComparison.Ordinal);
-        Assert.Contains("route-v10-packed-graph-alt-v1-edge-weight-v1-risk-v3-snap-gate-v1-relaxed-accessibility-v1", fingerprint, StringComparison.Ordinal);
+        Assert.Contains("route-v10-packed-graph-alt-v1-edge-weight-v1-risk-v3-hazctx-v1-snap-gate-v1-relaxed-accessibility-v1", fingerprint, StringComparison.Ordinal);
         Assert.Contains("wheelchair_accessibility_penalty_seconds", migration, StringComparison.Ordinal);
     }
 
