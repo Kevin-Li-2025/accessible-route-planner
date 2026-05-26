@@ -922,9 +922,11 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
         var loaded = await repository.LoadGraphAsync(
             new Coordinate(-1.8904, 52.4862),
             new Coordinate(-1.8894, 52.4862));
+        var warmedShardPayload = await distributedCache.GetAsync(goodGraph.ShardKey!);
 
         Assert.True(loaded.HasCoverage);
         Assert.Equal(goodGraph.LoadedEdgeCount, loaded.LoadedEdgeCount);
+        Assert.Equal(payload, warmedShardPayload);
         artifactStore.Verify(
             store => store.TryReadManifestShardAsync(
                 It.Is<RouteGraphArtifactManifestShard>(shard => shard.CacheKey == "tiny-overlap-missing-shard"),

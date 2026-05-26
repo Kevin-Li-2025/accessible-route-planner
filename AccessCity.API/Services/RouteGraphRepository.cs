@@ -193,7 +193,7 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
             return distributed;
         }
 
-        var fileArtifact = await TryLoadGraphRegionFromManifestAsync(region, edgeLimit, cacheKey, cancellationToken);
+        var fileArtifact = await TryLoadGraphRegionFromManifestAsync(region, edgeLimit, cacheKey, ttl, cancellationToken);
         if (fileArtifact is not null)
         {
             _cache.Set(cacheKey, fileArtifact, ttl);
@@ -215,6 +215,7 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         GraphShardRegion region,
         int edgeLimit,
         string cacheKey,
+        TimeSpan ttl,
         CancellationToken cancellationToken)
     {
         var manifest = await _artifactStore.TryReadManifestAsync(cancellationToken);
@@ -260,14 +261,22 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
             var graphData = await TryGetDistributedSnapshotAsync(shard.CacheKey, cancellationToken);
             if (graphData is null)
             {
-                var artifact = await _artifactStore.TryReadManifestShardAsync(shard, cancellationToken);
-                if (artifact is null)
+                var fileArtifact = await _artifactStore.TryReadManifestShardAsync(shard, cancellationToken);
+                if (fileArtifact is null)
                 {
                     failedShardCount++;
                     continue;
                 }
 
-                graphData = RouteGraphArtifactCodec.Unpack(artifact.Artifact);
+                graphData = RouteGraphArtifactCodec.Unpack(fileArtifact.Artifact);
+                if (graphData.HasCoverage && fileArtifact.Payload is { Length: > 0 })
+                {
+                    await TrySetDistributedArtifactPayloadAsync(
+                        shard.CacheKey,
+                        fileArtifact.Payload,
+                        ttl,
+                        cancellationToken);
+                }
             }
 
             if (!graphData.HasCoverage)
@@ -577,6 +586,37 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogDebug(ex, "Route graph shard {ShardKey} could not be written to distributed cache", cacheKey);
+        }
+    }
+
+    private async Task TrySetDistributedArtifactPayloadAsync(
+        string cacheKey,
+        byte[] payload,
+        TimeSpan ttl,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (_options.RouteGraphMaxDistributedSnapshotBytes > 0
+                && payload.LongLength > _options.RouteGraphMaxDistributedSnapshotBytes)
+            {
+                _logger.LogDebug(
+                    "Skipping distributed route graph artifact payload {ShardKey}: payload {PayloadBytes} bytes exceeds limit {PayloadLimitBytes}",
+                    cacheKey,
+                    payload.LongLength,
+                    _options.RouteGraphMaxDistributedSnapshotBytes);
+                return;
+            }
+
+            await _distributedCache.SetAsync(
+                cacheKey,
+                payload,
+                new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = ttl },
+                cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex, "Route graph artifact payload {ShardKey} could not be written to distributed cache", cacheKey);
         }
     }
 
