@@ -19,10 +19,11 @@ Generated on 2026-05-26 using the remote L20 GPU host.
 | --- | ---: |
 | Holdout macro F1 | 0.8178 |
 | Holdout macro ECE | 0.0809 |
+| Worst city/domain macro F1 | 0.5092 |
 | Serving failures | 0 |
-| Real-attempt serving p95 | 389.369 ms |
-| Smoke-run serving p95 | 112.792 ms |
-| Smoke-run throughput | 160.729 rps |
+| Real-attempt serving p95 | 409.453 ms |
+| Smoke-run serving p95 | 105.289 ms |
+| Smoke-run throughput | 165.951 rps |
 
 ## Per-Task Holdout
 
@@ -47,11 +48,25 @@ Generated on 2026-05-26 using the remote L20 GPU host.
 | sea | 275 | 0.8305 | 0.1151 | 0.6731 | 0.6667 |
 | rampnet | 200 | 0.9627 | 0.0567 | n/a | n/a |
 
+## Weak Slice Watchlist
+
+| City/domain | Rows | Task | F1 | City Macro F1 |
+| --- | ---: | --- | ---: | ---: |
+| new | 53 | obstacle_present | 0.0000 | 0.5092 |
+| new | 53 | surface_problem_present | 0.0000 | 0.5092 |
+| newberg | 23 | obstacle_present | 0.0000 | 0.5741 |
+| pittsburgh | 24 | obstacle_present | 0.0000 | 0.6833 |
+| mendota | 92 | obstacle_present | 0.0000 | 0.7185 |
+| taipei | 135 | surface_problem_present | 0.3750 | 0.6888 |
+| amsterdam | 46 | surface_problem_present | 0.4000 | 0.5829 |
+| keelung | 27 | obstacle_present | 0.4000 | 0.7578 |
+| teaneck | 59 | surface_problem_present | 0.4000 | 0.7653 |
+
 ## Interpretation
 
 The classifier is useful enough for review-queue ranking and admin assist flows, especially curb-ramp and crosswalk tasks. It should not directly update route edge costs. The weak heads remain `obstacle_present` and `surface_problem_present`; they need more reviewed, city-diverse data and a detector/segmentation path rather than only crop classification.
 
-The new city/domain slices show the real accuracy risk: global macro F1 looks strong, but some smaller domains fall near `0.51-0.69` macro F1 and have poor obstacle/surface behavior. Future model work should target those domains instead of optimizing only the aggregate holdout number.
+The new city/domain gate shows the real promotion risk: global macro F1 looks strong, but the worst domain is only `0.5092`, barely above the `0.50` release floor. Future model work should target the weak-slice watchlist instead of optimizing only the aggregate holdout number.
 
 The real RampNet detector was not fully evaluated on this run because the GPU host could not reach Hugging Face and the official RampNet model/data were not present in the local cache. The smoke detector run passed, but it is only a pipeline check and must not be reported as production accuracy.
 

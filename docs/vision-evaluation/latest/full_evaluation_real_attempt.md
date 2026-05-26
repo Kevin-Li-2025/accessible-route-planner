@@ -17,17 +17,18 @@ The vision model is review-only: results must not directly alter route decisions
 | --- | --- | ---: | ---: | --- |
 | classifier_holdout_macro_f1 | passed | 0.8178 | >= 0.7 | Untouched holdout macro F1 must meet the release floor. |
 | classifier_holdout_macro_ece | passed | 0.0809 | <= 0.12 | Calibration error must stay under the release ceiling. |
+| classifier_worst_city_macro_f1 | passed | 0.5092 | >= 0.5 | Worst city/domain slice must meet the release floor (new). |
 | rampnet_point_detection_ap | missing | n/a | n/a | Checkout your internet connection or see how to run the library in offline mode at 'https://huggingface.co/docs/transformers/installation#offline-mode'. |
-| serving_latency_p95 | passed | 389.3690 | <= 500.0 ms | Interactive review endpoint p95 should stay below the release ceiling. |
+| serving_latency_p95 | passed | 409.4530 | <= 500.0 ms | Interactive review endpoint p95 should stay below the release ceiling. |
 | serving_latency_failures | passed | 0 | == 0 | Serving benchmark should have zero failed requests. |
 
 ## Step Status
 
 | Step | Status | Reason | Output |
 | --- | --- | --- | --- |
-| classifier_holdout | passed |  | `/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/classifier/ensemble_metrics.json` |
+| classifier_holdout | passed |  | `/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T144136Z-real-attempt/classifier/ensemble_metrics.json` |
 | rampnet_detection | failed | Checkout your internet connection or see how to run the library in offline mode at 'https://huggingface.co/docs/transformers/installation#offline-mode'. | `` |
-| serving_latency | passed |  | `/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/serving_latency/benchmark_accessibility_vision.json` |
+| serving_latency | passed |  | `/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T144136Z-real-attempt/serving_latency/benchmark_accessibility_vision.json` |
 
 ## Classifier Holdout
 
@@ -59,6 +60,22 @@ The vision model is review-only: results must not directly alter route decisions
 | sea | 275 | 0.8305 | 0.1151 | 0.6731 | 0.6667 |
 | rampnet | 200 | 0.9627 | 0.0567 | n/a | n/a |
 
+## Weak Slice Watchlist
+
+Obstacle/surface slices below `0.50` F1 should be prioritized for reviewed data collection.
+
+| City | Rows | Task | F1 | City Macro F1 |
+| --- | ---: | --- | ---: | ---: |
+| new | 53 | obstacle_present | 0.0000 | 0.5092 |
+| new | 53 | surface_problem_present | 0.0000 | 0.5092 |
+| newberg | 23 | obstacle_present | 0.0000 | 0.5741 |
+| pittsburgh | 24 | obstacle_present | 0.0000 | 0.6833 |
+| mendota | 92 | obstacle_present | 0.0000 | 0.7185 |
+| taipei | 135 | surface_problem_present | 0.3750 | 0.6888 |
+| amsterdam | 46 | surface_problem_present | 0.4000 | 0.5829 |
+| keelung | 27 | obstacle_present | 0.4000 | 0.7578 |
+| teaneck | 59 | surface_problem_present | 0.4000 | 0.7653 |
+
 ## RampNet-Style Detection
 
 RampNet detection evaluation was not run.
@@ -68,10 +85,10 @@ RampNet detection evaluation was not run.
 - Requests: `160`
 - Concurrency: `16`
 - Failures: `0`
-- Throughput RPS: `122.3820`
-- p50 ms: `100.6370`
-- p95 ms: `389.3690`
-- p99 ms: `400.3440`
+- Throughput RPS: `125.3270`
+- p50 ms: `95.9650`
+- p95 ms: `409.4530`
+- p99 ms: `417.2070`
 
 ## Interpretation
 

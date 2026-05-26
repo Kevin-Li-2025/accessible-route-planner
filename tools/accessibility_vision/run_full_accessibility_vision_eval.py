@@ -84,6 +84,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-latency", action="store_true")
     parser.add_argument("--min-holdout-macro-f1", type=float, default=0.70)
     parser.add_argument("--max-holdout-macro-ece", type=float, default=0.12)
+    parser.add_argument(
+        "--min-city-macro-f1",
+        type=float,
+        default=0.50,
+        help="Minimum allowed macro F1 for any city/domain slice with enough rows.",
+    )
+    parser.add_argument(
+        "--weak-slice-f1-threshold",
+        type=float,
+        default=0.50,
+        help="Weak-slice watchlist threshold for obstacle/surface heads.",
+    )
     parser.add_argument("--min-rampnet-point-ap", type=float, default=0.10)
     parser.add_argument("--max-serving-p95-ms", type=float, default=500.0)
     parser.add_argument("--strict", action="store_true", help="Exit non-zero when any production gate is missing or fails.")
@@ -381,6 +393,34 @@ def build_gates(
             )
         )
 
+    city_rows = summarize_city_table(classifier_metrics)
+    if classifier_step.status == "passed" and city_rows:
+        scored_rows = [row for row in city_rows if row.get("macroF1") is not None]
+        worst_row = min(scored_rows, key=lambda row: float(row["macroF1"])) if scored_rows else None
+        worst_value = float(worst_row["macroF1"]) if worst_row else None
+        worst_detail = "Worst city/domain slice must meet the release floor"
+        if worst_row:
+            worst_detail += f" ({worst_row['city']})."
+        else:
+            worst_detail += "."
+        gates.append(
+            gate_result(
+                "classifier_worst_city_macro_f1",
+                "passed" if worst_value is not None and worst_value >= args.min_city_macro_f1 else "failed",
+                worst_detail,
+                worst_value,
+                f">= {args.min_city_macro_f1}",
+            )
+        )
+    elif classifier_step.status == "passed":
+        gates.append(
+            gate_result(
+                "classifier_worst_city_macro_f1",
+                "missing",
+                "Classifier ran, but no city/domain slices were emitted.",
+            )
+        )
+
     rampnet_step = next(step for step in steps if step.name == "rampnet_detection")
     if rampnet_step.status == "passed" and rampnet_metrics and not args.rampnet_synthetic_smoke:
         point_ap = metric_value(rampnet_metrics, ["pointDetection", "averagePrecision"])
@@ -497,6 +537,29 @@ def summarize_city_table(metrics: dict[str, Any] | None) -> list[dict[str, Any]]
     return sorted(rows, key=lambda row: (row.get("macroF1") is None, row.get("macroF1") or 0.0))
 
 
+def summarize_weak_slice_table(city_rows: list[dict[str, Any]], threshold: float) -> list[dict[str, Any]]:
+    weak: list[dict[str, Any]] = []
+    for row in city_rows:
+        for task_key, label in (
+            ("obstacleF1", "obstacle_present"),
+            ("surfaceProblemF1", "surface_problem_present"),
+        ):
+            value = row.get(task_key)
+            if value is None:
+                continue
+            if float(value) < threshold:
+                weak.append(
+                    {
+                        "city": row.get("city"),
+                        "rows": row.get("rows"),
+                        "task": label,
+                        "f1": value,
+                        "macroF1": row.get("macroF1"),
+                    }
+                )
+    return sorted(weak, key=lambda item: (float(item["f1"]), float(item.get("macroF1") or 0.0), str(item["city"])))
+
+
 def markdown_metric(value: Any) -> str:
     if value is None:
         return "n/a"
@@ -516,6 +579,7 @@ def write_markdown_report(
 ) -> None:
     task_rows = summarize_task_table(classifier_metrics)
     city_rows = summarize_city_table(classifier_metrics)
+    weak_slice_rows = summarize_weak_slice_table(city_rows, args.weak_slice_f1_threshold)
     lines = [
         "# AccessCity Accessibility Vision Full Evaluation",
         "",
@@ -585,6 +649,24 @@ def write_markdown_report(
             )
     else:
         lines.append("No city/domain slices were emitted. Export metadata must include source city or city-prefixed source paths.")
+
+    lines.extend(["", "## Weak Slice Watchlist", ""])
+    if weak_slice_rows:
+        lines.extend(
+            [
+                f"Obstacle/surface slices below `{args.weak_slice_f1_threshold:.2f}` F1 should be prioritized for reviewed data collection.",
+                "",
+                "| City | Rows | Task | F1 | City Macro F1 |",
+                "| --- | ---: | --- | ---: | ---: |",
+            ]
+        )
+        for row in weak_slice_rows:
+            lines.append(
+                f"| {row['city']} | {markdown_metric(row.get('rows'))} | {row['task']} | "
+                f"{markdown_metric(row.get('f1'))} | {markdown_metric(row.get('macroF1'))} |"
+            )
+    else:
+        lines.append("No obstacle/surface city slices fell below the weak-slice threshold.")
 
     lines.extend(["", "## RampNet-Style Detection", ""])
     if rampnet_metrics:
@@ -675,6 +757,10 @@ def main() -> int:
         "gates": gates,
         "classifierTaskMetrics": summarize_task_table(classifier_metrics),
         "classifierCityMetrics": summarize_city_table(classifier_metrics),
+        "classifierWeakSliceWatchlist": summarize_weak_slice_table(
+            summarize_city_table(classifier_metrics),
+            args.weak_slice_f1_threshold,
+        ),
         "classifierSummary": {
             "macroF1": classifier_metrics.get("macro_f1") if classifier_metrics else None,
             "macroEce": classifier_metrics.get("macro_ece") if classifier_metrics else None,

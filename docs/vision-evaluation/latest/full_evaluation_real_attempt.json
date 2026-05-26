@@ -1,6 +1,6 @@
 {
   "schemaVersion": "accesscity-accessibility-vision-eval.v1",
-  "generatedAtUnix": 1779804589,
+  "generatedAtUnix": 1779806544,
   "inputs": {
     "datasetRoot": "/home/hhai/accesscity-vision/data/projectsidewalk-rampnet-best-v7",
     "checkpoints": [
@@ -31,7 +31,7 @@
         "--dataset-root",
         "/home/hhai/accesscity-vision/data/projectsidewalk-rampnet-best-v7",
         "--output-dir",
-        "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/classifier",
+        "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T144136Z-real-attempt/classifier",
         "--calibration-split",
         "validation",
         "--holdout-split",
@@ -51,10 +51,10 @@
         "--checkpoint",
         "/home/hhai/accesscity-vision/runs/projectsidewalk-rampnet-sota-convnext-base-v8-20260526T001117Z/best.pt"
       ],
-      "outputPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/classifier/ensemble_metrics.json",
-      "stdoutPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/logs/classifier_holdout.stdout.txt",
-      "stderrPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/logs/classifier_holdout.stderr.txt",
-      "elapsedSeconds": 31.584,
+      "outputPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T144136Z-real-attempt/classifier/ensemble_metrics.json",
+      "stdoutPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T144136Z-real-attempt/logs/classifier_holdout.stdout.txt",
+      "stderrPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T144136Z-real-attempt/logs/classifier_holdout.stderr.txt",
+      "elapsedSeconds": 34.28,
       "exitCode": 0
     },
     {
@@ -71,16 +71,16 @@
         "--split",
         "validation",
         "--output-dir",
-        "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/rampnet_detection",
+        "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T144136Z-real-attempt/rampnet_detection",
         "--max-examples",
         "8",
         "--device",
         "cuda"
       ],
       "outputPath": null,
-      "stdoutPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/logs/rampnet_detection.stdout.txt",
-      "stderrPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/logs/rampnet_detection.stderr.txt",
-      "elapsedSeconds": 3.659,
+      "stdoutPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T144136Z-real-attempt/logs/rampnet_detection.stdout.txt",
+      "stderrPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T144136Z-real-attempt/logs/rampnet_detection.stderr.txt",
+      "elapsedSeconds": 4.412,
       "exitCode": 1
     },
     {
@@ -99,10 +99,10 @@
         "--health-endpoint",
         "http://127.0.0.1:18095/health"
       ],
-      "outputPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/serving_latency/benchmark_accessibility_vision.json",
-      "stdoutPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/logs/serving_latency.stdout.txt",
-      "stderrPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T140906Z-real-attempt/logs/serving_latency.stderr.txt",
-      "elapsedSeconds": 1.446,
+      "outputPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T144136Z-real-attempt/serving_latency/benchmark_accessibility_vision.json",
+      "stdoutPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T144136Z-real-attempt/logs/serving_latency.stdout.txt",
+      "stderrPath": "/home/hhai/accesscity-vision/runs/accessibility-vision-full-eval-20260526T144136Z-real-attempt/logs/serving_latency.stderr.txt",
+      "elapsedSeconds": 1.427,
       "exitCode": 0
     }
   ],
@@ -122,6 +122,13 @@
       "detail": "Calibration error must stay under the release ceiling."
     },
     {
+      "name": "classifier_worst_city_macro_f1",
+      "status": "passed",
+      "value": 0.5092063492063492,
+      "threshold": ">= 0.5",
+      "detail": "Worst city/domain slice must meet the release floor (new)."
+    },
+    {
       "name": "rampnet_point_detection_ap",
       "status": "missing",
       "value": null,
@@ -131,7 +138,7 @@
     {
       "name": "serving_latency_p95",
       "status": "passed",
-      "value": 389.369,
+      "value": 409.453,
       "threshold": "<= 500.0 ms",
       "detail": "Interactive review endpoint p95 should stay below the release ceiling."
     },
@@ -303,6 +310,71 @@
       "surfaceProblemF1": null
     }
   ],
+  "classifierWeakSliceWatchlist": [
+    {
+      "city": "new",
+      "rows": 53,
+      "task": "obstacle_present",
+      "f1": 0.0,
+      "macroF1": 0.5092063492063492
+    },
+    {
+      "city": "new",
+      "rows": 53,
+      "task": "surface_problem_present",
+      "f1": 0.0,
+      "macroF1": 0.5092063492063492
+    },
+    {
+      "city": "newberg",
+      "rows": 23,
+      "task": "obstacle_present",
+      "f1": 0.0,
+      "macroF1": 0.5740740740740741
+    },
+    {
+      "city": "pittsburgh",
+      "rows": 24,
+      "task": "obstacle_present",
+      "f1": 0.0,
+      "macroF1": 0.6833333333333333
+    },
+    {
+      "city": "mendota",
+      "rows": 92,
+      "task": "obstacle_present",
+      "f1": 0.0,
+      "macroF1": 0.7184848484848485
+    },
+    {
+      "city": "taipei",
+      "rows": 135,
+      "task": "surface_problem_present",
+      "f1": 0.375,
+      "macroF1": 0.6887591370378255
+    },
+    {
+      "city": "amsterdam",
+      "rows": 46,
+      "task": "surface_problem_present",
+      "f1": 0.4,
+      "macroF1": 0.5828571428571429
+    },
+    {
+      "city": "keelung",
+      "rows": 27,
+      "task": "obstacle_present",
+      "f1": 0.4,
+      "macroF1": 0.7577777777777778
+    },
+    {
+      "city": "teaneck",
+      "rows": 59,
+      "task": "surface_problem_present",
+      "f1": 0.4,
+      "macroF1": 0.7652747252747253
+    }
+  ],
   "classifierSummary": {
     "macroF1": 0.8177768648339907,
     "macroEce": 0.08089021677523851
@@ -318,8 +390,8 @@
   },
   "servingLatencySummary": {
     "failures": 0,
-    "throughputRps": 122.382,
-    "p95Ms": 389.369,
-    "p99Ms": 400.344
+    "throughputRps": 125.327,
+    "p95Ms": 409.453,
+    "p99Ms": 417.207
   }
 }
