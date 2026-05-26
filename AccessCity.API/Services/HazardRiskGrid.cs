@@ -153,23 +153,64 @@ public static class HazardSeverityLookup
     private static readonly Dictionary<string, double> SeverityMap = new(StringComparer.OrdinalIgnoreCase)
     {
         ["broken_sidewalk"] = 0.7,
+        ["broken_pavement"] = 0.7,
+        ["blocked_pavement"] = 0.75,
+        ["blocked_sidewalk"] = 0.75,
+        ["obstacle_present"] = 0.7,
         ["missing_ramp"] = 0.9,
+        ["missing_curb_ramp"] = 0.9,
+        ["missing_kerb_ramp"] = 0.9,
+        ["no_curb_ramp"] = 0.9,
         ["obstruction"] = 0.6,
+        ["road_obstruction"] = 0.65,
+        ["barrier"] = 0.65,
+        ["bollard"] = 0.55,
+        ["gate"] = 0.6,
         ["poor_lighting"] = 0.5,
+        ["broken_street_light"] = 0.55,
+        ["low_lighting"] = 0.5,
         ["steep_slope"] = 0.6,
+        ["steep_gradient"] = 0.65,
         ["flooding"] = 0.8,
         ["construction"] = 0.7,
+        ["construction_obstruction"] = 0.75,
         ["no_sidewalk"] = 0.85,
+        ["missing_sidewalk"] = 0.85,
         ["narrow_path"] = 0.6,
+        ["narrow_sidewalk"] = 0.65,
         ["uneven_surface"] = 0.55,
+        ["surface_damage"] = 0.65,
+        ["surface_problem_present"] = 0.65,
+        ["surface_quality"] = 0.65,
+        ["cobblestone"] = 0.6,
+        ["sett"] = 0.6,
+        ["gravel"] = 0.65,
+        ["unpaved"] = 0.7,
+        ["sand"] = 0.75,
+        ["dirt"] = 0.65,
+        ["earth"] = 0.65,
+        ["grass"] = 0.6,
         ["temporary_closure"] = 0.9,
         ["pothole"] = 0.5,
         ["signal_missing"] = 0.7,
+        ["unsafe_crossing"] = 0.8,
+        ["missing_crossing"] = 0.8,
+        ["stairs"] = 0.9,
+        ["steps"] = 0.9,
+        ["stairs_no_ramp"] = 0.92,
     };
 
     public static double GetSeverity(string? hazardType)
     {
         if (string.IsNullOrWhiteSpace(hazardType)) return DefaultSeverity;
-        return SeverityMap.GetValueOrDefault(hazardType, DefaultSeverity);
+        var normalized = NormalizeHazardType(hazardType);
+        return SeverityMap.GetValueOrDefault(normalized, DefaultSeverity);
     }
+
+    public static string NormalizeHazardType(string hazardType) =>
+        hazardType.Trim()
+            .ToLowerInvariant()
+            .Replace('-', '_')
+            .Replace(' ', '_')
+            .Replace('/', '_');
 }

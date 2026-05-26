@@ -85,26 +85,6 @@ namespace AccessCity.API.Services
         private const double DefaultLightingRisk = 0.30;
         private const double DefaultSurveillanceRisk = 0.40;
 
-        private static readonly Dictionary<string, double> HazardSeverity = new(StringComparer.OrdinalIgnoreCase)
-        {
-            ["pothole"] = 0.6,
-            ["broken_pavement"] = 0.5,
-            ["missing_curb_ramp"] = 0.7,
-            ["obstruction"] = 0.5,
-            ["poor_lighting"] = 0.8,
-            ["construction"] = 0.7,
-            ["flooding"] = 0.9,
-            ["missing_tactile"] = 0.6,
-            ["steep_gradient"] = 0.5,
-            ["narrow_sidewalk"] = 0.4,
-            ["uneven_surface"] = 0.5,
-            ["missing_handrail"] = 0.6,
-            ["traffic_hazard"] = 0.8,
-            ["missing_crossing"] = 0.7,
-        };
-
-        private const double DefaultSeverity = 0.5;
-
         // Rebalanced to include lighting and surveillance coverage.
         private const double W_Proximity = 0.35;
         private const double W_Density = 0.20;
@@ -164,7 +144,7 @@ namespace AccessCity.API.Services
 
                 if (distMetres > radiusMetres) continue;
 
-                double severity = HazardSeverity.GetValueOrDefault(hazard.Type, DefaultSeverity);
+                double severity = HazardSeverityLookup.GetSeverity(hazard.Type);
 
                 double weight = severity * Math.Exp(-distMetres / DecayLambda);
                 proximitySum += weight;
@@ -316,13 +296,13 @@ namespace AccessCity.API.Services
 
             foreach (var hazard in activeHazards)
             {
-                double dist = HaversineDistance(
+                double dist = EquirectangularDistance(
                     latitude, longitude,
                     hazard.Location.Y, hazard.Location.X);
 
                 if (dist > radiusMetres) continue;
 
-                double severity = HazardSeverity.GetValueOrDefault(hazard.Type, DefaultSeverity);
+                double severity = HazardSeverityLookup.GetSeverity(hazard.Type);
                 riskSum += severity * Math.Exp(-dist / DecayLambda);
                 count++;
             }

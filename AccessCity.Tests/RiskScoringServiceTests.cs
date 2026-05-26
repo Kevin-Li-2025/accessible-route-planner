@@ -159,6 +159,37 @@ public class RiskScoringServiceTests
         Assert.True(risk > 0.4, $"Expected elevated risk for cluster, got {risk}");
     }
 
+    [Theory]
+    [InlineData("blocked-pavement", 0.75)]
+    [InlineData("blocked pavement", 0.75)]
+    [InlineData("missing curb ramp", 0.9)]
+    [InlineData("stairs/no ramp", 0.92)]
+    [InlineData("gravel", 0.65)]
+    public void HazardSeverityLookup_NormalizesCommonClientAndOsmTokens(string hazardType, double expectedSeverity)
+    {
+        var severity = HazardSeverityLookup.GetSeverity(hazardType);
+
+        Assert.Equal(expectedSeverity, severity, precision: 2);
+    }
+
+    [Fact]
+    public void QuickRisk_UsesNormalizedAccessibilitySeverity()
+    {
+        var svc = CreateService();
+        var defaultRisk = svc.QuickRisk(
+            52.48,
+            -1.89,
+            new[] { MakeHazard(52.48, -1.89, "unknown_access_issue") },
+            100);
+        var rampRisk = svc.QuickRisk(
+            52.48,
+            -1.89,
+            new[] { MakeHazard(52.48, -1.89, "missing curb ramp") },
+            100);
+
+        Assert.True(rampRisk > defaultRisk, $"Expected missing curb ramp risk {rampRisk} to exceed default {defaultRisk}.");
+    }
+
     // ─────────── Crime integration with mocked IUkPoliceDataClient ───────────
 
     [Fact]
