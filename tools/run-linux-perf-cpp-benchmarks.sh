@@ -12,8 +12,25 @@ if ! command -v perf >/dev/null 2>&1; then
   echo "perf is required. Install linux-tools/perf for this kernel." >&2
   exit 127
 fi
+if [[ -r /proc/sys/kernel/perf_event_paranoid ]]; then
+  paranoid="$(cat /proc/sys/kernel/perf_event_paranoid)"
+  if [[ "$paranoid" =~ ^[0-9]+$ && "$paranoid" -ge 2 ]]; then
+    echo "perf_event_paranoid=$paranoid blocks unprivileged CPU profiling on this host." >&2
+    echo "Temporarily run: sudo sysctl kernel.perf_event_paranoid=-1" >&2
+    echo "Or grant CAP_PERFMON/CAP_SYS_PTRACE/CAP_SYS_ADMIN for perf." >&2
+    exit 13
+  fi
+fi
 
 CXX="${CXX:-c++}"
+PYTHON="${PYTHON:-}"
+if [[ -z "$PYTHON" ]]; then
+  if [[ -x /usr/bin/python3 ]]; then
+    PYTHON="/usr/bin/python3"
+  else
+    PYTHON="$(command -v python3)"
+  fi
+fi
 ARTIFACT_DIR="${ARTIFACT_DIR:-TestResults/accesscity-linux-perf}"
 mkdir -p "$ARTIFACT_DIR"
 
@@ -55,32 +72,44 @@ perf record -F 999 -g \
 perf report --stdio -i "$ARTIFACT_DIR/market_data_replay_perf.data" \
   > "$ARTIFACT_DIR/market_data_replay_perf_report.txt"
 
-node - "$ARTIFACT_DIR" <<'NODE'
-const fs = require('fs');
-const dir = process.argv[2];
-function parsePerf(path, operations) {
-  const rows = fs.readFileSync(path, 'utf8')
-    .split(/\n/)
-    .map((line) => line.split(','))
-    .filter((cols) => cols.length >= 3 && cols[0] && !cols[0].startsWith('#'));
-  const out = { operations };
-  for (const cols of rows) {
-    const value = Number(cols[0]);
-    const event = cols[2];
-    if (Number.isFinite(value)) out[event] = value;
-  }
-  if (out.cycles) out.cyclesPerOperation = out.cycles / operations;
-  if (out.instructions && out.cycles) out.ipc = out.instructions / out.cycles;
-  if (out['cache-misses'] && out['cache-references']) out.cacheMissRate = out['cache-misses'] / out['cache-references'];
-  if (out['branch-misses'] && out.branches) out.branchMissRate = out['branch-misses'] / out.branches;
-  return out;
+"$PYTHON" - "$ARTIFACT_DIR" <<'PY'
+import csv
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+artifact_dir = Path(sys.argv[1])
+
+def parse_perf(path: Path, operations: int) -> dict:
+    out = {"operations": operations}
+    with path.open(newline="") as handle:
+        for row in csv.reader(handle):
+            if len(row) < 3 or not row[0] or row[0].startswith("#"):
+                continue
+            try:
+                value = float(row[0])
+            except ValueError:
+                continue
+            out[row[2]] = value
+    if out.get("cycles"):
+        out["cyclesPerOperation"] = out["cycles"] / operations
+    if out.get("instructions") and out.get("cycles"):
+        out["ipc"] = out["instructions"] / out["cycles"]
+    if out.get("cache-misses") and out.get("cache-references"):
+        out["cacheMissRate"] = out["cache-misses"] / out["cache-references"]
+    if out.get("branch-misses") and out.get("branches"):
+        out["branchMissRate"] = out["branch-misses"] / out["branches"]
+    return out
+
+risk = json.loads((artifact_dir / "risk_kernel_report.json").read_text())
+market = json.loads((artifact_dir / "market_data_replay_report.json").read_text())
+summary = {
+    "generatedAtUtc": datetime.now(timezone.utc).isoformat(),
+    "riskKernel": parse_perf(artifact_dir / "risk_kernel_perf_stat.csv", risk["queries"]),
+    "marketDataReplay": parse_perf(artifact_dir / "market_data_replay_perf_stat.csv", market["received"]),
 }
-const summary = {
-  generatedAtUtc: new Date().toISOString(),
-  riskKernel: parsePerf(`${dir}/risk_kernel_perf_stat.csv`, JSON.parse(fs.readFileSync(`${dir}/risk_kernel_report.json`, 'utf8')).queries),
-  marketDataReplay: parsePerf(`${dir}/market_data_replay_perf_stat.csv`, JSON.parse(fs.readFileSync(`${dir}/market_data_replay_report.json`, 'utf8')).received)
-};
-fs.writeFileSync(`${dir}/linux_perf_summary.json`, JSON.stringify(summary, null, 2));
-NODE
+(artifact_dir / "linux_perf_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+PY
 
 echo "Linux perf artifacts: $ARTIFACT_DIR"

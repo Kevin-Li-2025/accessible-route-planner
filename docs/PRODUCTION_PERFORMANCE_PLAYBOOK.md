@@ -263,6 +263,8 @@ TestResults/accesscity-linux-perf/linux_perf_summary.json
 The summary computes cycles/query, IPC, cache miss rate, and branch miss rate from `perf stat -x,`.
 `perf record -F 999 -g` captures sampled call stacks for the C++ spatial kernel and lock-free replay path.
 This script intentionally exits on non-Linux hosts because macOS does not expose Linux perf counters.
+It also exits when `/proc/sys/kernel/perf_event_paranoid` blocks unprivileged profiling; set it to `-1`
+or grant the relevant perf capabilities before using these numbers in public claims.
 
 ## Market-Data Style C++ Replay and Network Ingest
 
@@ -298,6 +300,16 @@ Measured local macOS run on 2026-06-26:
 
 The macOS loopback numbers are useful smoke evidence, not hardware-counter evidence.
 For low-latency claims, prefer the Linux perf path with CPU pinning and dedicated cores.
+
+Measured remote Ubuntu 24.04 / NVIDIA L20 host run on 2026-06-26:
+
+| Mode | Messages | Received | Losses | Throughput msg/s | p50 ns | p95 ns | p99 ns | max ns |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| spsc_replay | 1,000,000 | 1,000,000 | 0 | 7,614,646 | 125,543 | 131,199 | 137,901 | 3,470,761 |
+| udp_loopback | 100,000 | 100,000 | 0 | 260,369 | 7,137 | 12,042 | 12,917 | 84,406 |
+| tcp_loopback | 100,000 | 100,000 | 0 | 193,837 | 10,110 | 13,589 | 18,123 | 195,693 |
+
+Linux hardware counters were not captured on that host because `perf_event_paranoid=4` and the user did not have sudo access to lower it.
 
 ## City-Scale Hot-Path Benchmark
 
