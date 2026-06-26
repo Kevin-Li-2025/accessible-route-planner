@@ -3,6 +3,7 @@
 This playbook covers the harder performance artifacts used to validate AccessCity beyond unit tests:
 
 - full HTTP routing API p95/p99 under load
+- production-mixed API soak with process CPU/memory time series
 - BenchmarkDotNet hot-path microbenchmarks
 - CPU flamegraph capture for the live API
 - NativeAOT benchmark publishing
@@ -129,6 +130,81 @@ Measured local West Midlands matrix on 2026-06-26 after importing 6,719,409 OSM 
 | 16 | 721 | 16.02 | 0.0000 | 1.08 | 7.14 | 119.45 | 169.64 |
 | 64 | 2,881 | 64.02 | 0.0000 | 1.04 | 6.39 | 42.00 | 233.68 |
 | 128 | 5,759 | 127.98 | 0.0000 | 1.01 | 6.51 | 239.90 | 637.46 |
+
+## Production Mixed Soak
+
+Use this harness when you need full API p99 evidence across the routes and read endpoints that
+production traffic exercises together. It uses 100-1,000 Birmingham route pairs, mixed endpoint
+rates, k6 p95/p99 thresholds, CPU/RSS/VSZ process samples, and optional API-restart failure
+injection.
+
+Generate a deterministic 1,000-route Birmingham dataset:
+
+```bash
+ROUTE_COUNT=1000 \
+OUTPUT=TestResults/accesscity-production-soak/birmingham-1000-routes.json \
+node tools/generate-birmingham-route-pairs.js
+```
+
+Run a 30-minute local production-mixed soak against one API process:
+
+```bash
+DURATION=30m \
+ROUTE_COUNT=1000 \
+ROUTE_RATE=40 \
+RISK_RATE=120 \
+POI_RATE=60 \
+HAZARD_RATE=40 \
+DASHBOARD_RATE=30 \
+ACCOUNT_RATE=20 \
+READINESS_RATE=30 \
+TILE_RATE=0 \
+SKIP_IMPORT=false \
+WARMUP_ROUTE_CACHE=true \
+tools/run-production-mixed-soak.sh
+```
+
+Run a 1-hour soak with API restart injection at minute 15:
+
+```bash
+DURATION=1h \
+ROUTE_COUNT=1000 \
+FAILURE_INJECTION=api-restart \
+FAILURE_AT_SECONDS=900 \
+SLO_HTTP_FAILURE_RATE=0.10 \
+SLO_PRODUCTION_FAILURE_RATE=0.10 \
+SLO_CHECK_RATE=0.85 \
+SKIP_IMPORT=true \
+WARMUP_ROUTE_CACHE=true \
+tools/run-production-mixed-soak.sh
+```
+
+Artifacts:
+
+```text
+TestResults/accesscity-production-soak/birmingham-1000-routes.json
+TestResults/accesscity-production-soak/k6-production-mixed-summary.json
+TestResults/accesscity-production-soak/production_mixed_soak_report.json
+TestResults/accesscity-production-soak/resource-timeseries.csv
+TestResults/accesscity-production-soak/resource-timeseries-after-restart.csv
+TestResults/accesscity-production-soak/failure-injection.log
+TestResults/accesscity-production-soak/api.log
+TestResults/accesscity-production-soak/route-graph-status.json
+```
+
+The SLO thresholds are configurable through `SLO_OVERALL_P95_MS`, `SLO_OVERALL_P99_MS`,
+`SLO_ROUTE_P95_MS`, `SLO_ROUTE_P99_MS`, `SLO_HOT_READ_P95_MS`, `SLO_HOT_READ_P99_MS`,
+`SLO_RISK_P95_MS`, `SLO_RISK_P99_MS`, `SLO_DASHBOARD_P95_MS`, and `SLO_DASHBOARD_P99_MS`.
+Failure and check thresholds are configurable through `SLO_HTTP_FAILURE_RATE`,
+`SLO_PRODUCTION_FAILURE_RATE`, `SLO_ROUTE_TIMEOUT_RATE`, and `SLO_CHECK_RATE`; keep the defaults for
+normal soaks and only relax them for explicit chaos runs.
+
+Claim boundary: this is a local single-process production-mixed harness. It is the right tool for
+finding API p99 outliers, cache-miss behavior, GC/memory trends, and restart recovery before a
+cluster run. It is not a single-machine 1,000,000 req/s proof. For a 1M req/s target, use
+`docs/CAPACITY_VALIDATION.md` and `tools/run-k8s-capacity-validation.sh` with a large Kubernetes
+matrix, multiple k6 generators, fixed pod counts, and cluster CPU/network/Postgres/Redis/Kafka
+telemetry.
 
 ## SLO Gate
 

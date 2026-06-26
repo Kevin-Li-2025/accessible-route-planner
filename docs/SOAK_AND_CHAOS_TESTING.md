@@ -1,6 +1,32 @@
 # Soak and Chaos Testing
 
-Use this after the short distributed k6 run passes. The soak job keeps steady pressure on the real Kubernetes path for 24 hours:
+Use the local production-mixed soak before Kubernetes if you are trying to expose p99, memory, or
+restart-recovery issues quickly on one API process:
+
+```bash
+DURATION=30m \
+ROUTE_COUNT=1000 \
+SKIP_IMPORT=false \
+WARMUP_ROUTE_CACHE=true \
+tools/run-production-mixed-soak.sh
+```
+
+For a 1-hour local failure-injection run:
+
+```bash
+DURATION=1h \
+ROUTE_COUNT=1000 \
+FAILURE_INJECTION=api-restart \
+FAILURE_AT_SECONDS=900 \
+SKIP_IMPORT=true \
+WARMUP_ROUTE_CACHE=true \
+tools/run-production-mixed-soak.sh
+```
+
+The local harness writes k6 p50/p95/p99, failure counters, route-pair count, route graph status,
+API logs, and CPU/RSS/VSZ time series under `TestResults/accesscity-production-soak/`.
+
+Use the Kubernetes soak after the short distributed k6 run passes. The soak job keeps steady pressure on the real Kubernetes path for 24 hours:
 
 - API replicas behind the service
 - Redis-backed distributed cache
