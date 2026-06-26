@@ -101,6 +101,26 @@ Set `EXTERNAL_OSRM_ENABLED=true` when you explicitly want product-routing behavi
 
 The harness also warms the benchmark route set by default before k6 starts. Disable it with `WARMUP_ROUTE_CACHE=false` when measuring cold-start p99.
 
+Run the real-city p99 concurrency matrix:
+
+```bash
+CITY_NAME=west-midlands \
+OSM_URL=https://download.geofabrik.de/europe/united-kingdom/england/west-midlands-latest.osm.pbf \
+ROUTE_DATASET_FILE=tools/k6/birmingham-city-routes.json \
+ROUTE_RATES="4 16 64 128" \
+DURATION=60s \
+IMPORT_ON_FIRST_RUN=false \
+tools/run-real-city-api-p99-matrix.sh
+```
+
+Artifacts:
+
+```text
+TestResults/accesscity-real-city-api-p99-matrix/api_p99_matrix_summary.json
+TestResults/accesscity-real-city-api-p99-matrix/api_p99_matrix_summary.md
+TestResults/accesscity-real-city-api-p99-matrix/rate-*/k6/k6-routing-api-summary.json
+```
+
 ## SLO Gate
 
 Convert a k6 summary to a machine-readable SLO verdict:
@@ -171,7 +191,11 @@ NativeAOT is applied to `AccessCity.NativeAotKernels`, not the ASP.NET API. That
 Compile and run the C++ equirectangular distance kernel:
 
 ```bash
-QUERIES=1000000 BATCH_SIZE=256 tools/run-cpp-kernel-benchmark.sh
+QUERIES=10000000 \
+HAZARDS=1000000 \
+BATCH_SIZE=512 \
+GRID_CELLS=262144 \
+tools/run-cpp-kernel-benchmark.sh
 ```
 
 Artifacts:
@@ -183,6 +207,15 @@ TestResults/accesscity-cpp-kernel/cpp_kernel_report.json
 This comparison is intentionally narrow. It answers whether the distance kernel is competitive with an optimized native implementation; it does not claim that the whole routing system is C++/HFT-equivalent.
 
 The C++ comparison now also reports dense risk-grid lookup p50/p95/p99 so the project has a native baseline for the same kind of hot path used by city-scale risk lookup.
+On Linux, add `PERF_STAT=true` to capture cycles, instructions, cache misses, and branch misses in `cpp_kernel_perf_stat.txt`.
+
+Measured local C++ run on 2026-06-26:
+
+- hazards: 1,000,000
+- queries: 10,000,000
+- grid build: 12.4846 ms
+- distance kernel: p50 0.0098 us, p95 0.0195 us, p99 0.0644 us, 49,783,875 ops/s
+- dense-grid lookup: p50 0.0072 us, p95 0.0138 us, p99 0.0986 us, 52,229,321 ops/s
 
 ## City-Scale Hot-Path Benchmark
 
@@ -210,6 +243,24 @@ Measured local run on 2026-06-26:
 - gate: passed
 
 This is an algorithm hot-path benchmark. It supports low-latency claims for risk lookup and distance kernels, while the real-city API p99 section remains the system-level latency claim.
+
+## Production Observability
+
+The API emits OpenTelemetry metrics for route latency, route computation capacity, cache hit/miss pressure,
+external dependencies, and route graph load latency/edge counts. Prometheus scrapes the OTEL collector through:
+
+```text
+deploy/observability/prometheus.yml
+```
+
+Grafana starter dashboard:
+
+```text
+deploy/observability/grafana-accesscity-performance-dashboard.json
+```
+
+For p99 optimization, watch `accesscity_route_graph_load_duration_milliseconds_*` by `route_graph_source`.
+Cold p99 should show PostGIS or file-artifact load time; warm steady-state should shift toward memory hits.
 
 ## AI Model Evaluation
 

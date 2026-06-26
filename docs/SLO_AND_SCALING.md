@@ -45,9 +45,22 @@ route graph and local dependency path. Use the full production SLO for internet 
 | `accesscity_route_computation_saturated_total` | requests rejected by the per-pod route bulkhead |
 | `accesscity_route_computation_inflight` | route computations currently using CPU capacity |
 | `accesscity_route_coalescing_total` | duplicate safe-path request coalescing outcomes |
+| `accesscity_route_graph_load_duration_milliseconds_*` | route graph shard load latency by memory, distributed cache, file artifact, or PostGIS source |
+| `accesscity_route_graph_load_edges_edges_*` | loaded edge count distribution by route graph source and outcome |
+| `accesscity_route_graph_load_total` | route graph load attempts by source and outcome |
 | `accesscity_external_dependency_duration_milliseconds_*` | guarded external call latency by dependency and outcome |
 | `accesscity_external_dependency_fallback_total` | fallback usage by dependency and reason |
 | `accesscity_external_dependency_circuit_opened_total` | circuit breaker open events |
+
+Grafana starter dashboard:
+
+```text
+deploy/observability/grafana-accesscity-performance-dashboard.json
+```
+
+The dashboard tracks route p95/p99, graph load p95/p99 by source, cache hit/miss pressure,
+loaded edge counts, and route computation saturation. Use it with the OTEL collector Prometheus
+exporter in `deploy/observability/otel-collector-config.yaml`.
 
 ## Deployment Notes
 

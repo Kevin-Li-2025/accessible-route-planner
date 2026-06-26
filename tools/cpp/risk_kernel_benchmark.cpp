@@ -5,6 +5,7 @@
 #include <iomanip>
 #include <iostream>
 #include <random>
+#include <string>
 #include <vector>
 
 struct Point {
@@ -32,6 +33,15 @@ static inline double dense_grid_lookup(const std::vector<double>& grid, double l
     return grid[index];
 }
 
+static inline std::uint32_t dense_grid_index(double lat, double lon, std::size_t grid_size) {
+    constexpr double min_lat = 52.38;
+    constexpr double min_lon = -2.02;
+    constexpr double inv_cell = 1.0 / 0.0009;
+    const auto x = static_cast<int>((lon - min_lon) * inv_cell);
+    const auto y = static_cast<int>((lat - min_lat) * inv_cell);
+    return static_cast<std::uint32_t>(x * 73856093 ^ y * 19349663) % static_cast<std::uint32_t>(grid_size);
+}
+
 static double percentile(std::vector<double>& values, double p) {
     if (values.empty()) return 0.0;
     std::sort(values.begin(), values.end());
@@ -43,9 +53,11 @@ int main(int argc, char** argv) {
     int queries = argc > 1 ? std::atoi(argv[1]) : 1000000;
     int batch_size = argc > 2 ? std::atoi(argv[2]) : 256;
     int grid_cells = argc > 3 ? std::atoi(argv[3]) : 262144;
+    int hazards = argc > 4 ? std::atoi(argv[4]) : 1000000;
     queries = std::max(1, queries);
     batch_size = std::max(1, batch_size);
     grid_cells = std::max(1024, grid_cells);
+    hazards = std::max(1, hazards);
 
     std::mt19937_64 rng(42);
     std::uniform_real_distribution<double> lat_dist(52.38, 52.60);
@@ -57,10 +69,20 @@ int main(int argc, char** argv) {
         points.push_back({lat_dist(rng), lon_dist(rng)});
     }
 
-    std::vector<double> grid(static_cast<std::size_t>(grid_cells));
-    for (int i = 0; i < grid_cells; ++i) {
-        grid[static_cast<std::size_t>(i)] = static_cast<double>((static_cast<std::uint32_t>(i) * 1103515245u + 12345u) % 1000u) / 1000.0;
+    std::vector<Point> hazard_points;
+    hazard_points.reserve(static_cast<std::size_t>(hazards));
+    for (int i = 0; i < hazards; ++i) {
+        hazard_points.push_back({lat_dist(rng), lon_dist(rng)});
     }
+
+    std::vector<double> grid(static_cast<std::size_t>(grid_cells), 0.0);
+    auto grid_build_start = std::chrono::steady_clock::now();
+    for (int i = 0; i < hazards; ++i) {
+        const auto& hazard = hazard_points[static_cast<std::size_t>(i)];
+        const auto index = dense_grid_index(hazard.lat, hazard.lon, grid.size());
+        grid[index] += 1.0;
+    }
+    auto grid_build_end = std::chrono::steady_clock::now();
 
     volatile double warmup = 0.0;
     for (int i = 0; i < std::min(queries, 10000); ++i) {
@@ -111,8 +133,11 @@ int main(int argc, char** argv) {
               << "{\n"
               << "  \"kernel\": \"cpp-equirectangular-distance\",\n"
               << "  \"queries\": " << queries << ",\n"
+              << "  \"hazards\": " << hazards << ",\n"
               << "  \"batchSize\": " << batch_size << ",\n"
               << "  \"gridCells\": " << grid_cells << ",\n"
+              << "  \"gridBuildMilliseconds\": "
+              << std::chrono::duration<double, std::milli>(grid_build_end - grid_build_start).count() << ",\n"
               << "  \"throughputOpsPerSecond\": " << (queries / elapsed_sec) << ",\n"
               << "  \"p50Microseconds\": " << percentile(values, 0.50) << ",\n"
               << "  \"p95Microseconds\": " << percentile(values, 0.95) << ",\n"

@@ -122,6 +122,7 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         if (_cache.TryGetValue(cacheKey, out RouteGraphData? cached) && cached is not null)
         {
             _metrics.CacheLookup("route_graph", hit: true, stopwatch.Elapsed.TotalMilliseconds);
+            _metrics.RouteGraphLoad("memory", "hit", stopwatch.Elapsed.TotalMilliseconds, cached.LoadedEdgeCount);
             return cached;
         }
 
@@ -135,6 +136,11 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         {
             var graphData = await lazy.Value;
             _metrics.CacheLookup("route_graph", hit: false, stopwatch.Elapsed.TotalMilliseconds);
+            _metrics.RouteGraphLoad(
+                graphData.HasCoverage ? "load" : "miss",
+                graphData.HasCoverage ? "loaded" : "empty",
+                stopwatch.Elapsed.TotalMilliseconds,
+                graphData.LoadedEdgeCount);
             return graphData;
         }
         finally
@@ -160,6 +166,7 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         if (distributed is not null)
         {
             _cache.Set(cacheKey, distributed, ttl);
+            _metrics.RouteGraphLoad("distributed", "hit", 0, distributed.LoadedEdgeCount);
             return distributed;
         }
 
@@ -199,6 +206,7 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
     {
         if (_cache.TryGetValue(cacheKey, out RouteGraphData? cached) && cached is not null)
         {
+            _metrics.RouteGraphLoad("memory_shard", "hit", 0, cached.LoadedEdgeCount);
             return cached;
         }
 
@@ -206,6 +214,7 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         if (distributed is not null)
         {
             _cache.Set(cacheKey, distributed, ttl);
+            _metrics.RouteGraphLoad("distributed_shard", "hit", 0, distributed.LoadedEdgeCount);
             return distributed;
         }
 
@@ -214,6 +223,7 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         {
             _cache.Set(cacheKey, fileArtifact, ttl);
             await TrySetDistributedSnapshotAsync(cacheKey, fileArtifact, ttl, cancellationToken);
+            _metrics.RouteGraphLoad("file_artifact", "hit", 0, fileArtifact.LoadedEdgeCount);
             return fileArtifact;
         }
 
@@ -224,6 +234,11 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
             await TrySetDistributedSnapshotAsync(cacheKey, graphData, ttl, cancellationToken);
         }
 
+        _metrics.RouteGraphLoad(
+            "postgis",
+            graphData.HasCoverage ? "loaded" : "empty",
+            0,
+            graphData.LoadedEdgeCount);
         return graphData;
     }
 
@@ -646,6 +661,7 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         string cacheKey,
         CancellationToken cancellationToken)
     {
+        var stopwatch = Stopwatch.StartNew();
         await using var dbLease = _hotPathDbContextFactory?.CreateDbContext()
                                   ?? HotPathDbContextLease.Borrowed(_dbContext);
         var dbContext = dbLease.Context;
@@ -667,6 +683,7 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
 
         if (edges.Count == 0)
         {
+            _metrics.RouteGraphLoad("postgis_query", "empty", stopwatch.Elapsed.TotalMilliseconds, 0);
             return new RouteGraphData();
         }
 
@@ -714,6 +731,11 @@ public sealed class RouteGraphRepository : IRouteGraphRepository
         };
         BuildSpatialBuckets(graphData);
         RouteGraphPreprocessor.TryAttachPreprocessing(graphData, _options);
+        _metrics.RouteGraphLoad(
+            "postgis_query",
+            isTruncated ? "truncated" : "loaded",
+            stopwatch.Elapsed.TotalMilliseconds,
+            edges.Count);
 
         _logger.LogDebug(
             "Loaded route graph shard {ShardKey}: {NodeCount} nodes, {EdgeCount} edges, truncated={IsTruncated}",

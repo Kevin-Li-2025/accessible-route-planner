@@ -1,0 +1,80 @@
+{
+  "title": "AccessCity Performance",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Route options p95/p99",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(accesscity_route_safe_path_duration_milliseconds_bucket{http_route=~\".*safe-path.*\"}[5m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(accesscity_route_safe_path_duration_milliseconds_bucket{http_route=~\".*safe-path.*\"}[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Route graph load p95/p99 by source",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(accesscity_route_graph_load_duration_milliseconds_bucket[5m])) by (le, route_graph_source))",
+          "legendFormat": "{{route_graph_source}} p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(accesscity_route_graph_load_duration_milliseconds_bucket[5m])) by (le, route_graph_source))",
+          "legendFormat": "{{route_graph_source}} p99"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Cache hit/miss",
+      "gridPos": { "x": 0, "y": 8, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(accesscity_cache_hit_total[5m])) by (cache_name)",
+          "legendFormat": "{{cache_name}} hit"
+        },
+        {
+          "expr": "sum(rate(accesscity_cache_miss_total[5m])) by (cache_name)",
+          "legendFormat": "{{cache_name}} miss"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Route graph loaded edges",
+      "gridPos": { "x": 8, "y": 8, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(accesscity_route_graph_load_edges_edges_bucket[5m])) by (le, route_graph_source))",
+          "legendFormat": "{{route_graph_source}} p95 edges"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Route capacity saturation",
+      "gridPos": { "x": 16, "y": 8, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(accesscity_route_computation_saturated_total[5m]))",
+          "legendFormat": "saturated"
+        },
+        {
+          "expr": "sum(accesscity_route_computation_inflight)",
+          "legendFormat": "inflight"
+        }
+      ]
+    }
+  ]
+}

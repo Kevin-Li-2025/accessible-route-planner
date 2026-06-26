@@ -8,9 +8,12 @@ CXX="${CXX:-c++}"
 QUERIES="${QUERIES:-1000000}"
 BATCH_SIZE="${BATCH_SIZE:-256}"
 GRID_CELLS="${GRID_CELLS:-262144}"
+HAZARDS="${HAZARDS:-1000000}"
+PERF_STAT="${PERF_STAT:-false}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-TestResults/accesscity-cpp-kernel}"
 BIN="$ARTIFACT_DIR/risk_kernel_benchmark"
 REPORT="$ARTIFACT_DIR/cpp_kernel_report.json"
+PERF_REPORT="$ARTIFACT_DIR/cpp_kernel_perf_stat.txt"
 
 mkdir -p "$ARTIFACT_DIR"
 
@@ -18,6 +21,14 @@ mkdir -p "$ARTIFACT_DIR"
   tools/cpp/risk_kernel_benchmark.cpp \
   -o "$BIN"
 
-"$BIN" "$QUERIES" "$BATCH_SIZE" "$GRID_CELLS" | tee "$REPORT"
+if [[ "$PERF_STAT" == "true" && "$(uname -s)" == "Linux" && -n "$(command -v perf || true)" ]]; then
+  perf stat \
+    -e cycles,instructions,cache-references,cache-misses,branches,branch-misses \
+    -o "$PERF_REPORT" \
+    "$BIN" "$QUERIES" "$BATCH_SIZE" "$GRID_CELLS" "$HAZARDS" | tee "$REPORT"
+  echo "perf stat report: $PERF_REPORT"
+else
+  "$BIN" "$QUERIES" "$BATCH_SIZE" "$GRID_CELLS" "$HAZARDS" | tee "$REPORT"
+fi
 
 echo "C++ kernel benchmark report: $REPORT"

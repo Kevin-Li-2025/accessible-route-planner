@@ -19,6 +19,9 @@ public sealed class AccessCityMetrics
     private readonly Counter<long> _routeComputationSaturated;
     private readonly UpDownCounter<long> _routeComputationInflight;
     private readonly Counter<long> _routeCoalescing;
+    private readonly Histogram<double> _routeGraphLoadDuration;
+    private readonly Histogram<long> _routeGraphLoadEdges;
+    private readonly Counter<long> _routeGraphLoad;
     private readonly Histogram<double> _externalDependencyDuration;
     private readonly Counter<long> _externalDependencyFallback;
     private readonly Counter<long> _externalDependencyCircuitOpened;
@@ -37,6 +40,9 @@ public sealed class AccessCityMetrics
         _routeComputationSaturated = Meter.CreateCounter<long>("accesscity.route.computation.saturated");
         _routeComputationInflight = Meter.CreateUpDownCounter<long>("accesscity.route.computation.inflight");
         _routeCoalescing = Meter.CreateCounter<long>("accesscity.route.coalescing");
+        _routeGraphLoadDuration = Meter.CreateHistogram<double>("accesscity.route_graph.load.duration", "ms");
+        _routeGraphLoadEdges = Meter.CreateHistogram<long>("accesscity.route_graph.load.edges", "edges");
+        _routeGraphLoad = Meter.CreateCounter<long>("accesscity.route_graph.load.total");
         _externalDependencyDuration = Meter.CreateHistogram<double>("accesscity.external_dependency.duration", "ms");
         _externalDependencyFallback = Meter.CreateCounter<long>("accesscity.external_dependency.fallback");
         _externalDependencyCircuitOpened = Meter.CreateCounter<long>("accesscity.external_dependency.circuit_opened");
@@ -86,6 +92,18 @@ public sealed class AccessCityMetrics
 
     public void RouteCoalescing(string outcome) =>
         _routeCoalescing.Add(1, new KeyValuePair<string, object?>("route.coalescing.outcome", outcome));
+
+    public void RouteGraphLoad(string source, string outcome, double milliseconds, int edgeCount)
+    {
+        var tags = new[]
+        {
+            new KeyValuePair<string, object?>("route_graph.source", source),
+            new KeyValuePair<string, object?>("route_graph.outcome", outcome)
+        };
+        _routeGraphLoadDuration.Record(milliseconds, tags);
+        _routeGraphLoadEdges.Record(edgeCount, tags);
+        _routeGraphLoad.Add(1, tags);
+    }
 
     public void ExternalDependencyCompleted(string dependencyName, string outcome, double milliseconds) =>
         _externalDependencyDuration.Record(
