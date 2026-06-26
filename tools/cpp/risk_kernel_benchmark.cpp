@@ -6,6 +6,7 @@
 #include <iostream>
 #include <random>
 #include <string>
+#include <thread>
 #include <vector>
 
 struct Point {
@@ -49,15 +50,54 @@ static double percentile(std::vector<double>& values, double p) {
     return values[index];
 }
 
+static double run_parallel_grid_lookup(
+    const std::vector<double>& grid,
+    const std::vector<Point>& points,
+    int thread_count,
+    double& checksum) {
+    const auto start = std::chrono::steady_clock::now();
+    std::vector<std::thread> threads;
+    std::vector<double> partial(static_cast<std::size_t>(thread_count), 0.0);
+    const auto total = points.size();
+    const auto chunk = (total + static_cast<std::size_t>(thread_count) - 1) / static_cast<std::size_t>(thread_count);
+
+    for (int t = 0; t < thread_count; ++t) {
+        threads.emplace_back([&, t] {
+            const auto begin = std::min(total, static_cast<std::size_t>(t) * chunk);
+            const auto end = std::min(total, begin + chunk);
+            double local = 0.0;
+            for (auto i = begin; i < end; ++i) {
+                const auto& p = points[i];
+                local += dense_grid_lookup(grid, p.lat, p.lon);
+            }
+            partial[static_cast<std::size_t>(t)] = local;
+        });
+    }
+
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    checksum = 0.0;
+    for (const auto value : partial) {
+        checksum += value;
+    }
+
+    const auto end = std::chrono::steady_clock::now();
+    return std::chrono::duration<double>(end - start).count();
+}
+
 int main(int argc, char** argv) {
     int queries = argc > 1 ? std::atoi(argv[1]) : 1000000;
     int batch_size = argc > 2 ? std::atoi(argv[2]) : 256;
     int grid_cells = argc > 3 ? std::atoi(argv[3]) : 262144;
     int hazards = argc > 4 ? std::atoi(argv[4]) : 1000000;
+    int requested_threads = argc > 5 ? std::atoi(argv[5]) : static_cast<int>(std::thread::hardware_concurrency());
     queries = std::max(1, queries);
     batch_size = std::max(1, batch_size);
     grid_cells = std::max(1024, grid_cells);
     hazards = std::max(1, hazards);
+    const int thread_count = std::max(1, requested_threads);
 
     std::mt19937_64 rng(42);
     std::uniform_real_distribution<double> lat_dist(52.38, 52.60);
@@ -127,6 +167,8 @@ int main(int argc, char** argv) {
 
     const double elapsed_sec = std::chrono::duration<double>(total_end - total_start).count();
     const double grid_elapsed_sec = std::chrono::duration<double>(grid_total_end - grid_total_start).count();
+    double parallel_grid_checksum = 0.0;
+    const double parallel_grid_elapsed_sec = run_parallel_grid_lookup(grid, points, thread_count, parallel_grid_checksum);
     auto values = latency_us;
     auto grid_values = grid_latency_us;
     std::cout << std::fixed << std::setprecision(4)
@@ -136,6 +178,7 @@ int main(int argc, char** argv) {
               << "  \"hazards\": " << hazards << ",\n"
               << "  \"batchSize\": " << batch_size << ",\n"
               << "  \"gridCells\": " << grid_cells << ",\n"
+              << "  \"threads\": " << thread_count << ",\n"
               << "  \"gridBuildMilliseconds\": "
               << std::chrono::duration<double, std::milli>(grid_build_end - grid_build_start).count() << ",\n"
               << "  \"throughputOpsPerSecond\": " << (queries / elapsed_sec) << ",\n"
@@ -148,6 +191,12 @@ int main(int argc, char** argv) {
               << "    \"p95Microseconds\": " << percentile(grid_values, 0.95) << ",\n"
               << "    \"p99Microseconds\": " << percentile(grid_values, 0.99) << ",\n"
               << "    \"checksum\": " << grid_checksum << "\n"
+              << "  },\n"
+              << "  \"parallelDenseGridLookup\": {\n"
+              << "    \"threads\": " << thread_count << ",\n"
+              << "    \"throughputOpsPerSecond\": " << (queries / parallel_grid_elapsed_sec) << ",\n"
+              << "    \"speedupVsSingleThread\": " << (grid_elapsed_sec / parallel_grid_elapsed_sec) << ",\n"
+              << "    \"checksum\": " << parallel_grid_checksum << "\n"
               << "  },\n"
               << "  \"checksum\": " << checksum << "\n"
               << "}\n";

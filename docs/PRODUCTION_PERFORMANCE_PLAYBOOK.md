@@ -121,6 +121,15 @@ TestResults/accesscity-real-city-api-p99-matrix/api_p99_matrix_summary.md
 TestResults/accesscity-real-city-api-p99-matrix/rate-*/k6/k6-routing-api-summary.json
 ```
 
+Measured local West Midlands matrix on 2026-06-26 after importing 6,719,409 OSM records:
+
+| Target rps | Requests | Achieved rps | Failure rate | p50 ms | p95 ms | p99 ms | max ms |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4 | 181 | 4.02 | 0.0000 | 8.70 | 121.08 | 207.24 | 392.00 |
+| 16 | 721 | 16.02 | 0.0000 | 1.08 | 7.14 | 119.45 | 169.64 |
+| 64 | 2,881 | 64.02 | 0.0000 | 1.04 | 6.39 | 42.00 | 233.68 |
+| 128 | 5,759 | 127.98 | 0.0000 | 1.01 | 6.51 | 239.90 | 637.46 |
+
 ## SLO Gate
 
 Convert a k6 summary to a machine-readable SLO verdict:
@@ -216,6 +225,15 @@ Measured local C++ run on 2026-06-26:
 - grid build: 12.4846 ms
 - distance kernel: p50 0.0098 us, p95 0.0195 us, p99 0.0644 us, 49,783,875 ops/s
 - dense-grid lookup: p50 0.0072 us, p95 0.0138 us, p99 0.0986 us, 52,229,321 ops/s
+
+Measured local C++ run with 10-thread parallel lookup on 2026-06-26:
+
+- hazards: 1,000,000
+- queries: 10,000,000
+- grid build: 4.0344 ms
+- distance kernel: p50 0.0061 us, p95 0.0131 us, p99 0.0265 us, 126,237,190 ops/s
+- dense-grid lookup: p50 0.0059 us, p95 0.0069 us, p99 0.0194 us, 185,411,081 ops/s
+- parallel dense-grid lookup: 10 threads, 2,106,075,881 ops/s, 11.359x vs single-thread
 
 ## City-Scale Hot-Path Benchmark
 
