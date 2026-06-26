@@ -3,6 +3,7 @@ using AccessCity.API.Models;
 using AccessCity.API.Services.External;
 using Microsoft.Extensions.Options;
 using NetTopologySuite.Geometries;
+using System.Diagnostics;
 
 namespace AccessCity.API.Services;
 
@@ -202,7 +203,12 @@ public class RoutingService : IRoutingService
         if (RequiresVerifiedAccessibility(request))
         {
             var rec = await FindSafePathAsync(request, hazardList, cancellationToken);
-            return new SafePathOptionsResponse { Recommended = rec, Variants = new List<RoutedOptionVariant>() };
+            return new SafePathOptionsResponse
+            {
+                Recommended = rec,
+                Variants = new List<RoutedOptionVariant>(),
+                Diagnostics = BuildSingleRouteDiagnostics(rec)
+            };
         }
 
         var alternatives = await _osrmClient.GetAlternativeRoutesAsync(request.Start, request.End, cancellationToken);
@@ -210,15 +216,22 @@ public class RoutingService : IRoutingService
             || IsOsrmDetourExcessive(request.Start, request.End, alternatives))
         {
             var rec = await FindSafePathAsync(request, hazardList, cancellationToken);
-            return new SafePathOptionsResponse { Recommended = rec, Variants = new List<RoutedOptionVariant>() };
+            return new SafePathOptionsResponse
+            {
+                Recommended = rec,
+                Variants = new List<RoutedOptionVariant>(),
+                Diagnostics = BuildSingleRouteDiagnostics(rec)
+            };
         }
 
         var graphData = await TryLoadRouteGraphAsync(request, cancellationToken);
         var recommended = await BuildBestOsrmRouteResponseAsync(request, hazardList, alternatives, graphData, cancellationToken);
+        var optionMetrics = BuildRouteOptionMetrics(alternatives, hazardList, request, graphData);
 
         var shortestRaw = alternatives.OrderBy(a => a.DistanceMetres).First();
         var safestRaw = alternatives
-            .OrderBy(a => ScoreRoute(a, hazardList, 1.0, request.Profile, graphData))
+            .OrderBy(a => optionMetrics[a].FullSafetyCompositeCost)
+            .ThenBy(a => optionMetrics[a].AccessibilityPenaltySeconds)
             .First();
         var fastestRaw = alternatives.OrderBy(a => a.DurationSeconds).First();
 
@@ -229,20 +242,23 @@ public class RoutingService : IRoutingService
                 Kind = "shortest_distance",
                 Description =
                     "Shortest walking distance among OSRM alternatives; may trade off safety or obstacle avoidance.",
-                Route = BuildOsrmResponse(shortestRaw, hazardList, request, graphData)
+                Route = BuildOsrmResponse(shortestRaw, hazardList, request, graphData),
+                Metrics = CloneMetric(optionMetrics[shortestRaw], "shortest_distance")
             },
             new()
             {
                 Kind = "lowest_composite_risk",
                 Description =
                     "Lowest composite risk and obstacle penalty (full safety weight) among OSRM alternatives.",
-                Route = BuildOsrmResponse(safestRaw, hazardList, request, graphData)
+                Route = BuildOsrmResponse(safestRaw, hazardList, request, graphData),
+                Metrics = CloneMetric(optionMetrics[safestRaw], "lowest_composite_risk")
             },
             new()
             {
                 Kind = "fastest_time",
                 Description = "Shortest OSRM estimated walk time among alternatives.",
-                Route = BuildOsrmResponse(fastestRaw, hazardList, request, graphData)
+                Route = BuildOsrmResponse(fastestRaw, hazardList, request, graphData),
+                Metrics = CloneMetric(optionMetrics[fastestRaw], "fastest_time")
             }
         };
 
@@ -253,7 +269,12 @@ public class RoutingService : IRoutingService
 
         variants = DedupeVariantsBySimilarity(variants, 10.0);
 
-        return new SafePathOptionsResponse { Recommended = recommended, Variants = variants };
+        return new SafePathOptionsResponse
+        {
+            Recommended = recommended,
+            Variants = variants,
+            Diagnostics = BuildOptionSetDiagnostics(recommended, optionMetrics.Values)
+        };
     }
 
     private async Task<RouteGraphData?> TryLoadRouteGraphAsync(RouteRequest request, CancellationToken cancellationToken)
@@ -439,6 +460,129 @@ public class RoutingService : IRoutingService
         return result;
     }
 
+    private Dictionary<OsrmRouteResult, RouteTradeoffMetrics> BuildRouteOptionMetrics(
+        IReadOnlyList<OsrmRouteResult> alternatives,
+        List<HazardReport> hazards,
+        RouteRequest request,
+        RouteGraphData? graphData)
+    {
+        var metrics = alternatives.ToDictionary(
+            route => route,
+            route =>
+            {
+                var riskExposure = ComputeRouteTotalRisk(route.Coordinates, hazards);
+                var accessibilityPenalty = graphData is { HasCoverage: true }
+                    ? ComputeObstaclePenalty(route.Coordinates, graphData, request.Profile) * 60.0
+                    : 0;
+                var compositeCost = ScoreRoute(route, hazards, request.SafetyWeight, request.Profile, graphData);
+                var fullSafetyCompositeCost = ScoreRoute(route, hazards, 1.0, request.Profile, graphData);
+
+                return new RouteTradeoffMetrics
+                {
+                    DistanceMetres = Math.Round(route.DistanceMetres, 1),
+                    EstimatedTimeMinutes = CalculateEstimatedMinutes(route.DistanceMetres, route.DurationSeconds),
+                    RiskExposure = Math.Round(riskExposure, 4),
+                    AccessibilityPenaltySeconds = Math.Round(accessibilityPenalty, 2),
+                    CompositeCost = Math.Round(compositeCost, 4),
+                    FullSafetyCompositeCost = Math.Round(fullSafetyCompositeCost, 4)
+                };
+            });
+
+        MarkParetoEfficient(metrics.Values);
+        return metrics;
+    }
+
+    private static RouteTradeoffMetrics CloneMetric(RouteTradeoffMetrics metric, string kind) => new()
+    {
+        Kind = kind,
+        DistanceMetres = metric.DistanceMetres,
+        EstimatedTimeMinutes = metric.EstimatedTimeMinutes,
+        RiskExposure = metric.RiskExposure,
+        AccessibilityPenaltySeconds = metric.AccessibilityPenaltySeconds,
+        CompositeCost = metric.CompositeCost,
+        FullSafetyCompositeCost = metric.FullSafetyCompositeCost,
+        ParetoEfficient = metric.ParetoEfficient
+    };
+
+    private static RouteOptionSetDiagnostics BuildOptionSetDiagnostics(
+        RouteResponse recommended,
+        IEnumerable<RouteTradeoffMetrics> metrics)
+    {
+        var metricList = metrics.ToList();
+        if (metricList.Count == 0)
+        {
+            return BuildSingleRouteDiagnostics(recommended);
+        }
+
+        var bestTime = metricList.Min(metric => metric.EstimatedTimeMinutes);
+        var bestRisk = metricList.Min(metric => metric.RiskExposure);
+        return new RouteOptionSetDiagnostics
+        {
+            CandidateCount = metricList.Count,
+            ParetoEfficientCount = metricList.Count(metric => metric.ParetoEfficient),
+            RecommendedRegretSeconds = Math.Round(Math.Max(0, recommended.EstimatedTime - bestTime) * 60.0, 2),
+            RecommendedRiskRegret = Math.Round(Math.Max(0, (1.0 - recommended.SafetyScore) - bestRisk), 4),
+            RecommendedPerformance = recommended.Performance,
+            Frontier = metricList
+                .Where(metric => metric.ParetoEfficient)
+                .OrderBy(metric => metric.CompositeCost)
+                .Take(5)
+                .ToList()
+        };
+    }
+
+    private static RouteOptionSetDiagnostics BuildSingleRouteDiagnostics(RouteResponse route)
+    {
+        var riskExposure = Math.Round(1.0 - route.SafetyScore, 4);
+        return new RouteOptionSetDiagnostics
+        {
+            CandidateCount = route.Path is null ? 0 : 1,
+            ParetoEfficientCount = route.Path is null ? 0 : 1,
+            RecommendedRegretSeconds = 0,
+            RecommendedRiskRegret = 0,
+            RecommendedPerformance = route.Performance,
+            Frontier = route.Path is null
+                ? new List<RouteTradeoffMetrics>()
+                :
+                [
+                    new RouteTradeoffMetrics
+                    {
+                        Kind = "recommended",
+                        DistanceMetres = route.Distance,
+                        EstimatedTimeMinutes = route.EstimatedTime,
+                        RiskExposure = riskExposure,
+                        CompositeCost = Math.Round(route.Distance / 1000.0 + riskExposure, 4),
+                        FullSafetyCompositeCost = Math.Round(riskExposure, 4),
+                        ParetoEfficient = true
+                    }
+                ]
+        };
+    }
+
+    private static void MarkParetoEfficient(IEnumerable<RouteTradeoffMetrics> metrics)
+    {
+        var metricList = metrics.ToList();
+        foreach (var candidate in metricList)
+        {
+            candidate.ParetoEfficient = !metricList.Any(other =>
+                !ReferenceEquals(candidate, other)
+                && Dominates(other, candidate));
+        }
+    }
+
+    private static bool Dominates(RouteTradeoffMetrics a, RouteTradeoffMetrics b)
+    {
+        var noWorse = a.DistanceMetres <= b.DistanceMetres
+                      && a.EstimatedTimeMinutes <= b.EstimatedTimeMinutes
+                      && a.RiskExposure <= b.RiskExposure
+                      && a.AccessibilityPenaltySeconds <= b.AccessibilityPenaltySeconds;
+        var strictlyBetter = a.DistanceMetres < b.DistanceMetres
+                             || a.EstimatedTimeMinutes < b.EstimatedTimeMinutes
+                             || a.RiskExposure < b.RiskExposure
+                             || a.AccessibilityPenaltySeconds < b.AccessibilityPenaltySeconds;
+        return noWorse && strictlyBetter;
+    }
+
     /// <summary>
     /// Synchronous fallback — uses the old synthetic grid approach.
     /// </summary>
@@ -491,6 +635,7 @@ public class RoutingService : IRoutingService
         // Use Contraction Hierarchies only for static, deterministic shortest-path
         // queries. The CH artifact does not encode live hazards, safety weighting,
         // or per-request comfort preferences, so safe-path requests still need A*/ALT.
+        AStarSearchResult? searchResult = null;
         List<long>? path = null;
         if (CanUseContractionHierarchy(request, hazardList))
         {
@@ -510,11 +655,16 @@ public class RoutingService : IRoutingService
             }
         }
 
-        path ??= AStarSearch(graphData.Nodes, startId, endId, request, hazardList, graphData.Preprocessing);
+        if (path is null)
+        {
+            searchResult = AStarSearch(graphData.Nodes, startId, endId, request, hazardList, graphData.Preprocessing);
+            path = searchResult.Path;
+        }
+
         var usedRelaxedAccessibilitySearch = false;
         if ((path == null || path.Count < 2) && RequiresVerifiedAccessibility(request))
         {
-            path = AStarSearch(
+            searchResult = AStarSearch(
                 graphData.Nodes,
                 startId,
                 endId,
@@ -522,6 +672,7 @@ public class RoutingService : IRoutingService
                 hazardList,
                 graphData.Preprocessing,
                 enforceHardFilters: false);
+            path = searchResult.Path;
             usedRelaxedAccessibilitySearch = path is { Count: >= 2 };
         }
 
@@ -538,6 +689,12 @@ public class RoutingService : IRoutingService
         }
 
         var response = BuildRealGraphResponse(path, graphData.Nodes, request, hazardList);
+        if (searchResult is not null)
+        {
+            response.Performance = searchResult.Diagnostics;
+            response.Performance.UsedRelaxedAccessibilitySearch = usedRelaxedAccessibilitySearch;
+        }
+
         if (usedRelaxedAccessibilitySearch)
         {
             response.Warnings.Insert(0, RelaxedAccessibilityGraphWarning);
@@ -1485,7 +1642,8 @@ public class RoutingService : IRoutingService
             };
         }
 
-        var path = AStarSearch(graph, startId, endId, request, hazardList);
+        var searchResult = AStarSearch(graph, startId, endId, request, hazardList);
+        var path = searchResult.Path;
 
         if (path == null || path.Count < 2)
         {
@@ -1499,12 +1657,14 @@ public class RoutingService : IRoutingService
             };
         }
 
-        return BuildFallbackResponse(path, graph, request, hazardList);
+        var response = BuildFallbackResponse(path, graph, request, hazardList);
+        response.Performance = searchResult.Diagnostics;
+        return response;
     }
 
     // ──────── A* search (shared between real graph and fallback) ────────
 
-    private List<long>? AStarSearch(
+    private AStarSearchResult AStarSearch(
         Dictionary<long, GraphNode> graph,
         long startId, long endId,
         RouteRequest request,
@@ -1512,7 +1672,15 @@ public class RoutingService : IRoutingService
         RouteGraphPreprocessingData? preprocessing = null,
         bool enforceHardFilters = true)
     {
+        var stopwatch = Stopwatch.StartNew();
         var endNode = graph[endId];
+        var diagnostics = new RoutePerformanceDiagnostics
+        {
+            Algorithm = preprocessing?.HasLandmarks == true
+                ? "astar-alt-accessibility-risk"
+                : "astar-accessibility-risk",
+            UsedAltHeuristic = preprocessing?.HasLandmarks == true
+        };
         var gScore = new Dictionary<long, double> { [startId] = 0 };
         var fScore = new Dictionary<long, double>
         {
@@ -1521,8 +1689,13 @@ public class RoutingService : IRoutingService
         var cameFrom = new Dictionary<long, long>();
         var open = new PriorityQueue<long, double>();
         open.Enqueue(startId, fScore[startId]);
+        diagnostics.QueuePushes = 1;
         var closed = new HashSet<long>();
-        var riskMemo = new Dictionary<(long From, long To), double>();
+        var riskContext = RouteRiskContext.Create(
+            request,
+            hazards,
+            _hazardRiskGrid,
+            _riskService);
 
         // Build combined edge filter from preferences AND profile.
         // In relaxed mode, profile penalties still affect ComputeEdgeCost, but
@@ -1534,14 +1707,22 @@ public class RoutingService : IRoutingService
             long current = open.Dequeue();
 
             if (current == endId)
-                return ReconstructPath(cameFrom, current);
+            {
+                stopwatch.Stop();
+                diagnostics.FoundPath = true;
+                diagnostics.SearchMilliseconds = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3);
+                riskContext.CopyCountersTo(diagnostics);
+                return new AStarSearchResult(ReconstructPath(cameFrom, current), diagnostics);
+            }
 
             if (!closed.Add(current)) continue;
+            diagnostics.NodesExpanded++;
 
             var currentNode = graph[current];
 
             foreach (var (neighbourId, edge) in currentNode.Edges)
             {
+                diagnostics.EdgesScanned++;
                 if (closed.Contains(neighbourId)) continue;
                 if (!graph.ContainsKey(neighbourId)) continue;
 
@@ -1555,31 +1736,42 @@ public class RoutingService : IRoutingService
                         break;
                     }
                 }
-                if (!passesFilters) continue;
+                if (!passesFilters)
+                {
+                    diagnostics.EdgesRejectedByFilter++;
+                    continue;
+                }
 
                 double edgeCost = ComputeEdgeCost(
                     edge,
                     currentNode,
                     graph[neighbourId],
                     request,
-                    hazards,
-                    riskMemo);
+                    riskContext);
                 double tentativeG = gScore[current] + edgeCost;
 
                 if (tentativeG < gScore.GetValueOrDefault(neighbourId, double.MaxValue))
                 {
+                    diagnostics.EdgesRelaxed++;
                     cameFrom[neighbourId] = current;
                     gScore[neighbourId] = tentativeG;
                     double f = tentativeG +
                                Heuristic(graph, neighbourId, endId, endNode.Location, preprocessing);
                     fScore[neighbourId] = f;
                     open.Enqueue(neighbourId, f);
+                    diagnostics.QueuePushes++;
                 }
             }
         }
 
-        return null;
+        stopwatch.Stop();
+        diagnostics.FoundPath = false;
+        diagnostics.SearchMilliseconds = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3);
+        riskContext.CopyCountersTo(diagnostics);
+        return new AStarSearchResult(null, diagnostics);
     }
+
+    private sealed record AStarSearchResult(List<long>? Path, RoutePerformanceDiagnostics Diagnostics);
 
     /// <summary>
     /// Build a combined filter chain from user preferences AND mobility profile.
@@ -1640,28 +1832,11 @@ public class RoutingService : IRoutingService
     private double ComputeEdgeCost(
         GraphEdge edge, GraphNode fromNode, GraphNode toNode,
         RouteRequest request,
-        List<HazardReport> hazards,
-        Dictionary<(long From, long To), double> riskMemo)
+        RouteRiskContext riskContext)
     {
         double w = Math.Clamp(request.SafetyWeight, 0.0, 1.0);
         double baseSeconds = edge.DistanceMetres / ResolveProfileSpeed(request.Profile);
-
-        var riskKey = fromNode.Id <= toNode.Id
-            ? (fromNode.Id, toNode.Id)
-            : (toNode.Id, fromNode.Id);
-        if (!riskMemo.TryGetValue(riskKey, out var liveRisk))
-        {
-            double midLat = (fromNode.Location.Y + toNode.Location.Y) / 2.0;
-            double midLon = (fromNode.Location.X + toNode.Location.X) / 2.0;
-
-            // O(1) grid lookup when the precomputed risk grid is available;
-            // falls back to the original O(N) QuickRisk linear scan otherwise.
-            liveRisk = _hazardRiskGrid.IsReady
-                ? _hazardRiskGrid.GetRisk(midLat, midLon)
-                : _riskService.QuickRisk(midLat, midLon, hazards, radiusMetres: 200);
-            riskMemo[riskKey] = liveRisk;
-        }
-
+        var liveRisk = riskContext.GetRisk(fromNode, toNode);
         double edgeRisk = Math.Clamp((edge.BaseSafetyCost + liveRisk) / 2.0, 0.0, 1.0);
         double riskPenaltySeconds = baseSeconds * edgeRisk * 4.0 * w;
         double accessibilityPenaltySeconds = Math.Max(
@@ -1698,6 +1873,78 @@ public class RoutingService : IRoutingService
         }
         path.Reverse();
         return path;
+    }
+
+    private sealed class RouteRiskContext
+    {
+        private readonly bool _enabled;
+        private readonly bool _useGrid;
+        private readonly IReadOnlyList<HazardReport> _hazards;
+        private readonly IHazardRiskGrid _hazardRiskGrid;
+        private readonly IRiskScoringService _riskService;
+        private readonly Dictionary<(long From, long To), double> _memo = new();
+        private int _lookups;
+        private int _cacheHits;
+        private int _cacheMisses;
+
+        private RouteRiskContext(
+            bool enabled,
+            bool useGrid,
+            IReadOnlyList<HazardReport> hazards,
+            IHazardRiskGrid hazardRiskGrid,
+            IRiskScoringService riskService)
+        {
+            _enabled = enabled;
+            _useGrid = useGrid;
+            _hazards = hazards;
+            _hazardRiskGrid = hazardRiskGrid;
+            _riskService = riskService;
+        }
+
+        public static RouteRiskContext Create(
+            RouteRequest request,
+            IReadOnlyList<HazardReport> hazards,
+            IHazardRiskGrid hazardRiskGrid,
+            IRiskScoringService riskService)
+        {
+            var safetyWeight = Math.Clamp(request.SafetyWeight, 0.0, 1.0);
+            var enabled = safetyWeight > 0.001 && (hazardRiskGrid.IsReady || hazards.Count > 0);
+            return new RouteRiskContext(enabled, hazardRiskGrid.IsReady, hazards, hazardRiskGrid, riskService);
+        }
+
+        public double GetRisk(GraphNode fromNode, GraphNode toNode)
+        {
+            if (!_enabled)
+            {
+                return 0;
+            }
+
+            _lookups++;
+            var riskKey = fromNode.Id <= toNode.Id
+                ? (fromNode.Id, toNode.Id)
+                : (toNode.Id, fromNode.Id);
+            if (_memo.TryGetValue(riskKey, out var cached))
+            {
+                _cacheHits++;
+                return cached;
+            }
+
+            _cacheMisses++;
+            double midLat = (fromNode.Location.Y + toNode.Location.Y) / 2.0;
+            double midLon = (fromNode.Location.X + toNode.Location.X) / 2.0;
+            var liveRisk = _useGrid
+                ? _hazardRiskGrid.GetRisk(midLat, midLon)
+                : _riskService.QuickRisk(midLat, midLon, _hazards, radiusMetres: 200);
+            _memo[riskKey] = liveRisk;
+            return liveRisk;
+        }
+
+        public void CopyCountersTo(RoutePerformanceDiagnostics diagnostics)
+        {
+            diagnostics.RiskLookups = _lookups;
+            diagnostics.RiskCacheHits = _cacheHits;
+            diagnostics.RiskCacheMisses = _cacheMisses;
+        }
     }
 
     private RouteResponse BuildFallbackResponse(
@@ -1992,10 +2239,12 @@ public class RoutingService : IRoutingService
 
         var candidates = double.IsFinite(maxDistanceMetres)
             ? FindNodesNear(graphData, point, maxDistanceMetres)
-            : graphData.Nodes.Values;
+            : FindNearestBucketCandidates(graphData, point);
 
         GraphNode? best = null;
-        var bestDist = maxDistanceMetres;
+        var bestDist = double.IsFinite(maxDistanceMetres)
+            ? maxDistanceMetres
+            : double.PositiveInfinity;
         foreach (var node in candidates)
         {
             var dist = RiskScoringService.HaversineDistance(
@@ -2008,6 +2257,79 @@ public class RoutingService : IRoutingService
         }
 
         return best;
+    }
+
+    private static IEnumerable<GraphNode> FindNearestBucketCandidates(
+        RouteGraphData graphData,
+        Coordinate point)
+    {
+        if (graphData.SpatialBuckets.Count == 0 || graphData.SpatialBucketSizeDegrees <= 0)
+        {
+            return graphData.Nodes.Values;
+        }
+
+        var bucketSize = graphData.SpatialBucketSizeDegrees;
+        var origin = (
+            X: (int)Math.Floor(point.X / bucketSize),
+            Y: (int)Math.Floor(point.Y / bucketSize));
+        var maxRing = Math.Max(2, (int)Math.Ceiling(Math.Sqrt(graphData.SpatialBuckets.Count)));
+        GraphNode? best = null;
+        var bestDist = double.PositiveInfinity;
+
+        for (var ring = 0; ring <= maxRing; ring++)
+        {
+            for (var dx = -ring; dx <= ring; dx++)
+            {
+                for (var dy = -ring; dy <= ring; dy++)
+                {
+                    if (ring > 0 && Math.Abs(dx) != ring && Math.Abs(dy) != ring)
+                    {
+                        continue;
+                    }
+
+                    if (!graphData.SpatialBuckets.TryGetValue((origin.X + dx, origin.Y + dy), out var nodeIds))
+                    {
+                        continue;
+                    }
+
+                    foreach (var nodeId in nodeIds)
+                    {
+                        if (graphData.Nodes.TryGetValue(nodeId, out var node))
+                        {
+                            var dist = RiskScoringService.HaversineDistance(
+                                point.Y,
+                                point.X,
+                                node.Location.Y,
+                                node.Location.X);
+                            if (dist < bestDist)
+                            {
+                                bestDist = dist;
+                                best = node;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (best is not null && RingLowerBoundMetres(ring + 1, bucketSize, point.Y) > bestDist)
+            {
+                return [best];
+            }
+        }
+
+        return best is null ? graphData.Nodes.Values : [best];
+    }
+
+    private static double RingLowerBoundMetres(int ring, double bucketSizeDegrees, double latitude)
+    {
+        if (ring <= 0)
+        {
+            return 0;
+        }
+
+        var metresPerDegreeLon = 111_320.0 * Math.Max(0.1, Math.Cos(latitude * Math.PI / 180.0));
+        var minCellOffsetDegrees = Math.Max(0, ring - 1) * bucketSizeDegrees;
+        return minCellOffsetDegrees * Math.Min(111_320.0, metresPerDegreeLon);
     }
 
     private static IEnumerable<GraphNode> FindNodesNear(

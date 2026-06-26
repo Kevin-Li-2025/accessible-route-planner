@@ -1,0 +1,37 @@
+{
+  "name": "birmingham-core-route-p99",
+  "routes": [
+    {
+      "name": "new-street-to-bullring",
+      "start": { "x": -1.8988, "y": 52.4778 },
+      "end": { "x": -1.8936, "y": 52.4770 },
+      "profile": "standard",
+      "safetyWeight": 0.45,
+      "preferences": []
+    },
+    {
+      "name": "victoria-square-to-colmore",
+      "start": { "x": -1.9026, "y": 52.4797 },
+      "end": { "x": -1.8993, "y": 52.4833 },
+      "profile": "manual-wheelchair",
+      "safetyWeight": 0.7,
+      "preferences": ["avoid-stairs", "wheelchair"]
+    },
+    {
+      "name": "brindleyplace-to-library",
+      "start": { "x": -1.9146, "y": 52.4770 },
+      "end": { "x": -1.9086, "y": 52.4797 },
+      "profile": "stroller",
+      "safetyWeight": 0.6,
+      "preferences": ["avoid-stairs", "avoid-cobblestone"]
+    },
+    {
+      "name": "snow-hill-to-cathedral",
+      "start": { "x": -1.8991, "y": 52.4836 },
+      "end": { "x": -1.8995, "y": 52.4812 },
+      "profile": "standard",
+      "safetyWeight": 0.4,
+      "preferences": []
+    }
+  ]
+}

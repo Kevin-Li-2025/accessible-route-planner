@@ -330,7 +330,28 @@ public class RoutingController : ControllerBase
                 var response = new SafePathOptionsResponse
                 {
                     Recommended = primaryRoute,
-                    Variants = new List<RoutedOptionVariant>()
+                    Variants = new List<RoutedOptionVariant>(),
+                    Diagnostics = new RouteOptionSetDiagnostics
+                    {
+                        CandidateCount = primaryRoute.Path is null ? 0 : 1,
+                        ParetoEfficientCount = primaryRoute.Path is null ? 0 : 1,
+                        RecommendedPerformance = primaryRoute.Performance,
+                        Frontier = primaryRoute.Path is null
+                            ? new List<RouteTradeoffMetrics>()
+                            :
+                            [
+                                new RouteTradeoffMetrics
+                                {
+                                    Kind = "recommended",
+                                    DistanceMetres = primaryRoute.Distance,
+                                    EstimatedTimeMinutes = primaryRoute.EstimatedTime,
+                                    RiskExposure = Math.Round(1.0 - primaryRoute.SafetyScore, 4),
+                                    CompositeCost = Math.Round(primaryRoute.Distance / 1000.0 + (1.0 - primaryRoute.SafetyScore), 4),
+                                    FullSafetyCompositeCost = Math.Round(1.0 - primaryRoute.SafetyScore, 4),
+                                    ParetoEfficient = true
+                                }
+                            ]
+                    }
                 };
 
                 RecordSafePathOptions(stopwatch, "primary_route_only");

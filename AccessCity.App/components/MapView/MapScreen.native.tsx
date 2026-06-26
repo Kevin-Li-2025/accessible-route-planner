@@ -29,6 +29,7 @@ import {
 } from '../../services/geocoding.service';
 import {
   routingService,
+  type RoutePerformanceDiagnostics,
   type RouteRequest,
   type RouteResponse,
 } from '../../services/routing.service';
@@ -114,6 +115,7 @@ export default function MapScreen() {
   const [routeOptionCount, setRouteOptionCount] = useState(0);
   const [routeWarnings, setRouteWarnings] = useState<string[]>([]);
   const [routeExplanation, setRouteExplanation] = useState<string | null>(null);
+  const [routePerformance, setRoutePerformance] = useState<RoutePerformanceDiagnostics | null>(null);
 
   const [hazards, setHazards] = useState<Hazard[]>([]);
   const [contextPoints, setContextPoints] = useState<ContextMapPoint[]>([]);
@@ -809,10 +811,12 @@ export default function MapScreen() {
 
       let data: RouteResponse;
       let variantCount = 0;
+      let diagnosticsPerformance: RoutePerformanceDiagnostics | null | undefined;
       try {
         const options = await routingService.getSafePathOptionsResolved(routeRequest);
         data = options.recommended;
         variantCount = options.variants?.length ?? 0;
+        diagnosticsPerformance = options.diagnostics?.recommendedPerformance;
       } catch (optionsError) {
         console.warn('Route options unavailable; falling back to primary route:', optionsError);
         data = await routingService.getSafePathResolved(routeRequest);
@@ -865,6 +869,7 @@ export default function MapScreen() {
       setRouteOptionCount(variantCount);
       setRouteWarnings(Array.isArray(data?.warnings) ? data.warnings : []);
       setRouteExplanation(null);
+      setRoutePerformance(diagnosticsPerformance ?? data.performance ?? null);
 
       aiAssistService.explainRoute(routeRequest, data)
         .then((explanation) => {
@@ -1268,6 +1273,7 @@ export default function MapScreen() {
             optionCount={routeOptionCount}
             warnings={routeWarnings}
             explanation={routeExplanation}
+            performance={routePerformance}
             onPressRoute={handleStartRoute}
             onStartNavigation={handleStartNavigation}
           />

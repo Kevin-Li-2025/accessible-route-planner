@@ -13,11 +13,28 @@ AccessCity scales on application pressure, not only CPU:
 
 | Path | Target | Alert |
 | --- | --- | --- |
-| `/api/v*/routing/safe-path` | p95 below 1.5s over 5 minutes | `AccessCitySafePathP95TooSlow` |
+| `/api/v*/routing/safe-path/options` | p95 below 250ms and p99 below 1s for warmed graph/local dependency paths | `AccessCityRouteOptionsP99TooSlow` |
+| `/api/v*/routing/safe-path` | p95 below 1.5s over 5 minutes for full dependency path | `AccessCitySafePathP95TooSlow` |
 | API 5xx rate | below 1% over 5 minutes | `AccessCityHighErrorRate` |
 | route computation saturation | effectively zero sustained rejects | `AccessCityRouteCapacitySaturated` |
 | external dependency fallback rate | below 5% over 5 minutes | `AccessCityExternalDependencyFallbackSpike` |
 | shared cache hit ratio | above 70% over 15 minutes | `AccessCityLowCacheHitRatio` |
+
+## Local SLO Gate
+
+After running the k6 API p99 harness, convert the summary into a machine-readable SLO verdict:
+
+```bash
+SLO_ROUTE_P95_MS=250 \
+SLO_ROUTE_P99_MS=1000 \
+SLO_ROUTE_FAILURE_RATE=0.001 \
+node tools/evaluate-routing-slo.js \
+  TestResults/accesscity-routing-api-p99/k6-routing-api-summary.json \
+  TestResults/accesscity-routing-api-p99/routing_slo_report.json
+```
+
+This gate is intentionally stricter than the broad production safe-path SLO because it targets a warmed
+route graph and local dependency path. Use the full production SLO for internet OSRM/provider paths.
 
 ## Prometheus Metrics
 

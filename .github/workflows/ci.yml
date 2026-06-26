@@ -97,6 +97,20 @@ jobs:
           --
           DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
 
+      - name: City-scale low-latency benchmark gate
+        run: >
+          dotnet run --project AccessCity.SoakTestRunner/AccessCity.SoakTestRunner.csproj
+          --configuration Release
+          --no-build
+          --
+          city-benchmark
+          --hazards 50000
+          --queries 250000
+          --batch-size 256
+          --rtree-samples 10000
+          --max-grid-p99-us 25
+          --max-distance-p99-us 10
+
       - name: Upload backend test results
         if: always()
         uses: actions/upload-artifact@v7

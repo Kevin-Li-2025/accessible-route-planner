@@ -1,0 +1,44 @@
+[
+  {
+    "name": "golden-birmingham-core-standard",
+    "profile": "standard",
+    "safetyWeight": 0.45,
+    "preferences": [],
+    "startLat": 52.4862,
+    "startLng": -1.8904,
+    "endLat": 52.4862,
+    "endLng": -1.8894,
+    "expectRoute": true,
+    "maxLatencyMs": 30000,
+    "maxDistanceMetres": 500,
+    "minSafetyScore": 0.2
+  },
+  {
+    "name": "golden-birmingham-wheelchair-access",
+    "profile": "manual-wheelchair",
+    "safetyWeight": 0.75,
+    "preferences": ["avoid-stairs", "wheelchair"],
+    "startLat": 52.4835,
+    "startLng": -1.8885,
+    "endLat": 52.4862,
+    "endLng": -1.8904,
+    "expectRoute": true,
+    "maxLatencyMs": 30000,
+    "maxDistanceMetres": 1200,
+    "minSafetyScore": 0.2
+  },
+  {
+    "name": "golden-birmingham-stroller-surface",
+    "profile": "stroller",
+    "safetyWeight": 0.65,
+    "preferences": ["avoid-stairs", "avoid-cobblestone"],
+    "startLat": 52.4855,
+    "startLng": -1.9125,
+    "endLat": 52.4805,
+    "endLng": -1.9015,
+    "expectRoute": true,
+    "maxLatencyMs": 30000,
+    "maxDistanceMetres": 2500,
+    "minSafetyScore": 0.2
+  }
+]

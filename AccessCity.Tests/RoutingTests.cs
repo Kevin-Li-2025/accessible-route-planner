@@ -61,7 +61,12 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
                 EstimatedTime = Math.Max(1, distance / 1.2),
                 SafetyScore = safetyScore
             },
-            Variants = new List<RoutedOptionVariant>()
+            Variants = new List<RoutedOptionVariant>(),
+            Diagnostics = new RouteOptionSetDiagnostics
+            {
+                CandidateCount = 1,
+                ParetoEfficientCount = 1
+            }
         };
 
     [Fact]
@@ -1311,6 +1316,10 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
         Assert.NotNull(envelope!.Recommended);
         Assert.NotNull(envelope.Recommended.Path);
         Assert.True(envelope.Recommended.Distance > 0);
+        Assert.NotNull(envelope.Diagnostics);
+        Assert.True(envelope.Diagnostics.CandidateCount >= 1);
+        Assert.True(envelope.Diagnostics.ParetoEfficientCount >= 1);
+        Assert.False(string.IsNullOrWhiteSpace(envelope.Diagnostics.Algorithm));
 
         Assert.NotNull(envelope.Variants);
         foreach (var v in envelope.Variants)
@@ -1319,6 +1328,9 @@ public class RoutingTests : IClassFixture<AccessCityApiFactory>
             Assert.False(string.IsNullOrWhiteSpace(v.Description));
             Assert.NotNull(v.Route.Path);
             Assert.True(v.Route.Distance > 0);
+            Assert.Equal(v.Kind, v.Metrics.Kind);
+            Assert.True(v.Metrics.DistanceMetres > 0);
+            Assert.True(v.Metrics.FullSafetyCompositeCost >= 0);
         }
     }
 

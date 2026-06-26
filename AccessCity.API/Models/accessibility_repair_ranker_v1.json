@@ -1,0 +1,25 @@
+{
+  "version": "accessibility-repair-ranker-v1",
+  "kind": "auditable-logistic-linear-ranker",
+  "intercept": -1.2,
+  "weights": {
+    "dataGap": 2.4,
+    "penaltyReductionPer100Metres": 0.035,
+    "blockerScore": 1.15,
+    "kerbRisk": 0.65,
+    "missingWidth": 0.55,
+    "missingSmoothness": 0.45,
+    "missingSurface": 0.4,
+    "distanceLog": 0.18
+  },
+  "calibration": {
+    "low": 0.35,
+    "medium": 0.55,
+    "high": 0.75
+  },
+  "guardrails": [
+    "The model is a local auditable ranking model, not an autonomous repair decision.",
+    "Weights are versioned and deterministic so offline evaluations can reproduce results.",
+    "Candidates require human or trusted-source verification before map data changes."
+  ]
+}

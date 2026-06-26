@@ -1,0 +1,37 @@
+{
+  "name": "monaco-city-route-p99",
+  "routes": [
+    {
+      "name": "monte-carlo-to-port-hercule",
+      "start": { "x": 7.4273, "y": 43.7400 },
+      "end": { "x": 7.4210, "y": 43.7355 },
+      "profile": "standard",
+      "safetyWeight": 0.45,
+      "preferences": []
+    },
+    {
+      "name": "casino-to-japanese-garden",
+      "start": { "x": 7.4276, "y": 43.7395 },
+      "end": { "x": 7.4318, "y": 43.7431 },
+      "profile": "manual-wheelchair",
+      "safetyWeight": 0.7,
+      "preferences": ["avoid-stairs", "wheelchair"]
+    },
+    {
+      "name": "fontvieille-to-palace",
+      "start": { "x": 7.4174, "y": 43.7288 },
+      "end": { "x": 7.4206, "y": 43.7314 },
+      "profile": "stroller",
+      "safetyWeight": 0.6,
+      "preferences": ["avoid-stairs"]
+    },
+    {
+      "name": "larvotto-to-monte-carlo",
+      "start": { "x": 7.4354, "y": 43.7471 },
+      "end": { "x": 7.4274, "y": 43.7400 },
+      "profile": "standard",
+      "safetyWeight": 0.4,
+      "preferences": []
+    }
+  ]
+}

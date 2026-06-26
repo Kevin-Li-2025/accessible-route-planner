@@ -20,6 +20,7 @@ export type RouteResponse = {
   safetyScore?: number;
   warnings?: string[];
   steps?: any[];
+  performance?: RoutePerformanceDiagnostics | null;
   [key: string]: unknown;
 };
 
@@ -27,11 +28,50 @@ export type RouteVariant = {
   kind: string;
   description: string;
   route: RouteResponse;
+  metrics?: RouteTradeoffMetrics;
+};
+
+export type RoutePerformanceDiagnostics = {
+  algorithm?: string;
+  searchMilliseconds?: number;
+  nodesExpanded?: number;
+  edgesScanned?: number;
+  edgesRelaxed?: number;
+  edgesRejectedByFilter?: number;
+  riskLookups?: number;
+  riskCacheHits?: number;
+  riskCacheMisses?: number;
+  queuePushes?: number;
+  usedAltHeuristic?: boolean;
+  usedRelaxedAccessibilitySearch?: boolean;
+  foundPath?: boolean;
+};
+
+export type RouteTradeoffMetrics = {
+  kind?: string;
+  distanceMetres?: number;
+  estimatedTimeMinutes?: number;
+  riskExposure?: number;
+  accessibilityPenaltySeconds?: number;
+  compositeCost?: number;
+  fullSafetyCompositeCost?: number;
+  paretoEfficient?: boolean;
+};
+
+export type RouteOptionSetDiagnostics = {
+  algorithm?: string;
+  candidateCount?: number;
+  paretoEfficientCount?: number;
+  recommendedRegretSeconds?: number;
+  recommendedRiskRegret?: number;
+  frontier?: RouteTradeoffMetrics[];
+  recommendedPerformance?: RoutePerformanceDiagnostics | null;
 };
 
 export type SafePathOptionsResponse = {
   recommended: RouteResponse;
   variants: RouteVariant[];
+  diagnostics?: RouteOptionSetDiagnostics;
 };
 
 export type RouteJobResult = {

@@ -32,6 +32,11 @@ describe('RouteInfoCard', () => {
         travelTime="12 min"
         distance="2.1 km"
         safetyScore="85%"
+        performance={{
+          searchMilliseconds: 0.42,
+          nodesExpanded: 1234,
+          riskLookups: 5678,
+        }}
         onPressRoute={onPressRoute}
         onStartNavigation={onStartNavigation}
       />,
@@ -39,6 +44,10 @@ describe('RouteInfoCard', () => {
 
     expect(getByText('Good')).toBeTruthy();
     expect(getByText('Low')).toBeTruthy();
+    expect(getByText('Engine diagnostics')).toBeTruthy();
+    expect(getByText('0.42 ms')).toBeTruthy();
+    expect(getByText('1,234')).toBeTruthy();
+    expect(getByText('5,678')).toBeTruthy();
 
     fireEvent.press(getByText('Start Navigation'));
     expect(onStartNavigation).toHaveBeenCalled();

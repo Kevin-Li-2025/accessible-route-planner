@@ -2,6 +2,7 @@ import React from 'react';
 import { StyleSheet, View, Text, TouchableOpacity, type DimensionValue } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AppTheme } from '@/constants/theme';
+import type { RoutePerformanceDiagnostics } from '@/services/routing.service';
 
 type RouteInfoCardProps = {
   visible: boolean;
@@ -11,6 +12,7 @@ type RouteInfoCardProps = {
   optionCount?: number;
   warnings?: string[];
   explanation?: string | null;
+  performance?: RoutePerformanceDiagnostics | null;
   onPressRoute: () => void;
   onStartNavigation: () => void;
 };
@@ -23,6 +25,7 @@ export default function RouteInfoCard({
   optionCount = 0,
   warnings = [],
   explanation,
+  performance,
   onPressRoute,
   onStartNavigation,
 }: RouteInfoCardProps) {
@@ -52,6 +55,18 @@ export default function RouteInfoCard({
     numericSafetyScore === null || Number.isNaN(numericSafetyScore)
       ? '0%'
       : `${Math.max(0, Math.min(100, numericSafetyScore))}%`;
+  const engineLatency =
+    typeof performance?.searchMilliseconds === 'number'
+      ? `${performance.searchMilliseconds.toFixed(performance.searchMilliseconds < 10 ? 2 : 1)} ms`
+      : '--';
+  const nodesExpanded =
+    typeof performance?.nodesExpanded === 'number'
+      ? performance.nodesExpanded.toLocaleString()
+      : '--';
+  const riskLookups =
+    typeof performance?.riskLookups === 'number'
+      ? performance.riskLookups.toLocaleString()
+      : '--';
 
   if (!visible) {
     return (
@@ -158,6 +173,28 @@ export default function RouteInfoCard({
           <Text style={styles.accessibilitySubtitle}>
             {explanation || 'This route prioritizes step-free paths, smoother surfaces, and current safety reports.'}
           </Text>
+        </View>
+      </View>
+
+      <View style={styles.engineBox}>
+        <View style={styles.engineHeader}>
+          <Ionicons name="speedometer-outline" size={18} color={AppTheme.color.primary} />
+          <Text style={styles.engineTitle}>Engine diagnostics</Text>
+        </View>
+
+        <View style={styles.engineMetricsRow}>
+          <View style={styles.engineMetric}>
+            <Text style={styles.engineMetricValue}>{engineLatency}</Text>
+            <Text style={styles.engineMetricLabel}>Search</Text>
+          </View>
+          <View style={styles.engineMetric}>
+            <Text style={styles.engineMetricValue}>{nodesExpanded}</Text>
+            <Text style={styles.engineMetricLabel}>Nodes</Text>
+          </View>
+          <View style={styles.engineMetric}>
+            <Text style={styles.engineMetricValue}>{riskLookups}</Text>
+            <Text style={styles.engineMetricLabel}>Risk lookups</Text>
+          </View>
         </View>
       </View>
 
@@ -419,6 +456,47 @@ const styles = StyleSheet.create({
 
   accessibilitySubtitle: {
     color: AppTheme.color.textMuted,
+    ...AppTheme.type.meta,
+  },
+
+  engineBox: {
+    backgroundColor: AppTheme.color.surfaceSubtle,
+    borderRadius: AppTheme.radius.lg,
+    borderWidth: 1,
+    borderColor: AppTheme.color.border,
+    padding: AppTheme.space.md,
+    marginBottom: AppTheme.space.lg,
+  },
+
+  engineHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+
+  engineTitle: {
+    color: AppTheme.color.text,
+    marginLeft: 8,
+    ...AppTheme.type.cardTitle,
+  },
+
+  engineMetricsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+
+  engineMetric: {
+    flex: 1,
+  },
+
+  engineMetricValue: {
+    color: AppTheme.color.text,
+    ...AppTheme.type.cardTitle,
+  },
+
+  engineMetricLabel: {
+    color: AppTheme.color.textMuted,
+    marginTop: 3,
     ...AppTheme.type.meta,
   },
 

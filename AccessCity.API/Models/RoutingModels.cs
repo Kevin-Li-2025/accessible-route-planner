@@ -36,6 +36,7 @@ namespace AccessCity.API.Models
         public double SafetyScore { get; set; }
         public List<string> Warnings { get; set; } = new();
         public List<RouteStep> Steps { get; set; } = new();
+        public RoutePerformanceDiagnostics? Performance { get; set; }
     }
 
     /// <summary>
@@ -48,6 +49,9 @@ namespace AccessCity.API.Models
 
         /// <summary>Non-duplicate alternatives vs <see cref="Recommended"/> (may be empty if only one geometry).</summary>
         public List<RoutedOptionVariant> Variants { get; set; } = new();
+
+        /// <summary>Quant-style trade-off diagnostics for the route option set.</summary>
+        public RouteOptionSetDiagnostics Diagnostics { get; set; } = new();
     }
 
     /// <summary>Async routing job kind. Determines the response envelope workers compute and cache.</summary>
@@ -67,6 +71,48 @@ namespace AccessCity.API.Models
         public string Description { get; set; } = string.Empty;
 
         public RouteResponse Route { get; set; } = null!;
+
+        public RouteTradeoffMetrics Metrics { get; set; } = new();
+    }
+
+    public sealed class RouteOptionSetDiagnostics
+    {
+        public string Algorithm { get; set; } = "weighted-sum-pareto-diagnostics";
+        public int CandidateCount { get; set; }
+        public int ParetoEfficientCount { get; set; }
+        public double RecommendedRegretSeconds { get; set; }
+        public double RecommendedRiskRegret { get; set; }
+        public List<RouteTradeoffMetrics> Frontier { get; set; } = new();
+        public RoutePerformanceDiagnostics? RecommendedPerformance { get; set; }
+    }
+
+    public sealed class RoutePerformanceDiagnostics
+    {
+        public string Algorithm { get; set; } = string.Empty;
+        public double SearchMilliseconds { get; set; }
+        public int NodesExpanded { get; set; }
+        public int EdgesScanned { get; set; }
+        public int EdgesRelaxed { get; set; }
+        public int EdgesRejectedByFilter { get; set; }
+        public int RiskLookups { get; set; }
+        public int RiskCacheHits { get; set; }
+        public int RiskCacheMisses { get; set; }
+        public int QueuePushes { get; set; }
+        public bool UsedAltHeuristic { get; set; }
+        public bool UsedRelaxedAccessibilitySearch { get; set; }
+        public bool FoundPath { get; set; }
+    }
+
+    public sealed class RouteTradeoffMetrics
+    {
+        public string Kind { get; set; } = string.Empty;
+        public double DistanceMetres { get; set; }
+        public double EstimatedTimeMinutes { get; set; }
+        public double RiskExposure { get; set; }
+        public double AccessibilityPenaltySeconds { get; set; }
+        public double CompositeCost { get; set; }
+        public double FullSafetyCompositeCost { get; set; }
+        public bool ParetoEfficient { get; set; }
     }
 
     public sealed class RouteGraphProfileRequest

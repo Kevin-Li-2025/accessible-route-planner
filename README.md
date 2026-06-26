@@ -15,6 +15,7 @@ Current verified baseline:
 - Full backend test suite: 264 xUnit tests passing in Release mode on the current branch.
 
 See [K6 load results](docs/K6_LOAD_TEST_RESULTS.md), [route graph preprocessing](docs/ROUTE_GRAPH_PREPROCESSING.md), and [distributed load testing](docs/DISTRIBUTED_LOAD_TESTING.md) for methodology and limits.
+Accessibility planning intelligence is documented in [Accessibility Planning Intelligence](docs/ACCESSIBILITY_PLANNING_INTELLIGENCE.md).
 
 ## What It Does
 

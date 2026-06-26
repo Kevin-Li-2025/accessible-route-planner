@@ -30,6 +30,7 @@ public static class RoutingModule
         services.AddScoped<IRouteCacheService, RouteCacheService>();
         services.AddScoped<IRouteOptionsCacheService, RouteOptionsCacheService>();
         services.AddScoped<IHazardQueryService, HazardQueryService>();
+        services.AddScoped<IAccessibilityPlanningService, AccessibilityPlanningService>();
 
         services.AddScoped<RoutingService>();
         services.AddScoped<IRoutingService>(sp => sp.GetRequiredService<RoutingService>());
