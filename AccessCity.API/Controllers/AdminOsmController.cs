@@ -4,6 +4,7 @@ using AccessCity.API.Security;
 using AccessCity.API.Services;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http.Timeouts;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 
@@ -35,6 +36,7 @@ public class AdminOsmController : ControllerBase
     /// Use POST /import-jobs for production-scale imports.
     /// </summary>
     [HttpPost("import")]
+    [DisableRequestTimeout]
     [ProducesResponseType(typeof(OsmImportResult), StatusCodes.Status200OK)]
     public async Task<ActionResult<OsmImportResult>> Import(CancellationToken cancellationToken)
     {
@@ -47,6 +49,7 @@ public class AdminOsmController : ControllerBase
     /// configured consumer group handles the job across all API replicas.
     /// </summary>
     [HttpPost("import-jobs")]
+    [DisableRequestTimeout]
     [ProducesResponseType(typeof(OsmImportJobResponse), StatusCodes.Status202Accepted)]
     public async Task<ActionResult<OsmImportJobResponse>> QueueImport(CancellationToken cancellationToken)
     {
@@ -76,6 +79,7 @@ public class AdminOsmController : ControllerBase
     /// Use this after a real city OSM import to measure shard reuse, Redis payload size, and hot-load time.
     /// </summary>
     [HttpPost("route-graph/profile")]
+    [DisableRequestTimeout]
     [ProducesResponseType(typeof(RouteGraphProfileResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<RouteGraphProfileResponse>> ProfileRouteGraph(
         [FromBody] RouteGraphProfileRequest request,

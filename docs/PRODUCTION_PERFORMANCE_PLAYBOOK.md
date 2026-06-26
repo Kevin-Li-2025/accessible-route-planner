@@ -72,6 +72,35 @@ Measured local Monaco run on 2026-06-26:
 - HTTP p95/p99: 476.87 ms / 1,555.71 ms
 - end-to-end p95/p99: 477.15 ms / 1,556.57 ms
 
+Measured local West Midlands run on 2026-06-26:
+
+```bash
+CITY_NAME=west-midlands \
+OSM_URL=https://download.geofabrik.de/europe/united-kingdom/england/west-midlands-latest.osm.pbf \
+ROUTE_DATASET_FILE=tools/k6/birmingham-city-routes.json \
+DURATION=45s \
+ROUTE_RATE=4 \
+ROUTE_P95_MS=300 \
+ROUTE_P99_MS=1000 \
+PROFILE_FLAMEGRAPH=true \
+PROFILE_DURATION_SECONDS=45 \
+SKIP_IMPORT=true \
+tools/run-real-city-api-p99.sh
+```
+
+- import scale: 6,719,409 OSM records, 754,727 route nodes, 1,633,260 route edges
+- import duration: 2m48s on local Postgres/PostGIS
+- cold local-graph API run: 180 requests, 0 failures, p95 422.31 ms, p99 2,238.42 ms
+- flamegraph hotspot: first requests spend time in `RouteGraphRepository.LoadGraphRegionAsync` and `RoutingService.FindSafePathFallback`
+- optimized warm local-graph API run: 181 requests, 0 failures, p95 26.35 ms, p99 95.72 ms
+- flamegraph artifacts: `TestResults/accesscity-west-midlands-warm-localgraph-p99-flamegraph/flamegraph/*.speedscope.json`
+
+The real-city harness disables external OSRM by default through `Routing__ExternalOsrmEnabled=false`.
+That keeps p99 focused on AccessCity's local API, cache, PostGIS, and graph-routing behavior instead of public-network latency.
+Set `EXTERNAL_OSRM_ENABLED=true` when you explicitly want product-routing behavior that includes the public OSRM dependency.
+
+The harness also warms the benchmark route set by default before k6 starts. Disable it with `WARMUP_ROUTE_CACHE=false` when measuring cold-start p99.
+
 ## SLO Gate
 
 Convert a k6 summary to a machine-readable SLO verdict:
@@ -154,6 +183,33 @@ TestResults/accesscity-cpp-kernel/cpp_kernel_report.json
 This comparison is intentionally narrow. It answers whether the distance kernel is competitive with an optimized native implementation; it does not claim that the whole routing system is C++/HFT-equivalent.
 
 The C++ comparison now also reports dense risk-grid lookup p50/p95/p99 so the project has a native baseline for the same kind of hot path used by city-scale risk lookup.
+
+## City-Scale Hot-Path Benchmark
+
+Run the 10M-query city benchmark:
+
+```bash
+dotnet AccessCity.SoakTestRunner/bin/Release/net9.0/AccessCity.SoakTestRunner.dll \
+  city-benchmark \
+  --hazards 1000000 \
+  --queries 10000000 \
+  --rounds 1 \
+  --rtree-samples 20000 \
+  --batch-size 512 \
+  --max-grid-p99-us 50 \
+  --max-distance-p99-us 10
+```
+
+Measured local run on 2026-06-26:
+
+- hazards: 1,000,000
+- queries: 10,000,000
+- H3 risk lookup: p50 0.005 us, p95 0.0107 us, p99 0.027 us, 137,319,631 ops/s, 0 allocated bytes per lookup
+- distance kernel: p50 0.0073 us, p95 0.0202 us, p99 0.0372 us, 95,576,527 ops/s, 0 allocated bytes per call
+- R-tree nearby query sample: p95 720.2379 us, p99 764.2852 us
+- gate: passed
+
+This is an algorithm hot-path benchmark. It supports low-latency claims for risk lookup and distance kernels, while the real-city API p99 section remains the system-level latency claim.
 
 ## AI Model Evaluation
 

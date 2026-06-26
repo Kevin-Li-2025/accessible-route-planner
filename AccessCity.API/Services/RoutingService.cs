@@ -132,7 +132,9 @@ public class RoutingService : IRoutingService
         }
 
         // ── Tier 1: OSRM with alternatives + PostGIS obstacle scoring ──
-        var alternatives = await _osrmClient.GetAlternativeRoutesAsync(request.Start, request.End, cancellationToken);
+        var alternatives = _routingOptions.ExternalOsrmEnabled
+            ? await _osrmClient.GetAlternativeRoutesAsync(request.Start, request.End, cancellationToken)
+            : null;
 
         if (alternatives != null && alternatives.Count > 0
             && !IsOsrmDetourExcessive(request.Start, request.End, alternatives))
@@ -211,7 +213,9 @@ public class RoutingService : IRoutingService
             };
         }
 
-        var alternatives = await _osrmClient.GetAlternativeRoutesAsync(request.Start, request.End, cancellationToken);
+        var alternatives = _routingOptions.ExternalOsrmEnabled
+            ? await _osrmClient.GetAlternativeRoutesAsync(request.Start, request.End, cancellationToken)
+            : null;
         if (alternatives == null || alternatives.Count == 0
             || IsOsrmDetourExcessive(request.Start, request.End, alternatives))
         {

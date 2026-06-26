@@ -14,6 +14,7 @@ public sealed class RoutingOptions
     public int MaxRiskQueryRadiusMetres { get; set; } = 2_500;
     public int MaxRouteGraphEdges { get; set; } = 20_000;
     public double RouteGraphMaxSnapDistanceMetres { get; set; } = 150;
+    public bool ExternalOsrmEnabled { get; set; } = true;
     public bool AsyncFirstForCacheMiss { get; set; }
     public int AsyncFirstCacheProbeMilliseconds { get; set; } = 150;
     public bool DispatchJobsToWorker { get; set; }

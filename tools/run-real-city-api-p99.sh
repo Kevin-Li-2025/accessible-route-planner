@@ -28,6 +28,11 @@ ROUTE_RATE="${ROUTE_RATE:-8}"
 ROUTE_P95_MS="${ROUTE_P95_MS:-1500}"
 ROUTE_P99_MS="${ROUTE_P99_MS:-3000}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-TestResults/accesscity-real-city-api-p99}"
+PROFILE_FLAMEGRAPH="${PROFILE_FLAMEGRAPH:-false}"
+PROFILE_DURATION_SECONDS="${PROFILE_DURATION_SECONDS:-${DURATION%s}}"
+SKIP_IMPORT="${SKIP_IMPORT:-false}"
+EXTERNAL_OSRM_ENABLED="${EXTERNAL_OSRM_ENABLED:-false}"
+WARMUP_ROUTE_CACHE="${WARMUP_ROUTE_CACHE:-true}"
 JWT_KEY="${JWT_KEY:-AccessCity_Local_P99_Test_Jwt_Key_Placeholder_Not_For_Production_64_Bytes}"
 JWT_ISSUER="${JWT_ISSUER:-AccessCity.Local}"
 JWT_AUDIENCE="${JWT_AUDIENCE:-AccessCity.Local}"
@@ -40,6 +45,11 @@ if [[ ! -f "$OSM_FILE" ]]; then
   echo "Downloading $CITY_NAME OSM extract from $OSM_URL"
   curl -L --fail --retry 3 --output "$OSM_FILE.tmp" "$OSM_URL"
   mv "$OSM_FILE.tmp" "$OSM_FILE"
+fi
+if file "$OSM_FILE" | grep -Eqi 'html|text'; then
+  echo "Downloaded OSM file does not look like a PBF extract: $OSM_FILE" >&2
+  echo "Check OSM_URL=$OSM_URL" >&2
+  exit 2
 fi
 
 "$DOTNET_CLI" build CodeConquerors.sln --configuration Release --nologo >/dev/null
@@ -67,6 +77,7 @@ Workers__OsmImport__Enabled=false \
 Workers__Routing__Enabled=false \
 Workers__TileWarming__Enabled=false \
 Routing__RouteGraphWarmupEnabled=false \
+Routing__ExternalOsrmEnabled="$EXTERNAL_OSRM_ENABLED" \
 HotPathWarmup__Enabled=false \
 ExternalApis__Overpass__RealtimeHazardsEnabled=false \
 OsmImport__FilePath="$OSM_FILE" \
@@ -102,14 +113,80 @@ if [[ -z "$token" ]]; then
 fi
 
 echo "Importing OSM extract: $OSM_FILE"
-curl -fsS -X POST "${BASE_URL}/api/v1/admin/osm/import" \
-  -H "Authorization: Bearer $token" \
-  -o "$ARTIFACT_DIR/osm-import-response.json"
+if [[ "$SKIP_IMPORT" == "true" ]]; then
+  echo "{\"skipped\":true,\"reason\":\"SKIP_IMPORT=true\"}" > "$ARTIFACT_DIR/osm-import-response.json"
+else
+  curl -fsS -X POST "${BASE_URL}/api/v1/admin/osm/import" \
+    -H "Authorization: Bearer $token" \
+    -o "$ARTIFACT_DIR/osm-import-response.json"
+fi
 
 curl -fsS "${BASE_URL}/api/v1/routing/route-graph/status" \
   -o "$ARTIFACT_DIR/route-graph-status.json"
 
+if [[ "$WARMUP_ROUTE_CACHE" == "true" ]]; then
+  echo "Warming route cache with $ROUTE_DATASET_FILE"
+  node - "$BASE_URL" "$ROUTE_DATASET_FILE" "$ARTIFACT_DIR/route-cache-warmup.json" <<'NODE'
+const fs = require('fs');
+const [baseUrl, routeDatasetFile, outputPath] = process.argv.slice(2);
+const routes = JSON.parse(fs.readFileSync(routeDatasetFile, 'utf8')).routes;
+const started = Date.now();
+const results = [];
+
+async function warm(route) {
+  const payload = {
+    start: route.start,
+    end: route.end,
+    profile: route.profile || 'standard',
+    safetyWeight: route.safetyWeight ?? 0.5,
+    preferences: route.preferences || []
+  };
+  const routeStarted = Date.now();
+  const response = await fetch(`${baseUrl}/api/v1/routing/safe-path/options`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const body = await response.text();
+  results.push({
+    name: route.name || 'route',
+    status: response.status,
+    durationMs: Date.now() - routeStarted,
+    responseBytes: body.length
+  });
+  if (!response.ok && response.status !== 202) {
+    throw new Error(`Warmup failed for ${route.name || 'route'} with HTTP ${response.status}: ${body.slice(0, 500)}`);
+  }
+}
+
+(async () => {
+  for (const route of routes) {
+    await warm(route);
+  }
+  fs.writeFileSync(outputPath, JSON.stringify({
+    generatedAtUtc: new Date().toISOString(),
+    totalDurationMs: Date.now() - started,
+    routeCount: routes.length,
+    results
+  }, null, 2));
+})().catch((error) => {
+  console.error(error.stack || String(error));
+  process.exit(1);
+});
+NODE
+fi
+
 echo "Running city API p99 with route dataset $ROUTE_DATASET_FILE"
+if [[ "$PROFILE_FLAMEGRAPH" == "true" ]]; then
+  PROFILE_ARTIFACT_DIR="$ARTIFACT_DIR/flamegraph"
+  mkdir -p "$PROFILE_ARTIFACT_DIR"
+  ARTIFACT_DIR="$PROFILE_ARTIFACT_DIR" \
+  DURATION_SECONDS="$PROFILE_DURATION_SECONDS" \
+  tools/profile-routing-api-flamegraph.sh "$API_PID" \
+    >"$PROFILE_ARTIFACT_DIR/profile.log" 2>&1 &
+  PROFILE_PID=$!
+fi
+
 BASE_URL="$BASE_URL" \
 ROUTE_DATASET_FILE="$ROUTE_DATASET_FILE" \
 DURATION="$DURATION" \
@@ -118,6 +195,14 @@ ROUTE_P95_MS="$ROUTE_P95_MS" \
 ROUTE_P99_MS="$ROUTE_P99_MS" \
 ARTIFACT_DIR="$ARTIFACT_DIR/k6" \
 tools/run-routing-api-p99-test.sh
+
+if [[ -n "${PROFILE_PID:-}" ]]; then
+  wait "$PROFILE_PID" || {
+    echo "Flamegraph capture failed. See $PROFILE_ARTIFACT_DIR/profile.log" >&2
+    cat "$PROFILE_ARTIFACT_DIR/profile.log" >&2 || true
+    exit 1
+  }
+fi
 
 node - "$ARTIFACT_DIR" "$CITY_NAME" "$OSM_URL" "$OSM_FILE" "$ROUTE_DATASET_FILE" <<'NODE'
 const fs = require('fs');
@@ -146,7 +231,8 @@ const report = {
   httpReqFailed: metric('http_req_failed'),
   routeApiFailure: metric('route_api_failure'),
   checks: metric('checks'),
-  claimBoundary: 'Full HTTP p99 against a local AccessCity.API process, local Postgres/PostGIS, imported OSM route graph, and local rate limits raised for service-capacity measurement.'
+  externalOsrmEnabled: process.env.EXTERNAL_OSRM_ENABLED === 'true',
+  claimBoundary: 'Full HTTP p99 against a local AccessCity.API process, local Postgres/PostGIS, imported OSM route graph, and local rate limits raised for service-capacity measurement. External OSRM is disabled by default in this harness so p99 reflects local graph and API performance rather than public network latency.'
 };
 fs.writeFileSync(`${dir}/real_city_api_p99_report.json`, JSON.stringify(report, null, 2));
 fs.writeFileSync(`${dir}/real_city_api_p99_report.md`, `# AccessCity Real City API p99

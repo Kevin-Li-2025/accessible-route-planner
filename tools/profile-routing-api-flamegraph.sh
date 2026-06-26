@@ -38,12 +38,16 @@ fi
 mkdir -p "$ARTIFACT_DIR"
 
 echo "Collecting CPU profile from pid=$PID for ${DURATION_SECONDS}s"
+DURATION_TIMESPAN="$(printf '00:00:%02d' "$DURATION_SECONDS")"
+if (( DURATION_SECONDS >= 60 )); then
+  DURATION_TIMESPAN="$(printf '00:%02d:%02d' $((DURATION_SECONDS / 60)) $((DURATION_SECONDS % 60)))"
+fi
 "${DOTNET_TRACE[@]}" collect \
   --process-id "$PID" \
-  --profile cpu-sampling \
-  --duration "00:00:${DURATION_SECONDS}" \
+  --providers Microsoft-DotNETCore-SampleProfiler \
+  --duration "$DURATION_TIMESPAN" \
   --output "$TRACE_FILE" \
-  --format speedscope
+  --format Speedscope
 
 if [[ -f "${TRACE_FILE%.nettrace}.speedscope.json" ]]; then
   mv "${TRACE_FILE%.nettrace}.speedscope.json" "$SPEEDSCOPE_FILE"
