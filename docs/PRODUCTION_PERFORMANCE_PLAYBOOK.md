@@ -235,6 +235,70 @@ Measured local C++ run with 10-thread parallel lookup on 2026-06-26:
 - dense-grid lookup: p50 0.0059 us, p95 0.0069 us, p99 0.0194 us, 185,411,081 ops/s
 - parallel dense-grid lookup: 10 threads, 2,106,075,881 ops/s, 11.359x vs single-thread
 
+## Linux Perf Counters
+
+Run hardware counter and flamegraph-source captures on Linux:
+
+```bash
+QUERIES=10000000 \
+HAZARDS=1000000 \
+MESSAGES=1000000 \
+PRODUCER_CPU=0 \
+CONSUMER_CPU=1 \
+tools/run-linux-perf-cpp-benchmarks.sh
+```
+
+Artifacts:
+
+```text
+TestResults/accesscity-linux-perf/risk_kernel_perf_stat.csv
+TestResults/accesscity-linux-perf/risk_kernel_perf.data
+TestResults/accesscity-linux-perf/risk_kernel_perf_report.txt
+TestResults/accesscity-linux-perf/market_data_replay_perf_stat.csv
+TestResults/accesscity-linux-perf/market_data_replay_perf.data
+TestResults/accesscity-linux-perf/market_data_replay_perf_report.txt
+TestResults/accesscity-linux-perf/linux_perf_summary.json
+```
+
+The summary computes cycles/query, IPC, cache miss rate, and branch miss rate from `perf stat -x,`.
+`perf record -F 999 -g` captures sampled call stacks for the C++ spatial kernel and lock-free replay path.
+This script intentionally exits on non-Linux hosts because macOS does not expose Linux perf counters.
+
+## Market-Data Style C++ Replay and Network Ingest
+
+Run the lock-free SPSC replay plus TCP/UDP loopback ingest benchmark:
+
+```bash
+MESSAGES=1000000 \
+NETWORK_MESSAGES=100000 \
+PRODUCER_CPU=-1 \
+CONSUMER_CPU=-1 \
+tools/run-market-data-benchmark.sh
+```
+
+Use `PRODUCER_CPU` and `CONSUMER_CPU` on Linux to pin the producer and consumer threads.
+
+Artifacts:
+
+```text
+TestResults/accesscity-market-data/spsc_replay_report.json
+TestResults/accesscity-market-data/udp_loopback_report.json
+TestResults/accesscity-market-data/tcp_loopback_report.json
+TestResults/accesscity-market-data/market_data_summary.json
+TestResults/accesscity-market-data/market_data_summary.md
+```
+
+Measured local macOS run on 2026-06-26:
+
+| Mode | Messages | Received | Losses | Throughput msg/s | p50 ns | p95 ns | p99 ns | max ns |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| spsc_replay | 1,000,000 | 1,000,000 | 0 | 11,210,872 | 43,458 | 152,042 | 170,209 | 287,542 |
+| udp_loopback | 100,000 | 100,000 | 0 | 93,852 | 18,541 | 78,459 | 1,344,292 | 49,173,875 |
+| tcp_loopback | 100,000 | 100,000 | 0 | 229,806 | 21,500 | 110,584 | 334,792 | 1,044,541 |
+
+The macOS loopback numbers are useful smoke evidence, not hardware-counter evidence.
+For low-latency claims, prefer the Linux perf path with CPU pinning and dedicated cores.
+
 ## City-Scale Hot-Path Benchmark
 
 Run the 10M-query city benchmark:

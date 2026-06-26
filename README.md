@@ -13,6 +13,7 @@ Current verified baseline:
 - Distributed k6 run: 6 API pods, 2 worker pods, 3 Postgres instances, 3 PgBouncer pods, 3 Kafka brokers, Redis; 145,334 requests, 440 req/s, 0 HTTP failures, safe-path p95 167.56 ms in the checked-in scenario.
 - Real city API p99 matrix: West Midlands OSM extract, 754,727 route nodes, 1,633,260 route edges; 4/16/64/128 rps local-graph runs with 0 HTTP failures. At 128 rps, 5,759 requests completed with p95 6.51 ms and p99 239.90 ms.
 - Low-latency spatial kernels: 1,000,000 hazards and 10,000,000 queries. C++ dense-grid lookup reaches 185.4M ops/s single-thread p99 0.0194 us, and 2.1B ops/s on 10 threads. The .NET H3 hot path reaches 137.3M ops/s with p99 0.027 us.
+- Market-data style C++ benchmark: lock-free SPSC feed replay reaches 11.2M messages/s over 1,000,000 generated updates with p99 170 us, plus TCP/UDP loopback ingest latency reports and a Linux `perf stat`/`perf record` harness for cycles/query, IPC, cache misses, and branch misses.
 - Full backend test suite: 307 xUnit tests passing in Release mode on the current branch.
 
 See [Production Performance Playbook](docs/PRODUCTION_PERFORMANCE_PLAYBOOK.md), [K6 load results](docs/K6_LOAD_TEST_RESULTS.md), [route graph preprocessing](docs/ROUTE_GRAPH_PREPROCESSING.md), and [distributed load testing](docs/DISTRIBUTED_LOAD_TESTING.md) for methodology and limits.
