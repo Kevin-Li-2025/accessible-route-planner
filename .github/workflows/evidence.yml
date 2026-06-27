@@ -142,6 +142,29 @@ jobs:
           }
           JSON
 
+      - name: Write GitHub evidence summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "# AccessCity Evidence"
+            echo
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Ref: \`${GITHUB_REF_NAME}\`"
+            echo "- Backend AI tests: \`${{ inputs.run_backend_tests }}\`"
+            echo "- City benchmark: \`${{ inputs.run_city_benchmark }}\`"
+            echo "- Native benchmarks: \`${{ inputs.run_native_benchmarks }}\`"
+            echo
+            if [ -f TestResults/accesscity-ai-model-eval/accessibility_ranker_eval_summary.md ]; then
+              cat TestResults/accesscity-ai-model-eval/accessibility_ranker_eval_summary.md
+            else
+              echo "AI model evaluation summary was not generated in this run."
+            fi
+            echo
+            echo "Claim boundary: workflow evidence is scoped to the selected GitHub Actions runner, dataset size, and enabled steps."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload evidence artifacts
         if: always()
         uses: actions/upload-artifact@v7
@@ -151,4 +174,5 @@ jobs:
             TestResults/
             BenchmarkDotNet.Artifacts/
             data/route-graph-artifacts/profile-report.json
+            docs/ACCESSIBILITY_REPAIR_RANKER_MODEL_CARD.md
           if-no-files-found: ignore

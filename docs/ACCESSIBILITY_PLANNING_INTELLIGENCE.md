@@ -70,6 +70,8 @@ The API also emits:
 
 This gives planners two queues instead of one: high-confidence fixes that likely reduce accessibility penalties, and uncertain/high-information candidates that are worth measuring because they can improve the data model and map quality.
 
+The model card, evaluation contract, gates, and upgrade path are documented in [Accessibility Repair Ranker Model Card](ACCESSIBILITY_REPAIR_RANKER_MODEL_CARD.md).
+
 ## Quant-Style Frontier Metrics
 
 Repair candidates include:

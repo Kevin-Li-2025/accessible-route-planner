@@ -62,6 +62,7 @@ Default mode runs:
 
 - Release build.
 - Accessibility-planning tests that emit `TestResults/accesscity-ai-model-eval/accessibility_ranker_eval_report.json`.
+- Markdown model-evaluation summary at `TestResults/accesscity-ai-model-eval/accessibility_ranker_eval_summary.md`, appended to the GitHub Actions run summary when present.
 - CI-sized city-scale low-latency benchmark gate.
 - Evidence manifest with the commit SHA, ref, selected steps, and claim boundary.
 
