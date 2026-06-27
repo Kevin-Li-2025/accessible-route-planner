@@ -28,6 +28,7 @@ The response contains:
 - barrier/stairs and high-penalty shares,
 - ranked repair or field-verification candidates,
 - deterministic AI-style review priority,
+- active-learning score and review strategy for deciding which uncertain/high-impact candidates deserve field verification first,
 - quant-style accessibility alpha, uncertainty, and efficient-frontier rows,
 - counterfactual penalty reduction estimates,
 - guardrails that state the result is review-only.
@@ -57,7 +58,17 @@ Each candidate receives a bounded priority score from:
 
 The counterfactual calculation simulates a reviewed repair state such as known good surface, known smoothness, sufficient clear width, lowered kerb, and removed barrier. It does not write back to the graph and does not affect production routing.
 
-The ranking model is versioned as `accessibility-planning-v2` and is deterministic. It is AI-style triage in the narrow sense of prioritizing review work from multiple signals; it is not a trained black-box model and does not make autonomous routing decisions.
+The ranking model is versioned as `accessibility-repair-ranker-v1` and is deterministic. It is AI-style triage in the narrow sense of prioritizing review work from multiple signals; it is not a trained black-box model and does not make autonomous routing decisions.
+
+The API also emits:
+
+- `modelScore`: local auditable model probability for repair/review value.
+- `modelConfidence`: coarse confidence band from versioned calibration thresholds.
+- `featureContributions`: per-feature linear contribution for auditability.
+- `activeLearningScore`: uncertainty-sampling score that combines model margin uncertainty, metadata gap severity, and expected accessibility impact.
+- `reviewStrategy`: the operational review path, such as `active-learning-field-verification`, `high-confidence-repair-review`, `uncertainty-sampling`, or `routine-field-verification`.
+
+This gives planners two queues instead of one: high-confidence fixes that likely reduce accessibility penalties, and uncertain/high-information candidates that are worth measuring because they can improve the data model and map quality.
 
 ## Quant-Style Frontier Metrics
 
@@ -67,6 +78,7 @@ Repair candidates include:
 - `dataUncertaintyPenalty`: discount for missing or weak metadata.
 - `accessibilityAlpha`: excess accessibility improvement after uncertainty discount and blocker lift.
 - `reviewPriority`: `critical`, `high`, `medium`, or `low` from the bounded priority score.
+- `activeLearningScore`: expected information value for the next human or trusted-source verification action.
 
 The `efficientFrontier` response highlights the strongest candidates by accessibility alpha, uncertainty, and priority. This mirrors a quant research workflow: compare expected improvement against uncertainty and implementation proxy cost instead of ranking by one raw score.
 
@@ -112,6 +124,7 @@ no unreviewed route-cost mutation
 no p95 latency regression above the configured SLO
 manual-wheelchair benchmark deltas explained route-by-route
 planning candidates reproducible from the same graph snapshot
+active-learning queue does not bypass human verification
 ```
 
 ## Route Option Diagnostics

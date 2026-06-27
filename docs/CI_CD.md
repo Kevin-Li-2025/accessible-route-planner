@@ -12,6 +12,8 @@ AccessCity uses GitHub Actions as the primary CI/CD path and keeps GitLab CI as 
 - Container security: fresh API image build with pulled base layers, then a Grype fixed high/critical vulnerability gate.
 - Pull requests also run GitHub dependency review for new high+ dependency risk.
 - CI disables live Overpass hazard enrichment so tests remain deterministic and do not depend on external API tail latency.
+- Repository hygiene is enforced through a PR template, CODEOWNERS for high-risk surfaces, and issue templates for performance and AI model evidence.
+- The manual `Evidence` workflow builds a downloadable proof pack for backend accessibility-planning tests, the AI model evaluation artifact, city-scale low-latency benchmark gates, and optional native/C++ benchmark smoke runs.
 
 ## CD path
 
@@ -51,3 +53,16 @@ kubectl kustomize deploy/kubernetes-capacity >/tmp/accesscity-capacity.yaml
 docker build --pull -t accesscity-api:ci ./AccessCity.API
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/anchore/grype:v0.112.0 accesscity-api:ci --only-fixed --fail-on high
 ```
+
+## Evidence workflow
+
+Run `.github/workflows/evidence.yml` manually when a PR changes benchmark-sensitive routing code, AI/planning intelligence, or public performance claims.
+
+Default mode runs:
+
+- Release build.
+- Accessibility-planning tests that emit `TestResults/accesscity-ai-model-eval/accessibility_ranker_eval_report.json`.
+- CI-sized city-scale low-latency benchmark gate.
+- Evidence manifest with the commit SHA, ref, selected steps, and claim boundary.
+
+Optional native mode also runs the C++ kernel and market-data benchmark scripts when the GitHub runner has the required compiler/toolchain. Treat those numbers as runner-scoped smoke evidence, not a substitute for pinned-host Linux `perf stat`/`perf record` captures.

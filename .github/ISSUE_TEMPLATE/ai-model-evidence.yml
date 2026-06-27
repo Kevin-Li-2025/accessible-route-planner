@@ -1,0 +1,35 @@
+name: AI model evidence
+description: Track an auditable AI/planning model change or evaluation.
+title: "[ai] "
+labels:
+  - ai
+  - evaluation
+body:
+  - type: textarea
+    id: model
+    attributes:
+      label: Model or algorithm
+      description: Version, features, deterministic/learned boundary, and intended use.
+    validations:
+      required: true
+  - type: textarea
+    id: evaluation
+    attributes:
+      label: Evaluation
+      description: Dataset, metrics, report path, and pass/fail threshold.
+    validations:
+      required: true
+  - type: textarea
+    id: guardrails
+    attributes:
+      label: Guardrails
+      description: Human-review requirements and production safety boundary.
+    validations:
+      required: true
+  - type: textarea
+    id: regression
+    attributes:
+      label: Regression checks
+      description: Tests, route-impact checks, or benchmark gates run for this change.
+    validations:
+      required: true

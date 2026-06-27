@@ -128,6 +128,12 @@ public sealed class AccessibilityPlanningService : IAccessibilityPlanningService
                 : 0,
             0,
             100);
+        var activeLearningScore = Math.Clamp(
+            hasActionableGap
+                ? ComputeActiveLearningScore(modelPrediction.Score, dataGap, penaltyReductionPer100Metres, blockerScore)
+                : 0,
+            0,
+            100);
         var centroid = TryGetCentroid(edge);
 
         return new EdgePlanningFeatures(
@@ -141,6 +147,7 @@ public sealed class AccessibilityPlanningService : IAccessibilityPlanningService
             uncertaintyPenalty,
             accessibilityAlpha,
             modelPrediction,
+            activeLearningScore,
             priority);
     }
 
@@ -221,8 +228,10 @@ public sealed class AccessibilityPlanningService : IAccessibilityPlanningService
                     Contribution = Math.Round(contribution.Contribution, 4)
                 })
                 .ToList(),
+            ActiveLearningScore = Math.Round(features.ActiveLearningScore, 2),
             PriorityScore = Math.Round(features.PriorityScore, 2),
             ReviewPriority = ResolveReviewPriority(features.PriorityScore),
+            ReviewStrategy = ResolveReviewStrategy(features),
             Reasons = BuildReasons(edge, features.CurrentPenaltySeconds, features.EstimatedPenaltyReductionSeconds),
             SuggestedFieldChecks = BuildSuggestedChecks(edge)
         };
@@ -256,6 +265,41 @@ public sealed class AccessibilityPlanningService : IAccessibilityPlanningService
         >= 25 => "medium",
         _ => "low"
     };
+
+    private static double ComputeActiveLearningScore(
+        double modelScore,
+        double dataGap,
+        double penaltyReductionPer100Metres,
+        double blockerScore)
+    {
+        var marginUncertainty = 1 - Math.Abs(modelScore - 0.5) * 2;
+        var informationValue = Math.Clamp(dataGap, 0, 1) * 45
+                               + Math.Clamp(marginUncertainty, 0, 1) * 30;
+        var expectedImpact = Math.Min(20, Math.Max(0, penaltyReductionPer100Metres) * 0.08)
+                             + blockerScore * 5;
+
+        return informationValue + expectedImpact;
+    }
+
+    private static string ResolveReviewStrategy(EdgePlanningFeatures features)
+    {
+        if (features.ActiveLearningScore >= 65 && features.PriorityScore >= 50)
+        {
+            return "active-learning-field-verification";
+        }
+
+        if (features.ModelPrediction.Score >= 0.8 || features.PriorityScore >= 75)
+        {
+            return "high-confidence-repair-review";
+        }
+
+        if (features.ActiveLearningScore >= 45)
+        {
+            return "uncertainty-sampling";
+        }
+
+        return "routine-field-verification";
+    }
 
     private static double EstimateCounterfactualPenalty(RouteEdge edge, string profile)
     {
@@ -454,6 +498,7 @@ public sealed class AccessibilityPlanningService : IAccessibilityPlanningService
         double DataUncertaintyPenalty,
         double AccessibilityAlpha,
         AccessibilityRepairModelPrediction ModelPrediction,
+        double ActiveLearningScore,
         double PriorityScore);
 
     private sealed record AccessibilityRepairRankerModel(

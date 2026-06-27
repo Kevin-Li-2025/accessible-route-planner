@@ -81,7 +81,13 @@ public sealed class AccessibilityPlanningServiceTests
         Assert.InRange(result.RepairCandidates[0].ModelScore, 0, 1);
         Assert.True(result.RepairCandidates[0].ModelConfidence >= 0.6);
         Assert.Contains(result.RepairCandidates[0].FeatureContributions, contribution => contribution.Feature == "dataGap");
+        Assert.True(result.RepairCandidates[0].ActiveLearningScore > 50);
         Assert.Equal("critical", result.RepairCandidates[0].ReviewPriority);
+        Assert.Contains(result.RepairCandidates[0].ReviewStrategy, new[]
+        {
+            "active-learning-field-verification",
+            "high-confidence-repair-review"
+        });
         Assert.Single(result.EfficientFrontier);
         Assert.Equal(1, result.EfficientFrontier[0].EdgeId);
         Assert.Contains(result.RepairCandidates[0].Reasons, reason => reason.Contains("missing surface", StringComparison.Ordinal));

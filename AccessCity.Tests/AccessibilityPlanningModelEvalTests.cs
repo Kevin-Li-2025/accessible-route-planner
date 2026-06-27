@@ -53,9 +53,15 @@ public sealed class AccessibilityPlanningModelEvalTests
             TopEdgeId = top.EdgeId,
             TopModelScore = top.ModelScore,
             TopModelConfidence = top.ModelConfidence,
+            TopActiveLearningScore = top.ActiveLearningScore,
+            TopReviewStrategy = top.ReviewStrategy,
             TopFeatureContributions = top.FeatureContributions,
             RankedEdgeIds = rankedIds,
-            Passed = top.EdgeId == 1 && top.ModelScore > 0.8 && top.FeatureContributions.Count >= 3
+            Passed = top.EdgeId == 1
+                     && top.ModelScore > 0.8
+                     && top.ActiveLearningScore > 50
+                     && top.ReviewStrategy == "high-confidence-repair-review"
+                     && top.FeatureContributions.Count >= 3
         };
 
         var reportDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../TestResults/accesscity-ai-model-eval"));
@@ -67,6 +73,8 @@ public sealed class AccessibilityPlanningModelEvalTests
         Assert.True(eval.Passed);
         Assert.Equal(1, top.EdgeId);
         Assert.True(top.ModelScore > 0.8);
+        Assert.True(top.ActiveLearningScore > 50);
+        Assert.Equal("high-confidence-repair-review", top.ReviewStrategy);
         Assert.Contains(top.FeatureContributions, contribution => contribution.Feature == "blockerScore");
     }
 

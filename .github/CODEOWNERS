@@ -1,0 +1,7 @@
+# Keep high-risk surfaces reviewed deliberately.
+/.github/ @Kevin-Li-2025
+/AccessCity.API/ @Kevin-Li-2025
+/AccessCity.Tests/ @Kevin-Li-2025
+/deploy/ @Kevin-Li-2025
+/docs/ @Kevin-Li-2025
+/tools/ @Kevin-Li-2025

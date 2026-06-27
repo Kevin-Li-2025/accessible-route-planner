@@ -1,0 +1,43 @@
+name: Performance evidence
+description: Track a reproducible latency, throughput, or profiling result.
+title: "[perf] "
+labels:
+  - performance
+body:
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Hardware, OS, runtime, dataset, and deployment shape.
+      placeholder: "macOS M-series local API, West Midlands graph, .NET 9 Release"
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      description: Exact command or workflow used to generate the result.
+      render: bash
+    validations:
+      required: true
+  - type: textarea
+    id: metrics
+    attributes:
+      label: Metrics
+      description: p50/p95/p99/max, req/s, failure rate, CPU, memory, GC, or perf stat counters.
+    validations:
+      required: true
+  - type: textarea
+    id: artifact
+    attributes:
+      label: Artifact path
+      description: Link to TestResults, workflow artifact, flamegraph, perf data, or benchmark report.
+    validations:
+      required: true
+  - type: textarea
+    id: limits
+    attributes:
+      label: Claim boundary
+      description: What this result does not prove yet.
+    validations:
+      required: true

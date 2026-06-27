@@ -48,8 +48,10 @@ public sealed class AccessibilityRepairCandidate
     public double ModelConfidence { get; set; }
     public string ModelVersion { get; set; } = string.Empty;
     public List<AccessibilityRepairFeatureContribution> FeatureContributions { get; set; } = new();
+    public double ActiveLearningScore { get; set; }
     public double PriorityScore { get; set; }
     public string ReviewPriority { get; set; } = "medium";
+    public string ReviewStrategy { get; set; } = "field-verification";
     public List<string> Reasons { get; set; } = new();
     public List<string> SuggestedFieldChecks { get; set; } = new();
 }

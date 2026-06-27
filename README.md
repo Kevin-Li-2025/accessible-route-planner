@@ -2,7 +2,7 @@
 
 AccessCity is an accessibility-focused urban routing system. It combines a .NET 9 geospatial API, PostGIS-backed OSM ingestion, Redis/Kafka worker paths, route graph preprocessing, hazard/risk scoring, vector tile support, and an Expo React Native client.
 
-The project is built for safe, reproducible route decisions: AI assistance is limited to text normalization, report summarization, and explanations. It does not generate routes or dynamically change routing edge costs.
+The project is built for safe, reproducible route decisions: AI assistance is limited to review-only enrichment, field-verification prioritization, text normalization, report summarization, and explanations. It does not generate routes or dynamically change routing edge costs.
 
 ## Status
 
@@ -12,6 +12,7 @@ Current verified baseline:
 
 - Distributed k6 run: 6 API pods, 2 worker pods, 3 Postgres instances, 3 PgBouncer pods, 3 Kafka brokers, Redis; 145,334 requests, 440 req/s, 0 HTTP failures, safe-path p95 167.56 ms in the checked-in scenario.
 - Production mixed-soak harness: 100-1,000 Birmingham route pairs, mixed routing/risk/POI/hazard/dashboard/account/readiness traffic, CPU/memory process time series, configurable p95/p99 SLO gates, and API-restart failure injection. Local runs validate one API process; distributed 1M req/s targets require the Kubernetes capacity path.
+- Accessibility planning AI: local auditable repair-ranking model with feature contributions, counterfactual penalty reduction, quant-style accessibility alpha, active-learning field-verification scores, and an offline evaluation artifact under `TestResults/accesscity-ai-model-eval/`.
 - Real city API p99 matrix: West Midlands OSM extract, 754,727 route nodes, 1,633,260 route edges; 4/16/64/128 rps local-graph runs with 0 HTTP failures. At 128 rps, 5,759 requests completed with p95 6.51 ms and p99 239.90 ms.
 - Low-latency spatial kernels: 1,000,000 hazards and 10,000,000 queries. C++ dense-grid lookup reaches 185.4M ops/s single-thread p99 0.0194 us, and 2.1B ops/s on 10 threads. The .NET H3 hot path reaches 137.3M ops/s with p99 0.027 us.
 - Market-data style C++ benchmark: lock-free SPSC feed replay reaches 11.2M messages/s over 1,000,000 generated updates with p99 170 us, plus TCP/UDP loopback ingest latency reports and a Linux `perf stat`/`perf record` harness for cycles/query, IPC, cache misses, and branch misses.
@@ -173,6 +174,8 @@ kubectl kustomize deploy/kubernetes >/tmp/accesscity-kustomize.yaml
 ```
 
 CI gates are documented in [CI/CD](docs/CI_CD.md). Test architecture is documented in [Test Architecture](docs/TEST_ARCHITECTURE.md).
+
+GitHub project hygiene is structured around evidence-first pull requests, CODEOWNERS review on high-risk areas, and issue templates for performance and AI model evidence. The manual `Evidence` workflow produces a downloadable artifact pack for AI model evaluation, city-scale latency gates, and optional native low-latency benchmarks.
 
 ## Route Graph Profiling
 

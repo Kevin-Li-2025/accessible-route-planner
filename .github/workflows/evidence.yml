@@ -1,0 +1,154 @@
+name: Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_backend_tests:
+        description: Run backend tests and AI model evaluation.
+        required: true
+        type: boolean
+        default: true
+      run_city_benchmark:
+        description: Run CI-sized city-scale low-latency benchmark gate.
+        required: true
+        type: boolean
+        default: true
+      run_native_benchmarks:
+        description: Run native/C++ low-latency benchmark smoke if toolchain is available.
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+  NUGET_XMLDOC_MODE: skip
+  OsmImport__ImportOnStartup: "false"
+  ExternalApis__Overpass__RealtimeHazardsEnabled: "false"
+  Workers__OsmImport__Enabled: "false"
+  Workers__Routing__Enabled: "false"
+  Workers__TileWarming__Enabled: "false"
+
+jobs:
+  evidence:
+    name: Performance and AI evidence pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: accesscitydb
+          POSTGRES_USER: accesscity
+          POSTGRES_PASSWORD: accesscity123
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -d accesscitydb -U accesscity"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://accesscity:accesscity123@localhost:5432/accesscitydb?sslmode=disable
+      ConnectionStrings__Redis: localhost:6379
+      Jwt__Key: AccessCity_CI_Test_Jwt_Key_2026_Change_For_Production_At_Deploy_Time_64_Bytes
+      Postgres__CommandTimeoutSeconds: "60"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Restore
+        run: dotnet restore CodeConquerors.sln
+
+      - name: Build
+        run: dotnet build CodeConquerors.sln --configuration Release --no-restore
+
+      - name: Backend tests and AI model evaluation
+        if: inputs.run_backend_tests
+        run: >
+          dotnet test AccessCity.Tests/AccessCity.Tests.csproj
+          --configuration Release
+          --no-build
+          --filter "FullyQualifiedName~AccessibilityPlanning"
+          --logger "trx;LogFileName=evidence-accessibility-planning.trx"
+          --results-directory TestResults/evidence
+
+      - name: City-scale low-latency benchmark
+        if: inputs.run_city_benchmark
+        run: >
+          dotnet run --project AccessCity.SoakTestRunner/AccessCity.SoakTestRunner.csproj
+          --configuration Release
+          --no-build
+          --
+          city-benchmark
+          --hazards 50000
+          --queries 250000
+          --batch-size 256
+          --rtree-samples 10000
+          --max-grid-p99-us 25
+          --max-distance-p99-us 10
+
+      - name: Native benchmark smoke
+        if: inputs.run_native_benchmarks
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -x tools/run-cpp-kernel-benchmark.sh ]; then
+            tools/run-cpp-kernel-benchmark.sh
+          fi
+          if [ -x tools/run-market-data-benchmark.sh ]; then
+            tools/run-market-data-benchmark.sh
+          fi
+          if [ ! -x tools/run-cpp-kernel-benchmark.sh ] && [ ! -x tools/run-market-data-benchmark.sh ]; then
+            echo "No native benchmark runner found; skipping."
+          fi
+
+      - name: Write evidence manifest
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p TestResults/evidence
+          cat > TestResults/evidence/evidence_manifest.json <<JSON
+          {
+            "workflow": "Evidence",
+            "sha": "${GITHUB_SHA}",
+            "ref": "${GITHUB_REF_NAME}",
+            "run_backend_tests": "${{ inputs.run_backend_tests }}",
+            "run_city_benchmark": "${{ inputs.run_city_benchmark }}",
+            "run_native_benchmarks": "${{ inputs.run_native_benchmarks }}",
+            "claim_boundary": "Workflow evidence is scoped to the selected GitHub Actions runner, dataset size, and enabled steps."
+          }
+          JSON
+
+      - name: Upload evidence artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: accesscity-evidence-${{ github.run_id }}
+          path: |
+            TestResults/
+            BenchmarkDotNet.Artifacts/
+            data/route-graph-artifacts/profile-report.json
+          if-no-files-found: ignore
