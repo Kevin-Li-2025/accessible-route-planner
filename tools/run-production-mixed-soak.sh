@@ -181,6 +181,7 @@ if [[ "$FAILURE_INJECTION" == "api-restart" ]]; then
   FAILURE_PID=$!
 fi
 
+set +e
 BASE_URL="$BASE_URL" \
 ROUTE_DATASET_FILE="$ROUTE_DATASET_FILE" \
 DURATION="$DURATION" \
@@ -201,18 +202,23 @@ SLO_ROUTE_TIMEOUT_RATE="$SLO_ROUTE_TIMEOUT_RATE" \
 ARTIFACT_DIR="$ARTIFACT_DIR/k6" \
 k6 run --summary-export "$ARTIFACT_DIR/k6-production-mixed-summary.json" \
   tools/k6/accesscity-production-mixed-soak.js
+K6_EXIT_CODE=$?
+set -e
 
-node - "$ARTIFACT_DIR" "$ROUTE_DATASET_FILE" <<'NODE'
+node - "$ARTIFACT_DIR" "$ROUTE_DATASET_FILE" "$K6_EXIT_CODE" <<'NODE'
 const fs = require('fs');
 const os = require('os');
-const [dir, routeDatasetFile] = process.argv.slice(2);
+const [dir, routeDatasetFile, k6ExitCodeText] = process.argv.slice(2);
 const summary = JSON.parse(fs.readFileSync(`${dir}/k6-production-mixed-summary.json`, 'utf8'));
 const graph = JSON.parse(fs.readFileSync(`${dir}/route-graph-status.json`, 'utf8'));
 const routes = JSON.parse(fs.readFileSync(routeDatasetFile, 'utf8'));
 const metric = (name) => summary.metrics[name] || {};
+const k6ExitCode = Number(k6ExitCodeText || 0);
 const report = {
   harnessVersion: 'accesscity-production-mixed-soak-v1',
   generatedAtUtc: new Date().toISOString(),
+  k6ExitCode,
+  k6Passed: k6ExitCode === 0,
   routePairCount: routes.routes.length,
   routeGraph: graph,
   machine: { platform: process.platform, arch: process.arch, cpus: os.cpus().length, totalMemoryBytes: os.totalmem() },
@@ -228,3 +234,5 @@ const report = {
 fs.writeFileSync(`${dir}/production_mixed_soak_report.json`, JSON.stringify(report, null, 2));
 console.log(`Report written: ${dir}/production_mixed_soak_report.json`);
 NODE
+
+exit "$K6_EXIT_CODE"
