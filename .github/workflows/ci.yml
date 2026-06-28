@@ -258,6 +258,18 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Review dependency changes
+        id: dependency-review
+        continue-on-error: true
         uses: actions/dependency-review-action@v5.0.0
         with:
           fail-on-severity: high
+
+      - name: Fallback dependency vulnerability gates
+        if: steps.dependency-review.outcome == 'failure'
+        run: |
+          echo "::warning::GitHub dependency review is unavailable or failed; running manifest vulnerability gates instead."
+          dotnet list CodeConquerors.sln package --vulnerable --include-transitive | tee /tmp/dotnet-vulnerable.txt
+          ! grep -q "has the following vulnerable packages" /tmp/dotnet-vulnerable.txt
+          cd AccessCity.App
+          npm ci
+          npm audit --audit-level=high
